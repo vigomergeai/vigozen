@@ -726,6 +726,50 @@ app.delete("/lead-pages/:id", authenticateToken, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+app.get("/faqs", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT *
+      FROM faqs
+      WHERE is_active = true
+      ORDER BY sort_order ASC
+    `);
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error("GET FAQS ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+app.get("/guides", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT *
+      FROM guides
+      WHERE is_published = true
+      ORDER BY created_at DESC
+    `);
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error("GET GUIDES ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+app.get("/ad-connections", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT *
+      FROM ad_connections
+      ORDER BY created_at DESC
+    `);
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error("GET AD CONNECTIONS ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 app.listen(5000, "0.0.0.0", () => {
   console.log("Server running on port 5000");
 });

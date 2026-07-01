@@ -599,6 +599,133 @@ app.get("/profile", authenticateToken, async (req, res) => {
     });
   }
 });
+
+// Lead Sources
+app.get("/lead-sources", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT * FROM lead_sources WHERE user_id = $1 ORDER BY created_at DESC",
+      [req.user.id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("GET LEAD SOURCES ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/lead-sources", authenticateToken, async (req, res) => {
+  try {
+    const { name, type, status, config } = req.body;
+    const result = await pool.query(
+      `INSERT INTO lead_sources (user_id, name, type, status, leads_count, config)
+       VALUES ($1, $2, $3, $4, 0, $5)
+       RETURNING *`,
+      [req.user.id, name, type, status || "pending", config || {}]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("ADD LEAD SOURCE ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/lead-sources/:id", authenticateToken, async (req, res) => {
+  try {
+    const { name, type, status, config, leads_count } = req.body;
+    const result = await pool.query(
+      `UPDATE lead_sources
+       SET name = COALESCE($1, name),
+           type = COALESCE($2, type),
+           status = COALESCE($3, status),
+           config = COALESCE($4, config),
+           leads_count = COALESCE($5, leads_count),
+           updated_at = NOW()
+       WHERE id = $6 AND user_id = $7
+       RETURNING *`,
+      [name, type, status, config, leads_count, req.params.id, req.user.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Lead source not found" });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("UPDATE LEAD SOURCE ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Lead Pages
+app.get("/lead-pages", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT * FROM lead_pages WHERE user_id = $1 ORDER BY created_at DESC",
+      [req.user.id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("GET LEAD PAGES ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/lead-pages", authenticateToken, async (req, res) => {
+  try {
+    const { name, slug, description, status, webhook_url, redirect_url } = req.body;
+    const result = await pool.query(
+      `INSERT INTO lead_pages (user_id, name, slug, description, status, webhook_url, redirect_url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [req.user.id, name, slug, description, status || "active", webhook_url, redirect_url]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("ADD LEAD PAGE ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/lead-pages/:id", authenticateToken, async (req, res) => {
+  try {
+    const { name, slug, description, status, webhook_url, redirect_url } = req.body;
+    const result = await pool.query(
+      `UPDATE lead_pages
+       SET name = COALESCE($1, name),
+           slug = COALESCE($2, slug),
+           description = COALESCE($3, description),
+           status = COALESCE($4, status),
+           webhook_url = COALESCE($5, webhook_url),
+           redirect_url = COALESCE($6, redirect_url),
+           updated_at = NOW()
+       WHERE id = $7 AND user_id = $8
+       RETURNING *`,
+      [name, slug, description, status, webhook_url, redirect_url, req.params.id, req.user.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Lead page not found" });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("UPDATE LEAD PAGE ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/lead-pages/:id", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "DELETE FROM lead_pages WHERE id = $1 AND user_id = $2 RETURNING *",
+      [req.params.id, req.user.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Lead page not found" });
+    }
+    res.json({ success: true, deleted: result.rows[0] });
+  } catch (err) {
+    console.error("DELETE LEAD PAGE ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 app.listen(5000, "0.0.0.0", () => {
   console.log("Server running on port 5000");
 });

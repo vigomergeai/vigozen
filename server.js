@@ -165,6 +165,37 @@ app.get("/users", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// Update user (settings save)
+app.put("/users/:id", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, email, phone, company, department, timezone, language } = req.body;
+
+    const result = await pool.query(
+      `UPDATE users
+       SET
+         name = COALESCE($1, name),
+         email = COALESCE($2, email),
+         phone = COALESCE($3, phone),
+         company = COALESCE($4, company),
+         department = COALESCE($5, department),
+         timezone = COALESCE($6, timezone),
+         language = COALESCE($7, language)
+       WHERE id = $8
+       RETURNING id, name, email, phone, company, department, timezone, language, role`,
+      [name, email, phone, company, department, timezone, language, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("UPDATE USER ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Settings
 app.get("/settings/:userId", async (req, res) => {
@@ -286,17 +317,45 @@ app.delete("/admin/reset-database", async (req, res) => {
 });
 app.post("/leads/bulk", async (req, res) => {
   try {
-console.log("BODY RECEIVED:", req.body);
+    console.log("BODY RECEIVED:", req.body);
+
     const { leads } = req.body;
+
     for (const lead of leads) {
       await pool.query(
-        "INSERT INTO leads (id, name, email, phone, company, source, status, industry, value, probability, owner, owner_id, notes, aiscore) VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
-        [lead.name, lead.email, lead.phone, lead.company, lead.source, lead.status, lead.industry, lead.value, lead.probability, lead.owner, lead.owner_id, lead.notes, lead.aiscore]
+        `INSERT INTO leads
+        (id, name, email, phone, company, source, status, industry,
+         value, probability,  owner_id, notes, aiscore)
+        VALUES
+        (gen_random_uuid(), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [
+          lead.name,
+          lead.email,
+          lead.phone,
+          lead.company,
+          lead.source,
+          lead.status,
+          lead.industry,
+          lead.value,
+          lead.probability,
+      
+          lead.owner_id,
+          lead.notes,
+          lead.aiscore,
+        ]
       );
     }
-    res.json({ success: true, imported: leads.length });
+
+    res.json({
+      success: true,
+      imported: leads.length,
+    });
+
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error("BULK IMPORT ERROR:", err);
+    res.status(500).json({
+      error: err.message,
+    });
   }
 });
 app.post("/leads/import-excel", upload.single("file"), async (req, res) => {
@@ -410,7 +469,7 @@ app.get("/trial/:userId", async (req, res) => {
 // Signup
 app.post("/auth/signup", async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    const { name, email, password, adminKey } = req.body;
 
     const existing = await pool.query(
       "SELECT * FROM users WHERE email=$1",
@@ -425,12 +484,18 @@ app.post("/auth/signup", async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const result = await pool.query(
+    // Check if admin signup
+    const isAdmin = adminKey === process.env.ADMIN_KEY;
+    const role = isAdmin ? "admin" : "sales";
+
+    const companyResult = await pool.query("SELECT id FROM companies ORDER BY created_at ASC LIMIT 1");
+    const companyId = companyResult.rows[0] ? companyResult.rows[0].id : null;
+const result = await pool.query(
       `INSERT INTO users
-      (name, email, password)
-      VALUES ($1,$2,$3)
-      RETURNING id,name,email`,
-      [name, email, hashedPassword]
+      (name, email, password, role, company_id)
+      VALUES ($1,$2,$3,$4,$5)
+      RETURNING id,name,email,role,company_id,department`,
+      [name, email, hashedPassword, role, companyId]
     );
 
     const user = result.rows[0];
@@ -438,7 +503,9 @@ app.post("/auth/signup", async (req, res) => {
     const token = jwt.sign(
       {
         id: user.id,
-        email: user.email
+        email: user.email,
+        company_id: user.company_id,
+        role: user.role
       },
       process.env.JWT_SECRET,
       {
@@ -504,7 +571,10 @@ app.post("/auth/login", async (req, res) => {
       user: {
         id: user.id,
         name: user.name,
-        email: user.email
+        email: user.email,
+         company_id: user.company_id,
+    role: user.role,
+    department: user.department
       }
     });
 

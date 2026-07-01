@@ -145,7 +145,66 @@ app.get("/tickets", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+app.post("/tickets", async (req, res) => {
+  try {
+    const {
+      title,
+      category,
+      priority,
+      status,
+      description,
+      owner_id,
+      owner_name,
+      created_by,
+      assigned_to,
+      assigned_to_name,
+    } = req.body;
 
+    const result = await pool.query(
+      `
+      INSERT INTO tickets (
+        id,
+        title,
+        category,
+        priority,
+        status,
+        description,
+        owner_id,
+        owner_name,
+        created_by,
+        assigned_to,
+        assigned_to_name,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        gen_random_uuid(),
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+        NOW(),
+        NOW()
+      )
+      RETURNING *;
+      `,
+      [
+        title,
+        category,
+        priority,
+        status,
+        description,
+        owner_id,
+        owner_name,
+        created_by,
+        assigned_to,
+        assigned_to_name,
+      ]
+    );
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("CREATE TICKET ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 // Activities
 app.get("/activities", async (req, res) => {
   try {
@@ -746,8 +805,8 @@ app.get("/guides", async (req, res) => {
     const result = await pool.query(`
       SELECT *
       FROM guides
-      WHERE is_published = true
-      ORDER BY created_at DESC
+      WHERE is_active = true
+      ORDER BY sort_order ASC
     `);
 
     res.json(result.rows);
@@ -756,6 +815,7 @@ app.get("/guides", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 app.get("/ad-connections", async (req, res) => {
   try {
     const result = await pool.query(`

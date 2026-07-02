@@ -224,6 +224,18 @@ app.get("/users", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// Employees (for admin dropdown assignment)
+app.get("/employees", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT id, name, email, department FROM employees ORDER BY name ASC"
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("GET EMPLOYEES ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 // Update user (settings save)
 app.put("/users/:id", authenticateToken, async (req, res) => {
   try {
@@ -255,7 +267,113 @@ app.put("/users/:id", authenticateToken, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// Create new user (admin only)
+app.post("/users", authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== "admin") {
+      return res.status(403).json({ error: "Admin access required" });
+    }
 
+    const { name, email, password, role, employeeId, department } = req.body;
+
+    const existing = await pool.query("SELECT id FROM users WHERE email=$1", [email]);
+    if (existing.rows.length > 0) {
+      return res.status(400).json({ error: "Email already registered" });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const result = await pool.query(
+      `INSERT INTO users (name, email, password, role, employee_id, department, is_active, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, true, NOW())
+       RETURNING id, name, email, role, employee_id AS "employeeId", department, is_active AS "isActive", created_at AS "createdAt"`,
+      [name, email, hashedPassword, role || "user", employeeId || null, department || "sales"]
+    );
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("CREATE USER ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete (deactivate) user
+app.delete("/users/:id", authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== "admin") {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    const result = await pool.query(
+      "UPDATE users SET is_active = false WHERE id = $1 RETURNING id",
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("DELETE USER ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Toggle user active/inactive
+app.put("/users/:id/toggle-access", authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== "admin") {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    const { isActive } = req.body;
+
+    const result = await pool.query(
+      "UPDATE users SET is_active = $1 WHERE id = $2 RETURNING id, is_active AS \"isActive\"",
+      [isActive, req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("TOGGLE ACCESS ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Reset user password (admin only)
+app.put("/users/:id/password", authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== "admin") {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    const { password } = req.body;
+    if (!password) {
+      return res.status(400).json({ error: "Password required" });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const result = await pool.query(
+      "UPDATE users SET password = $1 WHERE id = $2 RETURNING id",
+      [hashedPassword, req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("RESET PASSWORD ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 // Settings
 app.get("/settings/:userId", async (req, res) => {
   try {
@@ -363,7 +481,10 @@ app.delete("/deals/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-app.delete("/admin/reset-database", async (req, res) => {
+app.delete("/admin/reset-database", authenticateToken, async (req, res) => {
+  if (req.user.role !== "admin") {
+    return res.status(403).json({ error: "Admin access required" });
+  }
   try {
     await pool.query("DELETE FROM leads");
     await pool.query("DELETE FROM deals");
@@ -800,18 +921,65 @@ app.get("/faqs", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-app.get("/guides", async (req, res) => {
+app.get("/guides", authenticateToken, async (req, res) => {
   try {
-    const result = await pool.query(`
-      SELECT *
-      FROM guides
-      WHERE is_active = true
-      ORDER BY sort_order ASC
-    `);
-
+    const result = await pool.query(
+      "SELECT * FROM guides ORDER BY sort_order ASC"
+    );
     res.json(result.rows);
   } catch (err) {
     console.error("GET GUIDES ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/guides", authenticateToken, async (req, res) => {
+  try {
+    const { title, read_time, icon, type, url, file_url, is_downloadable, sort_order } = req.body;
+    if (!title) return res.status(400).json({ error: "Title is required" });
+
+    const result = await pool.query(
+      `INSERT INTO guides (title, read_time, icon, type, url, file_url, is_downloadable, sort_order)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [title, read_time || "5 min", icon || "📘", type || "Guide", url || null, file_url || null, is_downloadable || false, sort_order || 0]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("ADD GUIDE ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/guides/:id", authenticateToken, async (req, res) => {
+  try {
+    const { title, read_time, icon, type, url, file_url, is_downloadable, sort_order } = req.body;
+    const result = await pool.query(
+      `UPDATE guides
+       SET title = COALESCE($1, title), read_time = COALESCE($2, read_time),
+           icon = COALESCE($3, icon), type = COALESCE($4, type),
+           url = COALESCE($5, url), file_url = COALESCE($6, file_url),
+           is_downloadable = COALESCE($7, is_downloadable), sort_order = COALESCE($8, sort_order),
+           updated_at = NOW()
+       WHERE id = $9
+       RETURNING *`,
+      [title, read_time, icon, type, url, file_url, is_downloadable, sort_order, req.params.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: "Guide not found" });
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("UPDATE GUIDE ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/guides/:id", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query("DELETE FROM guides WHERE id = $1 RETURNING *", [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: "Guide not found" });
+    res.json({ success: true, deleted: result.rows[0] });
+  } catch (err) {
+    console.error("DELETE GUIDE ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -827,6 +995,177 @@ app.get("/ad-connections", async (req, res) => {
     res.json(result.rows);
   } catch (err) {
     console.error("GET AD CONNECTIONS ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+const speakeasy = require("speakeasy");
+
+// ── 2FA Setup ──────────────────────────────────────────────
+app.post("/auth/2fa/setup", authenticateToken, async (req, res) => {
+  try {
+    const secret = speakeasy.generateSecret({
+      name: `VigozenCRM (${req.user.email})`,
+    });
+
+    await pool.query(
+      "UPDATE users SET two_fa_secret = $1 WHERE id = $2",
+      [secret.base32, req.user.id]
+    );
+
+    res.json({ otpauth_url: secret.otpauth_url, secret: secret.base32 });
+  } catch (err) {
+    console.error("2FA SETUP ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── 2FA Enable (verify code) ──────────────────────────────
+app.post("/auth/2fa/verify", authenticateToken, async (req, res) => {
+  try {
+    const { token } = req.body;
+
+    const result = await pool.query(
+      "SELECT two_fa_secret FROM users WHERE id = $1",
+      [req.user.id]
+    );
+
+    if (result.rows.length === 0 || !result.rows[0].two_fa_secret) {
+      return res.status(400).json({ error: "2FA setup not started" });
+    }
+
+    const verified = speakeasy.totp.verify({
+      secret: result.rows[0].two_fa_secret,
+      encoding: "base32",
+      token,
+      window: 1,
+    });
+
+    if (!verified) {
+      return res.status(400).json({ error: "Invalid code" });
+    }
+
+    await pool.query(
+      "UPDATE users SET two_fa_enabled = true WHERE id = $1",
+      [req.user.id]
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("2FA VERIFY ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Change Password (logged-in user, needs current password) ──
+app.put("/users/:id/change-password", authenticateToken, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+
+    const result = await pool.query("SELECT password FROM users WHERE id = $1", [req.params.id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const valid = await bcrypt.compare(currentPassword, result.rows[0].password);
+    if (!valid) {
+      return res.status(400).json({ error: "Current password is incorrect" });
+    }
+
+    const hashed = await bcrypt.hash(newPassword, 10);
+    await pool.query("UPDATE users SET password = $1 WHERE id = $2", [hashed, req.params.id]);
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("CHANGE PASSWORD ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Delete Avatar ──────────────────────────────────────────
+app.put("/users/:id/avatar", authenticateToken, async (req, res) => {
+  try {
+    const { avatar_url } = req.body; // null to delete, or a URL string
+
+    const result = await pool.query(
+      "UPDATE users SET avatar_url = $1 WHERE id = $2 RETURNING id, avatar_url",
+      [avatar_url, req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("AVATAR UPDATE ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Billing History ────────────────────────────────────────
+app.get("/invoices/:userId", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT * FROM invoices WHERE user_id = $1 ORDER BY created_at DESC",
+      [req.params.userId]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("GET INVOICES ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Active Sessions ────────────────────────────────────────
+app.get("/user-sessions/:userId", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT * FROM user_sessions WHERE user_id = $1 ORDER BY last_active DESC",
+      [req.params.userId]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("GET SESSIONS ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/user-sessions/:id", authenticateToken, async (req, res) => {
+  try {
+    await pool.query("DELETE FROM user_sessions WHERE id = $1", [req.params.id]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error("REVOKE SESSION ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Cancel Subscription ────────────────────────────────────
+app.put("/users/:id/subscription", authenticateToken, async (req, res) => {
+  try {
+    const { subscription_status } = req.body;
+    const result = await pool.query(
+      "UPDATE users SET subscription_status = $1 WHERE id = $2 RETURNING id, subscription_status",
+      [subscription_status, req.params.id]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("SUBSCRIPTION UPDATE ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Remove Payment Method ──────────────────────────────────
+app.put("/users/:id/payment-method", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `UPDATE users SET payment_last4 = NULL, payment_brand = NULL, payment_expiry = NULL
+       WHERE id = $1 RETURNING id`,
+      [req.params.id]
+    );
+    res.json({ success: true, id: result.rows[0]?.id });
+  } catch (err) {
+    console.error("PAYMENT REMOVE ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 });

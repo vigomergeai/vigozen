@@ -26,17 +26,20 @@ const authenticateToken = (req, res, next) => {
     });
   }
 
-  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
-    if (err) {
-      return res.status(403).json({
-        error: "Invalid token"
-      });
-    }
+ jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+  if (err) {
+    console.log("JWT ERROR:", err);
+    return res.status(403).json({
+      error: "Invalid token"
+    });
+  }
 
-    req.user = user;
+  console.log("Decoded JWT:", user);
 
-    next();
-  });
+  req.user = user;
+
+  next();
+});
 };
 app.use(cors({
   origin: [
@@ -260,7 +263,7 @@ app.get("/activities", async (req, res) => {
 // Users
 app.get("/users", async (req, res) => {
   try {
-    const result = await pool.query("SELECT * FROM users");
+    const result = await pool.query("SELECT * FROM users WHERE is_active = true;");
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -342,6 +345,9 @@ app.post("/users", authenticateToken, async (req, res) => {
 // Delete (deactivate) user
 app.delete("/users/:id", authenticateToken, async (req, res) => {
   try {
+    console.log("===== DELETE USER =====");
+console.log("Role:", req.user.role);
+console.log("User:", req.user);
     if (req.user.role !== "admin") {
       return res.status(403).json({ error: "Admin access required" });
     }
@@ -709,7 +715,7 @@ app.post("/auth/signup", async (req, res) => {
     // Check if admin signup
     const isAdmin = adminKey === process.env.ADMIN_KEY;
     const role = isAdmin ? "admin" : "sales";
-
+     const department = isAdmin ? "Admin" : "Sales"; // ← ADD THIS
     const companyResult = await pool.query("SELECT id FROM companies ORDER BY created_at ASC LIMIT 1");
     const companyId = companyResult.rows[0] ? companyResult.rows[0].id : null;
 const result = await pool.query(
@@ -717,7 +723,8 @@ const result = await pool.query(
       (name, email, password, role, company_id)
       VALUES ($1,$2,$3,$4,$5)
       RETURNING id,name,email,role,company_id,department`,
-      [name, email, hashedPassword, role, companyId]
+      [name, email, hashedPassword, role, companyId] 
+      //departmentalso added to the insert query if user in login left side showing general 
     );
 
     const user = result.rows[0];

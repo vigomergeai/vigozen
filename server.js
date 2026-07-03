@@ -729,7 +729,7 @@ app.post("/auth/login", async (req, res) => {
       user.password
     );
 
-    if (!validPassword) {
+   if (!validPassword) {
       return res.status(400).json({
         error: "Invalid password"
       });
@@ -738,7 +738,9 @@ app.post("/auth/login", async (req, res) => {
     const token = jwt.sign(
       {
         id: user.id,
-        email: user.email
+        email: user.email,
+        company_id: user.company_id,
+        role: user.role
       },
       process.env.JWT_SECRET,
       {
@@ -752,9 +754,9 @@ app.post("/auth/login", async (req, res) => {
         id: user.id,
         name: user.name,
         email: user.email,
-         company_id: user.company_id,
-    role: user.role,
-    department: user.department
+        company_id: user.company_id,
+        role: user.role,
+        department: user.department
       }
     });
 
@@ -984,20 +986,115 @@ app.delete("/guides/:id", authenticateToken, async (req, res) => {
   }
 });
 
-app.get("/ad-connections", async (req, res) => {
+app.get("/ad-connections", authenticateToken, async (req, res) => {
   try {
-    const result = await pool.query(`
-      SELECT *
-      FROM ad_connections
-      ORDER BY created_at DESC
-    `);
-
+    const result = await pool.query(
+      "SELECT * FROM ad_connections WHERE user_id = $1 ORDER BY created_at DESC",
+      [req.user.id]
+    );
     res.json(result.rows);
   } catch (err) {
     console.error("GET AD CONNECTIONS ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 });
+
+app.post("/ad-connections", authenticateToken, async (req, res) => {
+  try {
+    const { platform, platform_name, account_id, account_name } = req.body;
+    if (!platform || !platform_name) {
+      return res.status(400).json({ error: "Platform and platform name are required" });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO ad_connections
+        (user_id, platform, platform_name, connected, account_id, account_name, leads_imported, cost_spent, created_at, updated_at)
+       VALUES ($1, $2, $3, true, $4, $5, 0, 0, NOW(), NOW())
+       ON CONFLICT (user_id, platform)
+       DO UPDATE SET
+         platform_name = EXCLUDED.platform_name,
+         connected = true,
+         account_id = EXCLUDED.account_id,
+         account_name = EXCLUDED.account_name,
+         updated_at = NOW()
+       RETURNING *`,
+      [req.user.id, platform, platform_name, account_id, account_name]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("ADD AD CONNECTION ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/ad-connections/:id", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "DELETE FROM ad_connections WHERE id = $1 AND user_id = $2 RETURNING *",
+      [req.params.id, req.user.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Ad connection not found" });
+    }
+    res.json({ success: true, deleted: result.rows[0] });
+  } catch (err) {
+    console.error("DISCONNECT AD ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/ad-connections/:id/sync", authenticateToken, async (req, res) => {
+  try {
+    const mockNewLeads = Math.floor(Math.random() * 10) + 1;
+    const mockNewCost = Math.floor(Math.random() * 500) + 50;
+
+    const result = await pool.query(
+      `UPDATE ad_connections
+       SET leads_imported = leads_imported + $1,
+           cost_spent = cost_spent + $2,
+           last_sync = NOW(),
+           updated_at = NOW()
+       WHERE id = $3 AND user_id = $4
+       RETURNING *`,
+      [mockNewLeads, mockNewCost, req.params.id, req.user.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Ad connection not found" });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("SYNC AD LEADS ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/ad-connections/update-count", authenticateToken, async (req, res) => {
+  try {
+    const { platform, leadsCount, cost } = req.body;
+    if (!platform) {
+      return res.status(400).json({ error: "Platform is required" });
+    }
+
+    const result = await pool.query(
+      `UPDATE ad_connections
+       SET leads_imported = leads_imported + $1,
+           cost_spent = cost_spent + $2,
+           updated_at = NOW()
+       WHERE platform = $3 AND user_id = $4
+       RETURNING *`,
+      [leadsCount || 0, cost || 0, platform, req.user.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Ad connection not found for this platform" });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("UPDATE LEADS COUNT ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+//const speakeasy = require("speakeasy");
 const speakeasy = require("speakeasy");
 
 // ── 2FA Setup ──────────────────────────────────────────────

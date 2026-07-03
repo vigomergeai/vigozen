@@ -205,6 +205,48 @@ app.post("/tickets", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+app.put("/tickets/:id", authenticateToken, async (req, res) => {
+  try {
+    const { title, category, priority, status, description, assigned_to, assigned_to_name } = req.body;
+    const result = await pool.query(
+      `UPDATE tickets
+       SET title = COALESCE($1, title),
+           category = COALESCE($2, category),
+           priority = COALESCE($3, priority),
+           status = COALESCE($4, status),
+           description = COALESCE($5, description),
+           assigned_to = COALESCE($6, assigned_to),
+           assigned_to_name = COALESCE($7, assigned_to_name),
+           updated_at = NOW()
+       WHERE id = $8
+       RETURNING *`,
+      [title, category, priority, status, description, assigned_to, assigned_to_name, req.params.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Ticket not found" });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("UPDATE TICKET ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/tickets/:id", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "DELETE FROM tickets WHERE id = $1 RETURNING *",
+      [req.params.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Ticket not found" });
+    }
+    res.json({ success: true, deleted: result.rows[0] });
+  } catch (err) {
+    console.error("DELETE TICKET ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 // Activities
 app.get("/activities", async (req, res) => {
   try {

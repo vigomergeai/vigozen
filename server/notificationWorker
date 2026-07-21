@@ -1,0 +1,197 @@
+// ──────────────────────────────────────────────────────────────
+// NOTIFICATION WORKER - Cron job to process queue
+// ──────────────────────────────────────────────────────────────
+
+const { 
+    getPendingNotifications, 
+    markAsQueued, 
+    markAsSent,
+    markAsRead 
+} = require("./notificationQueue");
+
+// ── Configuration ──
+const CONFIG = {
+    MAX_RETRIES: 3,
+    BATCH_SIZE: 50,
+    WORKER_INTERVAL: 30000, // 30 seconds
+};
+
+// ── Simulate sending notification ──
+// In production, replace this with actual email/push notification service
+async function sendNotification(notification) {
+    try {
+        // Example: Send to different channels based on priority
+        const { id, type, title, message, user_id, priority, link, metadata } = notification;
+        
+        console.log(`📬 [${priority.toUpperCase()}] ${title} → User ${user_id}`);
+        console.log(`   Message: ${message}`);
+        
+        // Simulate API call delay
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        // In production, you would integrate with:
+        // - Email service (SendGrid, AWS SES)
+        // - Push notifications (Firebase, OneSignal)
+        // - SMS (Twilio)
+        // - Webhooks
+        
+        // Example: If high priority, send email immediately
+        if (priority === 'high') {
+            console.log(`   📧 Sending high-priority email for: ${title}`);
+            // await sendEmail(user_id, title, message, link);
+        }
+        
+        // Example: If there's a link, log it
+        if (link) {
+            console.log(`   🔗 Link: ${link}`);
+        }
+        
+        return { success: true };
+    } catch (error) {
+        console.error(`❌ Failed to send notification ${notification.id}:`, error);
+        return { success: false, error: error.message };
+    }
+}
+
+// ── Process a single notification with retry ──
+async function processNotification(notification, attempt = 1) {
+    try {
+        const result = await sendNotification(notification);
+        
+        if (!result.success && attempt < CONFIG.MAX_RETRIES) {
+            console.log(`🔄 Retry ${attempt}/${CONFIG.MAX_RETRIES} for ${notification.id}`);
+            await new Promise(resolve => setTimeout(resolve, 1000 * attempt)); // Exponential backoff
+            return processNotification(notification, attempt + 1);
+        }
+        
+        return result;
+    } catch (error) {
+        console.error(`❌ Error processing notification ${notification.id}:`, error);
+        return { success: false, error: error.message };
+    }
+}
+
+// ── Process the notification queue ──
+async function processNotificationQueue() {
+    const startTime = Date.now();
+    
+    try {
+        // Get pending notifications (with limit)
+        const pending = await getPendingNotifications();
+        
+        if (pending.length === 0) {
+            // Uncomment for debugging:
+            // console.log(`📭 No pending notifications at ${new Date().toISOString()}`);
+            return { processed: 0, count: 0 };
+        }
+
+        // Limit batch size
+        const batch = pending.slice(0, CONFIG.BATCH_SIZE);
+        const ids = batch.map(n => n.id);
+        
+        console.log(`📬 Processing ${batch.length} notifications (out of ${pending.length} pending)`);
+        
+        // Mark as queued
+        await markAsQueued(ids);
+        
+        // Process each notification in parallel (with concurrency limit)
+        const processingPromises = batch.map(notification => 
+            processNotification(notification)
+        );
+        
+        const results = await Promise.all(processingPromises);
+        
+        // Count successes and failures
+        const successCount = results.filter(r => r.success).length;
+        const failureCount = results.filter(r => !r.success).length;
+        
+        // Mark successful ones as sent
+        const successfulIds = batch
+            .filter((_, index) => results[index].success)
+            .map(n => n.id);
+        
+        if (successfulIds.length > 0) {
+            await markAsSent(successfulIds);
+        }
+        
+        // Log failures (for monitoring)
+        if (failureCount > 0) {
+            console.warn(`⚠️ ${failureCount} notifications failed to send`);
+            // In production: log to error tracking service (Sentry, etc.)
+        }
+        
+        const duration = Date.now() - startTime;
+        console.log(`✅ Processed ${successCount}/${batch.length} notifications in ${duration}ms`);
+        
+        return {
+            processed: batch.length,
+            success: successCount,
+            failed: failureCount,
+            duration: duration,
+        };
+        
+    } catch (error) {
+        console.error("❌ Notification worker error:", error);
+        return { processed: 0, error: error.message };
+    }
+}
+
+// ── Handle graceful shutdown ──
+let workerInterval = null;
+
+function shutdownWorker() {
+    if (workerInterval) {
+        clearInterval(workerInterval);
+        workerInterval = null;
+        console.log("🛑 Notification worker stopped");
+    }
+}
+
+// ── Start notification worker ──
+function startNotificationWorker() {
+    console.log("🚀 Starting notification worker...");
+    console.log(`   Interval: ${CONFIG.WORKER_INTERVAL / 1000}s`);
+    console.log(`   Batch size: ${CONFIG.BATCH_SIZE}`);
+    console.log(`   Max retries: ${CONFIG.MAX_RETRIES}`);
+    
+    // Run immediately on start
+    processNotificationQueue().then(result => {
+        console.log(`   Initial run completed: ${result.processed || 0} processed`);
+    });
+    
+    // Run every X seconds
+    workerInterval = setInterval(() => {
+        processNotificationQueue().catch(err => {
+            console.error("Worker interval error:", err);
+        });
+    }, CONFIG.WORKER_INTERVAL);
+    
+    // Handle graceful shutdown
+    process.on('SIGINT', () => {
+        console.log('🛑 Shutting down notification worker...');
+        shutdownWorker();
+        process.exit(0);
+    });
+    
+    process.on('SIGTERM', () => {
+        console.log('🛑 Shutting down notification worker...');
+        shutdownWorker();
+        process.exit(0);
+    });
+}
+
+// ── Manual trigger (for testing) ──
+async function runWorkerOnce() {
+    console.log("🔧 Running worker once (manual trigger)...");
+    const result = await processNotificationQueue();
+    console.log("📊 Result:", result);
+    return result;
+}
+
+module.exports = {
+    startNotificationWorker,
+    processNotificationQueue,
+    runWorkerOnce,
+    shutdownWorker,
+    CONFIG,
+};

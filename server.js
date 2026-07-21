@@ -6,7 +6,114 @@ const cors = require("cors");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const pool = require("./db");
+const notificationQueue = require("./server/notificationQueue");
+const notificationService = require("./server/notificationService");
+const { startNotificationWorker } = require("./server/notificationWorker");
+
 require("dotenv").config();
+
+// Auto-migrate tables
+(async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS integrations (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        name VARCHAR(255),
+        type VARCHAR(100),
+        description TEXT,
+        icon VARCHAR(255),
+        status VARCHAR(50) DEFAULT 'pending',
+        leads INTEGER DEFAULT 0,
+        last_sync VARCHAR(255),
+        config JSONB,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS payments (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        order_id VARCHAR(255) NOT NULL,
+        payment_id VARCHAR(255),
+        amount DECIMAL(15,2) NOT NULL,
+        plan VARCHAR(100),
+        status VARCHAR(50) DEFAULT 'pending',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS subscriptions (
+        id VARCHAR(255) PRIMARY KEY,
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        plan_id VARCHAR(100),
+        amount DECIMAL(15,2),
+        total_count INTEGER DEFAULT 12,
+        status VARCHAR(50) DEFAULT 'pending',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS lead_comments (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        lead_id UUID NOT NULL,
+        user_id UUID,
+        user_name VARCHAR(255),
+        user_avatar VARCHAR(10),
+        comment TEXT NOT NULL,
+        parent_comment_id UUID,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS notifications (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        company_id UUID,
+        type VARCHAR(100),
+        title VARCHAR(255) NOT NULL,
+        message TEXT NOT NULL,
+        link VARCHAR(255),
+        priority VARCHAR(20) DEFAULT 'medium',
+        status VARCHAR(20) DEFAULT 'sent',
+        is_read BOOLEAN DEFAULT false,
+        read_at TIMESTAMP,
+        metadata JSONB DEFAULT '{}'::jsonb,
+        scheduled_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await pool.query(`ALTER TABLE integrations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`).catch(() => {});
+    await pool.query(`ALTER TABLE integrations ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`).catch(() => {});
+    // Add missing columns to notifications table if they don't exist
+    await pool.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS priority VARCHAR(20) DEFAULT 'medium';`).catch(() => {});
+    await pool.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'sent';`).catch(() => {});
+    await pool.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS company_id UUID;`).catch(() => {});
+    await pool.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMP;`).catch(() => {});
+    await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS converted_to_deal BOOLEAN DEFAULT false;`).catch(() => {});
+    await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS deal_id UUID;`).catch(() => {});
+    await pool.query(`UPDATE leads SET converted_to_deal = false WHERE converted_to_deal IS NULL;`).catch(() => {});
+    await pool.query(`ALTER TABLE deals DROP CONSTRAINT IF EXISTS deals_stage_check;`).catch(() => {});
+    await pool.query(`ALTER TABLE lead_comments ADD COLUMN IF NOT EXISTS user_name VARCHAR(255);`).catch(() => {});
+    await pool.query(`ALTER TABLE lead_comments ADD COLUMN IF NOT EXISTS user_avatar VARCHAR(10);`).catch(() => {});
+    await pool.query(`ALTER TABLE lead_comments ADD COLUMN IF NOT EXISTS parent_comment_id UUID;`).catch(() => {});
+    
+    // Auto-extend crm_status enum values if it exists
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'crm_status') THEN
+          ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'won';
+          ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'Won';
+          ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'converted';
+          ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'lost';
+          ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'Lost';
+        END IF;
+      END $$;
+    `).catch(() => {});
+
+    console.log("✅ Auto-migration: DB tables ready");
+  } catch (err) {
+    console.error("Auto-migration warning:", err.message);
+  }
+})();
+
 // Global error handlers to prevent crash
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
@@ -14,6 +121,10 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection:', reason);
 });
+
+// ── Helper: Create Notification (direct DB insert) ──
+
+
 const app = express();
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers["authorization"];
@@ -42,14 +153,28 @@ const authenticateToken = (req, res, next) => {
 });
 };
 app.use(cors({
-  origin: [
-    "https://crm.vigomerge.com",
-    "https://admin.vigomerge.com",
-    "http://localhost:5173",
-    "http://localhost:3000"
-  ],
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"]
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    const allowedStaticOrigins = [
+      "https://crm.vigomerge.com",
+      "https://admin.vigomerge.com",
+      "http://localhost:5173",
+      "http://localhost:3000",
+      "http://localhost:5000",
+      "http://127.0.0.1:5173"
+    ];
+    if (
+      allowedStaticOrigins.includes(origin) ||
+      /^http:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|172\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/.test(origin) ||
+      origin.endsWith(".vigomerge.com")
+    ) {
+      return callback(null, true);
+    }
+    return callback(null, true);
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"]
 }));
 
 
@@ -63,7 +188,7 @@ app.get("/", (req, res) => {
 });
 
 // Leads
-app.get("/leads", async (req, res) => {
+app.get("/leads", authenticateToken, async (req, res) => {
   try {
     const result = await pool.query("SELECT * FROM leads ORDER BY created_at DESC");
     res.json(result.rows);
@@ -73,7 +198,7 @@ app.get("/leads", async (req, res) => {
 });
 
 // Bulk delete leads with UUID validation
-app.delete("/leads", async (req, res) => {
+app.delete("/leads", authenticateToken, async (req, res) => {
   try {
     const { ids } = req.body;
 
@@ -100,7 +225,7 @@ app.delete("/leads", async (req, res) => {
 });
 
 // Single delete lead
-app.delete("/leads/:id", async (req, res) => {
+app.delete("/leads/:id", authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -120,7 +245,7 @@ app.delete("/leads/:id", async (req, res) => {
 
 
 // Deals
-app.get("/deals", async (req, res) => {
+app.get("/deals", authenticateToken, async (req, res) => {
   try {
     const result = await pool.query("SELECT * FROM deals ORDER BY created_at DESC");
     res.json(result.rows);
@@ -130,7 +255,7 @@ app.get("/deals", async (req, res) => {
 });
 
 // Contacts
-app.get("/contacts", async (req, res) => {
+app.get("/contacts", authenticateToken, async (req, res) => {
   try {
     const result = await pool.query("SELECT * FROM contacts ORDER BY created_at DESC");
     res.json(result.rows);
@@ -140,7 +265,7 @@ app.get("/contacts", async (req, res) => {
 });
 
 // Tickets
-app.get("/tickets", async (req, res) => {
+app.get("/tickets", authenticateToken, async (req, res) => {
   try {
     const result = await pool.query("SELECT * FROM tickets ORDER BY created_at DESC");
     res.json(result.rows);
@@ -148,7 +273,7 @@ app.get("/tickets", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-app.post("/tickets", async (req, res) => {
+app.post("/tickets", authenticateToken, async (req, res) => {
   try {
     const {
       title,
@@ -202,6 +327,20 @@ app.post("/tickets", async (req, res) => {
       ]
     );
 
+    const ticket = result.rows[0];
+    const companyId = req.user?.company_id || null;
+
+    // Company-wide notification for new ticket
+    await notificationService.createCompanyNotification(
+      companyId,
+      'ticket_created',
+      "🎫 New Support Ticket",
+      `New ticket "${ticket.title}" has been created`,
+      `/tickets/${ticket.id}`,
+      'medium',
+      { ticket_priority: ticket.priority, ticket_category: ticket.category }
+    ).catch(err => console.error("Ticket notification error:", err));
+
     res.json(result.rows[0]);
   } catch (err) {
     console.error("CREATE TICKET ERROR:", err);
@@ -211,6 +350,14 @@ app.post("/tickets", async (req, res) => {
 app.put("/tickets/:id", authenticateToken, async (req, res) => {
   try {
     const { title, category, priority, status, description, assigned_to, assigned_to_name } = req.body;
+    
+    // Fetch existing ticket to check status change
+    const existingRes = await pool.query("SELECT * FROM tickets WHERE id = $1", [req.params.id]);
+    if (existingRes.rows.length === 0) {
+      return res.status(404).json({ error: "Ticket not found" });
+    }
+    const existing = existingRes.rows[0];
+    
     const result = await pool.query(
       `UPDATE tickets
        SET title = COALESCE($1, title),
@@ -225,9 +372,27 @@ app.put("/tickets/:id", authenticateToken, async (req, res) => {
        RETURNING *`,
       [title, category, priority, status, description, assigned_to, assigned_to_name, req.params.id]
     );
+    
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "Ticket not found" });
     }
+    
+    const ticket = result.rows[0];
+    const companyId = req.user?.company_id || null;
+    
+    // ── Notification: Ticket closed ──
+    if (status && existing.status !== status && (String(status).toLowerCase() === 'closed')) {
+      await notificationService.createCompanyNotification(
+        companyId,
+        'ticket_closed',
+        "Ticket Closed",
+        `Ticket "${ticket.title}" has been closed`,
+        `/tickets/${ticket.id}`,
+        'medium',
+        { ticket_category: ticket.category, ticket_priority: ticket.priority }
+      ).catch(err => console.error("Ticket closed notification error:", err));
+    }
+    
     res.json(result.rows[0]);
   } catch (err) {
     console.error("UPDATE TICKET ERROR:", err);
@@ -251,7 +416,7 @@ app.delete("/tickets/:id", authenticateToken, async (req, res) => {
   }
 });
 // Activities
-app.get("/activities", async (req, res) => {
+app.get("/activities", authenticateToken, async (req, res) => {
   try {
     const result = await pool.query("SELECT * FROM activities ORDER BY created_at DESC");
     res.json(result.rows);
@@ -261,7 +426,7 @@ app.get("/activities", async (req, res) => {
 });
 
 // Users
-app.get("/users", async (req, res) => {
+app.get("/users", authenticateToken, async (req, res) => {
   try {
     const result = await pool.query("SELECT * FROM users WHERE is_active = true;");
     res.json(result.rows);
@@ -269,6 +434,8 @@ app.get("/users", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+
 // Employees (for admin dropdown assignment)
 app.get("/employees", authenticateToken, async (req, res) => {
   try {
@@ -281,6 +448,93 @@ app.get("/employees", authenticateToken, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+
+// ── Integrations ──
+app.get("/integrations", authenticateToken, async (req, res) => {
+  try {
+    let result;
+    try {
+      result = await pool.query(
+        "SELECT * FROM integrations WHERE user_id = $1 ORDER BY updated_at DESC",
+        [req.user.id]
+      );
+    } catch (queryErr) {
+      result = await pool.query(
+        "SELECT * FROM integrations WHERE user_id = $1",
+        [req.user.id]
+      );
+    }
+    res.json(result.rows);
+  } catch (err) {
+    console.error("GET INTEGRATIONS ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Create Integration ──
+app.post("/integrations", authenticateToken, async (req, res) => {
+  try {
+    const { name, type, description, icon, status, leads, lastSync, config } = req.body;
+    const result = await pool.query(
+      `INSERT INTO integrations (id, user_id, name, type, description, icon, status, leads, last_sync, config, created_at, updated_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+       RETURNING *`,
+      [req.user.id, name, type, description, icon, status || 'pending', leads || 0, lastSync || 'Never', config || {}]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("CREATE INTEGRATION ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Update Integration ──
+app.put("/integrations/:id", authenticateToken, async (req, res) => {
+  try {
+    const { name, type, description, icon, status, leads, lastSync, config } = req.body;
+    const result = await pool.query(
+      `UPDATE integrations
+       SET name = COALESCE($1, name),
+           type = COALESCE($2, type),
+           description = COALESCE($3, description),
+           icon = COALESCE($4, icon),
+           status = COALESCE($5, status),
+           leads = COALESCE($6, leads),
+           last_sync = COALESCE($7, last_sync),
+           config = COALESCE($8, config),
+           updated_at = NOW()
+       WHERE id = $9 AND user_id = $10
+       RETURNING *`,
+      [name, type, description, icon, status, leads, lastSync, config, req.params.id, req.user.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Integration not found" });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("UPDATE INTEGRATION ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Delete Integration ──
+app.delete("/integrations/:id", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "DELETE FROM integrations WHERE id = $1 AND user_id = $2 RETURNING *",
+      [req.params.id, req.user.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Integration not found" });
+    }
+    res.json({ success: true, deleted: result.rows[0] });
+  } catch (err) {
+    console.error("DELETE INTEGRATION ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Update user (settings save)
 app.put("/users/:id", authenticateToken, async (req, res) => {
   try {
@@ -334,6 +588,22 @@ app.post("/users", authenticateToken, async (req, res) => {
        RETURNING id, name, email, role, employee_id AS "employeeId", department, is_active AS "isActive", created_at AS "createdAt"`,
       [name, email, hashedPassword, role || "user", employeeId || null, department || "sales"]
     );
+
+    const newUser = result.rows[0];
+    const companyId = req.user?.company_id;
+
+    // Company-wide notification for new user
+    if (companyId) {
+      await notificationService.createCompanyNotification(
+        companyId,
+        'user_added',
+        "👤 New Team Member",
+        `${name} has joined the team as ${role || 'user'}`,
+        `/users/${newUser.id}`,
+        'medium',
+        { user_role: role, user_email: email }
+      );
+    }
 
     res.json(result.rows[0]);
   } catch (err) {
@@ -432,51 +702,511 @@ app.get("/settings/:userId", async (req, res) => {
   }
 });
 // Leads POST
-app.post("/leads", async (req, res) => {
+app.post("/leads", authenticateToken, async (req, res) => {
   try {
     const { name, email, phone, company, value, status, source, industry, notes } = req.body;
+    
+    // Get owner_id from request body or logged-in user
+    const ownerId = req.body.owner_id || req.user?.id || null;
+    
+    // ✅ FIXED: Complete INSERT statement
     const result = await pool.query(
-      "INSERT INTO leads (id, name, email, phone, company, value, status, source, industry, notes, created_at) VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, NOW()) RETURNING *",
-      [name, email, phone, company, value, status, source, industry, notes]
+      `INSERT INTO leads (id, name, email, phone, company, value, status, source, industry, notes, owner_id, created_at, updated_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+       RETURNING *`,
+      [name, email, phone, company, value, status, source, industry, notes, ownerId]
     );
+
+    // ── Notification Trigger ──
+    try {
+      const lead = result.rows[0];
+      const userId = req.body.userId || lead.owner_id || req.user?.id;
+      const companyId = req.user?.company_id || null;
+      const leadValue = parseFloat(lead.value) || 0;
+      
+      // Notify assigned user
+      if (userId) {
+        await notificationService.createNotification(
+          userId,
+          'lead_created',
+          "New Lead Assigned",
+          `You have been assigned to ${lead.name}`,
+          `/leads/${lead.id}`,
+          'high'
+        ).catch(err => console.error("Assigned user notification error:", err));
+      }
+
+      // Company-wide notification for all new leads
+      await notificationService.createCompanyNotification(
+        companyId,
+        leadValue >= 50000 ? 'high_value_lead' : 'lead_created',
+        leadValue >= 50000 ? "⭐ High Value Lead Created" : "🆕 New Lead Created",
+        `New lead "${lead.name}" ${leadValue > 0 ? `worth ₹${leadValue.toLocaleString()}` : ''} has been created`,
+        `/leads/${lead.id}`,
+        leadValue >= 50000 ? 'high' : 'medium',
+        { lead_value: leadValue, lead_name: lead.name }
+      ).catch(err => console.error("Company lead notification error:", err));
+    } catch (notifErr) {
+      console.error("Notification error:", notifErr);
+    }
+
     res.json(result.rows[0]);
   } catch (err) {
+    console.error("POST LEAD ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
 // Leads PUT
-app.put("/leads/:id", async (req, res) => {
+app.put("/leads/:id", authenticateToken, async (req, res) => {
   try {
-    const { name, email, phone, company, value, status, source, industry, notes } = req.body;
+    const { name, email, phone, company, value, status, source, industry, notes, converted_to_deal, deal_id } = req.body;
+    
+    // Fetch existing lead first to preserve missing fields
+    const existingRes = await pool.query("SELECT * FROM leads WHERE id = $1", [req.params.id]);
+    if (existingRes.rows.length === 0) {
+      return res.status(404).json({ error: "Lead not found" });
+    }
+    const existing = existingRes.rows[0];
+
+    const finalName = name !== undefined ? name : existing.name;
+    const finalEmail = email !== undefined ? email : existing.email;
+    const finalPhone = phone !== undefined ? phone : existing.phone;
+    const finalCompany = (company !== undefined && company !== null && company !== "") ? company : (existing.company || "Unknown");
+    const finalValue = value !== undefined ? value : existing.value;
+    let finalStatus = status !== undefined ? status : existing.status;
+    if (typeof finalStatus === "string") {
+      const statusMap = { Won: "won", Lost: "lost", New: "new", Contacted: "contacted", Qualified: "qualified", Proposal: "proposal", Negotiation: "negotiation" };
+      if (statusMap[finalStatus]) {
+        finalStatus = statusMap[finalStatus];
+      }
+    }
+    const finalSource = source !== undefined ? source : existing.source;
+    const finalIndustry = industry !== undefined ? industry : existing.industry;
+    const finalNotes = notes !== undefined ? notes : existing.notes;
+
+    const finalConverted = converted_to_deal !== undefined ? converted_to_deal : (existing.converted_to_deal || false);
+    const finalDealId = deal_id !== undefined ? deal_id : (existing.deal_id || null);
+
     const result = await pool.query(
-      "UPDATE leads SET name=$1, email=$2, phone=$3, company=$4, value=$5, status=$6, source=$7, industry=$8, notes=$9, updated_at=NOW() WHERE id=$10 RETURNING *",
-      [name, email, phone, company, value, status, source, industry, notes, req.params.id]
+      `UPDATE leads 
+       SET name=$1, email=$2, phone=$3, company=$4, value=$5, status=$6, source=$7, industry=$8, notes=$9, converted_to_deal=$10, deal_id=$11, updated_at=NOW() 
+       WHERE id=$12 RETURNING *`,
+      [finalName, finalEmail, finalPhone, finalCompany, finalValue, finalStatus, finalSource, finalIndustry, finalNotes, finalConverted, finalDealId, req.params.id]
     );
-    res.json(result.rows[0]);
+
+    // ── Notification: Lead status changed / converted ──
+    try {
+      const lead = result.rows[0];
+      const companyId = req.user?.company_id || null;
+      
+      // Notify if status changed
+      if (status && existing.status !== finalStatus) {
+        await notificationService.createCompanyNotification(
+          companyId,
+          'lead_status_changed',
+          "Lead Status Updated",
+          `Lead "${lead.name}" status changed from ${existing.status} to ${finalStatus}`,
+          `/leads/${lead.id}`,
+          'medium',
+          { old_status: existing.status, new_status: finalStatus, lead_name: lead.name }
+        ).catch(err => console.error("Status notification error:", err));
+      }
+
+      // Notify if converted to deal
+      if (finalConverted && !existing.converted_to_deal) {
+        await notificationService.createCompanyNotification(
+          companyId,
+          'lead_converted',
+          "🎉 Lead Converted to Deal",
+          `Lead "${lead.name}" has been converted to a deal`,
+          finalDealId ? `/deals/${finalDealId}` : `/leads/${lead.id}`,
+          'high',
+          { lead_name: lead.name, deal_id: finalDealId }
+        ).catch(err => console.error("Lead conversion notification error:", err));
+      }
+    } catch (notifErr) {
+      console.error("Status change notification error:", notifErr);
+    }
+
+    res.json({
+      ...result.rows[0],
+      converted_to_deal: result.rows[0].converted_to_deal || false,
+      deal_id: result.rows[0].deal_id || null
+    });
   } catch (err) {
+    console.error("PUT LEAD ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-app.post("/deals", async (req, res) => {
+app.post("/deals", authenticateToken, async (req, res) => {
   try {
-    const { title, company, value, stage, owner, probability, expectedclose, daysinstage } = req.body;
+    let { title, company, value, stage, owner, probability, expectedclose, daysinstage } = req.body;
+    
+    // Normalize stage
+    const validStages = ["New", "Contacted", "Qualified", "Proposal", "Negotiation", "Won", "Lost"];
+    let dbStage = "New";
+    if (stage) {
+      const found = validStages.find(s => s.toLowerCase() === String(stage).toLowerCase());
+      if (found) {
+        dbStage = found;
+      } else {
+        dbStage = String(stage);
+      }
+    }
+
     const result = await pool.query(
       "INSERT INTO deals (id, title, company, value, stage, owner, probability, expectedclose, daysinstage) VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8) RETURNING *",
-      [title, company, value, stage, owner, probability, expectedclose, daysinstage]
+      [title, company, value, dbStage, owner, probability, expectedclose, daysinstage]
     );
+    
+    const deal = result.rows[0];
+    const companyId = req.user?.company_id || null;
+    const isWon = String(deal.stage).toLowerCase() === 'won';
+    
+    // Notify company about new deal
+    if (isWon) {
+      await notificationService.createCompanyNotification(
+        companyId,
+        'deal_won',
+        "🎉 Deal Won!",
+        `Deal "${deal.title}" worth ₹${parseFloat(deal.value || 0).toLocaleString()} has been closed`,
+        `/deals/${deal.id}`,
+        'high',
+        { deal_value: deal.value, deal_title: deal.title }
+      ).catch(err => console.error("Deal won notification error:", err));
+    } else {
+      await notificationService.createCompanyNotification(
+        companyId,
+        'deal_created',
+        "💼 New Deal Created",
+        `New deal "${deal.title}" for ${deal.company || 'client'} has been created`,
+        `/deals/${deal.id}`,
+        'medium',
+        { deal_stage: deal.stage, deal_value: deal.value }
+      ).catch(err => console.error("Deal creation notification error:", err));
+    }
     res.json(result.rows[0]);
   } catch (err) {
+    console.error("POST DEALS ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
+// ── Lead Comments Routes ──
+app.get("/leads/:id/comments", authenticateToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const result = await pool.query(
+            `SELECT 
+                lc.id,
+                lc.lead_id,
+                lc.user_id,
+                lc.comment,
+                lc.parent_comment_id,
+                lc.created_at,
+                lc.updated_at,
+                COALESCE(u.name, lc.user_name, 'User') as user_name,
+                COALESCE(u.email, 'user@example.com') as user_email,
+                u.role as user_role
+            FROM lead_comments lc
+            LEFT JOIN users u ON lc.user_id = u.id
+            WHERE lc.lead_id = $1
+            ORDER BY lc.created_at ASC`,
+            [id]
+        );
+        
+        res.json(result.rows);
+    } catch (error) {
+        console.error("Error fetching lead comments:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
 
-app.put("/deals/:id", async (req, res) => {
+app.post("/leads/:id/comments", authenticateToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { comment, parent_comment_id } = req.body;
+        const user_id = req.user.id;
+        
+        if (!comment || comment.trim() === '') {
+            return res.status(400).json({ error: "Comment cannot be empty" });
+        }
+        
+        const userName = req.user?.name || req.user?.email || "User";
+        const userAvatar = userName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase();
+
+        const result = await pool.query(
+            `INSERT INTO lead_comments (lead_id, user_id, user_name, user_avatar, comment, parent_comment_id)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             RETURNING *`,
+            [id, user_id, userName, userAvatar, comment, parent_comment_id || null]
+        );
+        
+        // ✅ KEEP THIS ONE
+        try {
+          const leadRes = await pool.query(`SELECT owner_id, name FROM leads WHERE id = $1`, [id]);
+          const lead = leadRes.rows[0];
+          
+          if (lead && lead.owner_id) {
+            await notificationService.createNotification(
+              lead.owner_id,
+              'comment_added',
+              'New Comment on Lead',
+              `${userName || 'Someone'} commented on "${lead.name}"`,
+              `/leads/${id}`,
+              'medium',
+              { lead_name: lead.name, commenter: userName }
+            );
+          }
+        } catch (notifErr) {
+          console.error('Comment notification error:', notifErr);
+        }
+
+
+        const commentWithUser = await pool.query(
+            `SELECT 
+                lc.*,
+                COALESCE(u.name, lc.user_name, 'User') as user_name,
+                u.email as user_email,
+                u.role as user_role
+            FROM lead_comments lc
+            LEFT JOIN users u ON lc.user_id = u.id
+            WHERE lc.id = $1`,
+            [result.rows[0].id]
+        );
+
+      
+        
+        res.status(201).json(commentWithUser.rows[0]);
+    } catch (error) {
+        console.error("Error creating lead comment:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.put("/leads/:id/comments/:commentId", authenticateToken, async (req, res) => {
+    try {
+        const { id, commentId } = req.params;
+        const { comment } = req.body;
+        const user_id = req.user.id;
+        
+        const checkResult = await pool.query(
+            `SELECT user_id FROM lead_comments WHERE id = $1 AND lead_id = $2`,
+            [commentId, id]
+        );
+        
+        if (checkResult.rows.length === 0) {
+            return res.status(404).json({ error: "Comment not found" });
+        }
+        
+        if (checkResult.rows[0].user_id && checkResult.rows[0].user_id !== user_id) {
+            return res.status(403).json({ error: "You can only edit your own comments" });
+        }
+        
+        const result = await pool.query(
+            `UPDATE lead_comments 
+             SET comment = $1, updated_at = CURRENT_TIMESTAMP
+             WHERE id = $2 AND lead_id = $3
+             RETURNING *`,
+            [comment, commentId, id]
+        );
+        
+        const commentWithUser = await pool.query(
+            `SELECT 
+                lc.*,
+                COALESCE(u.name, lc.user_name, 'User') as user_name,
+                u.email as user_email,
+                u.role as user_role
+            FROM lead_comments lc
+            LEFT JOIN users u ON lc.user_id = u.id
+            WHERE lc.id = $1`,
+            [result.rows[0].id]
+        );
+        
+        res.json(commentWithUser.rows[0]);
+    } catch (error) {
+        console.error("Error updating lead comment:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.delete("/leads/:id/comments/:commentId", authenticateToken, async (req, res) => {
+    try {
+        const { id, commentId } = req.params;
+        const user_id = req.user.id;
+        
+        const checkResult = await pool.query(
+            `SELECT user_id FROM lead_comments WHERE id = $1 AND lead_id = $2`,
+            [commentId, id]
+        );
+        
+        if (checkResult.rows.length === 0) {
+            return res.status(404).json({ error: "Comment not found" });
+        }
+        
+        if (checkResult.rows[0].user_id && checkResult.rows[0].user_id !== user_id) {
+            return res.status(403).json({ error: "You can only delete your own comments" });
+        }
+        
+        await pool.query(
+            `DELETE FROM lead_comments WHERE id = $1 AND lead_id = $2`,
+            [commentId, id]
+        );
+        
+        res.json({ message: "Comment deleted successfully" });
+    } catch (error) {
+        console.error("Error deleting lead comment:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ── Notification Routes ──
+
+// GET all notifications (user-specific + company-wide for all users with SQL deduplication)
+app.get("/notifications", authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const companyId = req.user.company_id || null;
+    
+    // Fetch notifications deduplicated by title, message, and minute timestamp
+    const result = await pool.query(
+      `SELECT id, user_id, company_id, type, title, message, link, priority, status, is_read, read_at, metadata, scheduled_at, created_at
+       FROM (
+         SELECT *, ROW_NUMBER() OVER (
+           PARTITION BY title, message, DATE_TRUNC('minute', created_at)
+           ORDER BY created_at DESC
+         ) as rn
+         FROM notifications
+         WHERE user_id = $1 OR (user_id IS NULL AND (company_id = $2 OR company_id IS NULL OR $2 IS NULL))
+       ) sub
+       WHERE rn = 1
+       ORDER BY created_at DESC
+       LIMIT 100`,
+      [userId, companyId]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error("Error fetching notifications:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET unread count (deduplicated unread count)
+app.get("/notifications/unread-count", authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const companyId = req.user.company_id || null;
+    
+    const result = await pool.query(
+      `SELECT COUNT(*) FROM (
+         SELECT DISTINCT ON (title, message, DATE_TRUNC('minute', created_at)) id
+         FROM notifications 
+         WHERE (user_id = $1 OR (user_id IS NULL AND (company_id = $2 OR company_id IS NULL OR $2 IS NULL))) 
+           AND is_read = false
+         ORDER BY title, message, DATE_TRUNC('minute', created_at), created_at DESC
+       ) sub`,
+      [userId, companyId]
+    );
+    res.json({ count: parseInt(result.rows[0].count) });
+  } catch (error) {
+    console.error("Error getting unread count:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST mark as read
+app.post("/notifications/:id/read", authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user.userId;
+    const companyId = req.user.company_id;
+    const { id } = req.params;  
+    
+    const result = await pool.query(
+      `UPDATE notifications 
+       SET is_read = true, read_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND (user_id = $2 OR company_id = $3)
+       RETURNING *`,
+      [id, userId, companyId]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Notification not found" });
+    }
+    
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error("Error marking notification as read:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST mark all as read
+app.post("/notifications/read-all", authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const companyId = req.user.company_id;
+    
+    await pool.query(
+      `UPDATE notifications 
+       SET is_read = true, read_at = CURRENT_TIMESTAMP
+       WHERE (user_id = $1 OR company_id = $2) AND is_read = false`,
+      [userId, companyId]
+    );
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Error marking all as read:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE notification
+app.delete("/notifications/:id", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+    const companyId = req.user.company_id;
+    
+    const result = await pool.query(
+      `DELETE FROM notifications 
+       WHERE id = $1 AND (user_id = $2 OR company_id = $3)
+       RETURNING id`,
+      [id, userId, companyId]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Notification not found" });
+    }
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Error deleting notification:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
+app.put("/deals/:id", authenticateToken, async (req, res) => {
   try {
     console.log("Updating deal:", req.params.id);
     console.log("Body:", req.body);
+
+    const existingRes = await pool.query("SELECT * FROM deals WHERE id = $1", [req.params.id]);
+    if (existingRes.rows.length === 0) {
+      return res.status(404).json({ error: "Deal not found" });
+    }
+    const existing = existingRes.rows[0];
+
+    const title = req.body.title !== undefined ? req.body.title : existing.title;
+    const company = req.body.company !== undefined ? req.body.company : existing.company;
+    const value = req.body.value !== undefined ? req.body.value : existing.value;
+    const stage = req.body.stage !== undefined ? String(req.body.stage) : existing.stage;
+    const owner = req.body.owner !== undefined ? req.body.owner : existing.owner;
+    const probability = req.body.probability !== undefined ? req.body.probability : existing.probability;
+    const expectedclose = req.body.expectedclose !== undefined ? req.body.expectedclose : existing.expectedclose;
+    const daysinstage = req.body.daysinstage !== undefined ? req.body.daysinstage : existing.daysinstage;
 
     const result = await pool.query(
       `UPDATE deals
@@ -492,28 +1222,69 @@ app.put("/deals/:id", async (req, res) => {
        WHERE id = $9
        RETURNING *`,
       [
-        req.body.title,
-        req.body.company,
-        req.body.value,
-        req.body.stage,
-        req.body.owner,
-        req.body.probability,
-        req.body.expectedclose,
-        req.body.daysinstage,
+        title,
+        company,
+        value,
+        stage,
+        owner,
+        probability,
+        expectedclose,
+        daysinstage,
         req.params.id
       ]
     );
 
-    console.log("Updated:", result.rows[0]);
+    const deal = result.rows[0];
+    const companyId = req.user?.company_id || null;
+    
+    // Check for stage changes
+    if (stage && existing.stage !== deal.stage) {
+      const lowerStage = String(deal.stage).toLowerCase();
+      if (lowerStage === 'won') {
+        // Deal won notification
+        await notificationService.createCompanyNotification(
+          companyId,
+          'deal_won',
+          "🎉 Deal Won!",
+          `Deal "${deal.title}" worth ₹${parseFloat(deal.value || 0).toLocaleString()} has been won`,
+          `/deals/${deal.id}`,
+          'high',
+          { deal_value: deal.value, deal_title: deal.title }
+        ).catch(err => console.error("Company deal won notification error:", err));
+      } else if (lowerStage === 'lost') {
+        // Deal lost notification
+        await notificationService.createCompanyNotification(
+          companyId,
+          'deal_lost',
+          "Deal Lost",
+          `Deal "${deal.title}" has been marked as lost`,
+          `/deals/${deal.id}`,
+          'high',
+          { deal_value: deal.value, deal_title: deal.title }
+        ).catch(err => console.error("Deal lost notification error:", err));
+      } else {
+        // Stage changed notification
+        await notificationService.createCompanyNotification(
+          companyId,
+          'deal_status_changed',
+          "Deal Stage Updated",
+          `Deal "${deal.title}" moved from ${existing.stage} to ${deal.stage}`,
+          `/deals/${deal.id}`,
+          'medium',
+          { old_stage: existing.stage, new_stage: deal.stage, deal_title: deal.title }
+        ).catch(err => console.error("Deal stage change notification error:", err));
+      }
+    }
 
-    res.json(result.rows[0]);
+    console.log("Updated:", deal);
+    res.json(deal);
   } catch (err) {
     console.error("UPDATE ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-app.delete("/deals/:id", async (req, res) => {
+app.delete("/deals/:id", authenticateToken, async (req, res) => {
   try {
     console.log("Deleting deal:", req.params.id);
     const result = await pool.query(
@@ -543,7 +1314,7 @@ app.delete("/admin/reset-database", authenticateToken, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-app.post("/leads/bulk", async (req, res) => {
+app.post("/leads/bulk", authenticateToken, async (req, res) => {
   try {
     console.log("BODY RECEIVED:", req.body);
 
@@ -586,7 +1357,7 @@ app.post("/leads/bulk", async (req, res) => {
     });
   }
 });
-app.post("/leads/import-excel", upload.single("file"), async (req, res) => {
+app.post("/leads/import-excel", authenticateToken, upload.single("file"), async (req, res) => {
   try {
 
     if (!req.file) {
@@ -631,7 +1402,7 @@ app.post("/leads/import-excel", upload.single("file"), async (req, res) => {
           aiscore,
           created_at
         )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
         `,
         [
           row.name || "",
@@ -644,7 +1415,7 @@ app.post("/leads/import-excel", upload.single("file"), async (req, res) => {
           row.value || 0,
           row.notes || "",
           row.owner_id || null,
-           row.aiscore || 50
+          row.aiscore || 50
         ]
       );
     }
@@ -744,7 +1515,14 @@ const result = await pool.query(
 
     res.json({
       token,
-      user
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        company_id: user.company_id,  // ← ADD THIS
+        role: user.role,
+        department: user.department
+      }
     });
 
   } catch (err) {
@@ -803,7 +1581,7 @@ app.post("/auth/login", async (req, res) => {
         id: user.id,
         name: user.name,
         email: user.email,
-        company_id: user.company_id,
+        company_id: user.company_id,  // ← ADD THIS
         role: user.role,
         department: user.department
       }
@@ -1315,6 +2093,12 @@ app.put("/users/:id/payment-method", authenticateToken, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// ──────────────────────────────────────────────────────────────
+// NOTIFICATION ROUTES
+// ──────────────────────────────────────────────────────────────
+
+
 app.listen(5000, "0.0.0.0", () => {
   console.log("Server running on port 5000");
+  startNotificationWorker();
 });

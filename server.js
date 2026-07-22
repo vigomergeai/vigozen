@@ -2140,6 +2140,7 @@ app.post("/auth/2fa/setup", authenticateToken, async (req, res) => {
   try {
     const secret = speakeasy.generateSecret({
       name: `VigozenCRM (${req.user.email})`,
+      issuer: "VigozenCRM",
     });
 
     await pool.query(

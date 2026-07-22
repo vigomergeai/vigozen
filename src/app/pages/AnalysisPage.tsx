@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { api, getApiBaseUrl } from "../lib/api";
 import {
   BarChart3, Bot, Download, Calendar, Filter, TrendingUp, Users, Target,
   ArrowUp, ArrowDown, ChevronDown, Sparkles, Brain, FileText, Lock
@@ -31,6 +32,7 @@ type StatusSummary = {
   value: number;
 };
 
+
 const COLORS = ["#6366F1", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#3B82F6", "#EC4899"];
 
 const aiComments: Record<ReportType, Record<DateFilter, string>> = {
@@ -58,217 +60,233 @@ export default function AnalysisPage() {
   const { role, leads, deals, refreshData, subscription } = useApp();
   const navigate = useNavigate();  // ← ADD THIS
 
-  useEffect(() => {
-    refreshData();
-  }, [refreshData]);
-  const empWiseData: EmployeeSummary[] = Object.values(
-    deals.reduce<Record<string, EmployeeSummary>>((acc, deal: any) => {
-      if (!deal.owner) return acc;
-
-      const owner = deal.owner;
-
-      if (!acc[owner]) {
-        acc[owner] = {
-          name: owner,
-          new: 0,
-          contacted: 0,
-          qualified: 0,
-          proposal: 0,
-          negotiation: 0,
-          won: 0,
-          lost: 0,
-        };
-      }
-      const stage = deal.stage?.toLowerCase();
-
-      if (stage === "new") acc[owner].new++;
-      else if (stage === "contacted") acc[owner].contacted++;
-      else if (stage === "qualified") acc[owner].qualified++;
-      else if (stage === "proposal") acc[owner].proposal++;
-      else if (stage === "negotiation") acc[owner].negotiation++;
-      else if (stage === "won") acc[owner].won++;
-      else if (stage === "lost") acc[owner].lost++;
-
-      return acc;
-    }, {})
-  );
- const empRadarData = empWiseData.map((e: EmployeeSummary) => ({
-  name: e.name.split(" ")[0],
-  Won: e.won,
-  Qualified: e.qualified,
-  Proposal: e.proposal,
-}));
-const statusWiseData: StatusSummary[] = Object.values(
-  deals.reduce<Record<string, StatusSummary>>((acc, deal: any) => {
-    const stage = deal.stage?.toLowerCase();
-    if (!stage) return acc;
-
-    if (!acc[stage]) {
-      acc[stage] = {
-        status: stage,
-        count: 0,
-        value: 0,
-      };
-    }
-
-    acc[stage].count += 1;
-    acc[stage].value += Number(deal.value || 0);
-
-    return acc;
-  }, {})
-);
-
-const totalDeals = deals.length;
-
-const wonDeals = deals.filter(d => d.stage?.toLowerCase() === "won").length;
-const lostDeals = deals.filter(d => d.stage?.toLowerCase() === "lost").length;
-
-const dropOffRate = totalDeals > 0
-  ? ((lostDeals / totalDeals) * 100).toFixed(1)
-  : "0";
-
-const funnelVelocity = (totalDeals / 7).toFixed(1);
-
-const avgStageDuration = (() => {
-  if (!deals.length) return "--";
-
-  const totalDays = deals.reduce((sum, deal) => {
-    if (!deal.createdAt) return sum;
-
-    const created = new Date(deal.createdAt).getTime();
-    const now = Date.now();
-
-    const diffDays = (now - created) / (1000 * 60 * 60 * 24);
-
-    return sum + diffDays;
-  }, 0);
-
-  return (totalDays / deals.length).toFixed(1) + " days";
-})();
-
-// ── Check if trial expired ──
-const isLocked = subscription && 
-  !subscription.is_trial_active && 
-  !subscription.is_subscription_active;
-
-if (isLocked) {
-  return (
-    <div className="p-4 lg:p-6 flex items-center justify-center min-h-[60vh]">
-      <div className="text-center max-w-md">
-        <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
-          <Lock size={40} className="text-red-500" />
-        </div>
-        <h2 className="text-2xl font-bold text-slate-800 mb-2">Your Trial Has Expired</h2>
-        <p className="text-slate-500 mb-6">
-          Upgrade to continue viewing reports and analytics.
-        </p>
-        <button
-          onClick={() => navigate("/billing")}
-          className="px-6 py-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors"
-        >
-          Upgrade Now →
-        </button>
-      </div>
-    </div>
-  );
-}
-
-const statusChartData = [
-  {
-    name: "Deals",
-    New: statusWiseData.find((s: StatusSummary) => s.status === "new")?.count || 0,
-    Qualified: statusWiseData.find((s: StatusSummary) => s.status === "qualified")?.count || 0,
-    Proposal: statusWiseData.find((s: StatusSummary) => s.status === "proposal")?.count || 0,
-    Won: statusWiseData.find((s: StatusSummary) => s.status === "won")?.count || 0,
-    Lost: statusWiseData.find((s: StatusSummary) => s.status === "lost")?.count || 0,
-  }
-];
-// ===== EXPORT CSV =====
-const handleExportCSV = () => {
-  if (!deals.length) return;
-
-  const headers = ["Title", "Company", "Stage", "Value", "Owner", "Expected Close", "Created At"];
-
-  const rows = deals.map((d: any) => [
-    d.title || '',
-    d.company || '',
-    d.stage || '',
-    d.value || 0,
-    d.owner || '',
-    d.expectedclose || '',
-    d.createdAt || ''
-  ]);
-
-  const csvContent =
-    [headers, ...rows]
-      .map(e => e.join(","))
-      .join("\n");
-
-  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = "crm-report.csv";
-  link.click();
-};
-// ===== PDF DOWNLOAD =====
-const handleDownloadPDF = () => {
-  window.print();
-};
-// ===== REAL SALES DATA FROM LEADS =====
-
-
-// ===== REAL SALES DATA FROM DEALS =====
-const salesWiseData = Object.values(
-  deals.reduce((acc: any, deal: any) => {
-    if (!deal.createdAt) return acc;
-
-    const date = new Date(deal.createdAt);
-
-    const week = `${date.getFullYear()}-W${Math.ceil(date.getDate() / 7)}`;
-
-    if (!acc[week]) {
-      acc[week] = {
-        week,
-        target: 100000 * 1,
-        achieved: 0,
-        deals: 0,
-        avgDealSize: 0,
-      };
-    }
-
-    if (deal.stage?.toLowerCase() === "won") {
-      const value = Number(deal.value || 0);
-
-      acc[week].achieved += value;
-      acc[week].deals += 1;
-    }
-
-    return acc;
-  }, {})
-).map((row: any) => ({
-  ...row,
-  avgDealSize: row.deals > 0 ? row.achieved / row.deals : 0,
-}));
-
-const totalRevenue = deals
-  .filter(d => d.stage?.toLowerCase() === "won")
-  .reduce((sum, d) => sum + Number(d.value || 0), 0);
-
-const totalDealsCount = deals.filter(d => d.stage?.toLowerCase() === "won").length;
-
-const avgDealSize = totalDealsCount > 0 ? totalRevenue / totalDealsCount : 0;
-
-const winRate = deals.length > 0
-  ? (totalDealsCount / deals.length) * 100
-  : 0;
   const [reportType, setReportType] = useState<ReportType>("employee");
   const [dateFilter, setDateFilter] = useState<DateFilter>("weekly");
   const [startDate, setStartDate] = useState("2026-03-01");
   const [endDate, setEndDate] = useState("2026-03-14");
   const [showAI, setShowAI] = useState(true);
 
- const filteredEmpData = empWiseData;
+  // ── Reports State ──
+  const [reports, setReports] = useState({
+    summary: null as any,
+    employeeWise: [] as any[],
+    statusWise: [] as any[],
+    salesWise: [] as any[],
+    loading: true
+  });
+
+  const [appliedRange, setAppliedRange] = useState<{ start: string; end: string } | null>(null);
+
+  // ── Date Range Sync ──
+  useEffect(() => {
+    if (dateFilter === "daily") {
+      setAppliedRange({ start: "2026-03-14", end: "2026-03-14" });
+    } else if (dateFilter === "weekly") {
+      setAppliedRange({ start: "2026-03-09", end: "2026-03-14" });
+    } else if (dateFilter === "custom") {
+      setAppliedRange({ start: startDate, end: endDate });
+    }
+  }, [dateFilter]);
+
+  const handleApplyCustomRange = () => {
+    setAppliedRange({ start: startDate, end: endDate });
+  };
+
+  // ── Fetch Reports from API ──
+  useEffect(() => {
+    const fetchReports = async () => {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setReports(prev => ({ ...prev, loading: false }));
+        return;
+      }
+
+      setReports(prev => ({ ...prev, loading: true }));
+      try {
+        const params = new URLSearchParams();
+        if (appliedRange) {
+          params.append("startDate", appliedRange.start);
+          params.append("endDate", appliedRange.end);
+        }
+        const queryStr = params.toString();
+
+        const [summary, employeeWise, statusWise, salesWise] = await Promise.all([
+          api.reports.getSummary(queryStr, token),
+          api.reports.getEmployeeWise(queryStr, token),
+          api.reports.getStatusWise(queryStr, token),
+          api.reports.getSalesWise(queryStr, token),
+        ]);
+
+        const camelSummary = summary ? {
+          totalLeads: parseInt(summary.total_leads) || 0,
+          totalDeals: parseInt(summary.total_deals) || 0,
+          wonDeals: parseInt(summary.won_deals) || 0,
+          activeDeals: parseInt(summary.active_deals) || 0,
+          totalRevenue: parseFloat(summary.total_revenue) || 0,
+          winRate: parseFloat(summary.win_rate) || 0
+        } : null;
+
+        setReports({
+          summary: camelSummary,
+          employeeWise: employeeWise || [],
+          statusWise: statusWise || [],
+          salesWise: salesWise || [],
+          loading: false
+        });
+      } catch (error) {
+        console.error("Failed to fetch reports:", error);
+        setReports(prev => ({ ...prev, loading: false }));
+      }
+    };
+
+    fetchReports();
+  }, [appliedRange]);
+
+  useEffect(() => {
+    refreshData();
+  }, [refreshData]);
+  const empWiseData: EmployeeSummary[] = reports.employeeWise.length > 0
+    ? reports.employeeWise.map((item: any) => ({
+      name: item.name || 'Unassigned',
+      new: parseInt(item.new) || 0,
+      contacted: parseInt(item.contacted) || 0,
+      qualified: parseInt(item.qualified) || 0,
+      proposal: parseInt(item.proposal) || 0,
+      negotiation: parseInt(item.negotiation) || 0,
+      won: parseInt(item.won_deals) || 0,
+      lost: parseInt(item.lost) || 0,
+    }))
+    : [];
+
+  const empRadarData = empWiseData.map((e: EmployeeSummary) => ({
+    name: e.name.split(" ")[0],
+    Won: e.won,
+    Qualified: e.qualified,
+    Proposal: e.proposal,
+  }));
+  const statusWiseData: StatusSummary[] = reports.statusWise.length > 0
+    ? reports.statusWise.map((item: any) => ({
+      status: item.status || 'Unknown',
+      count: item.count || 0,
+      value: item.total_value || 0,
+    }))
+    : [];
+
+  // ── Check if trial expired ──
+  const isLocked = subscription &&
+    !subscription.is_trial_active &&
+    !subscription.is_subscription_active;
+
+  if (isLocked) {
+    return (
+      <div className="p-4 lg:p-6 flex items-center justify-center min-h-[60vh]">
+        <div className="text-center max-w-md">
+          <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <Lock size={40} className="text-red-500" />
+          </div>
+          <h2 className="text-2xl font-bold text-slate-800 mb-2">Your Trial Has Expired</h2>
+          <p className="text-slate-500 mb-6">
+            Upgrade to continue viewing reports and analytics.
+          </p>
+          <button
+            onClick={() => navigate("/billing")}
+            className="px-6 py-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors"
+          >
+            Upgrade Now →
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Status Wise Data with Time Series ──
+  const statusChartData = React.useMemo(() => {
+    const weeks = ['Week 1', 'Week 2', 'Week 3', 'Week 4'];
+    const data = weeks.map((week, index) => {
+      const weekStart = new Date();
+      weekStart.setDate(weekStart.getDate() - (28 - index * 7));
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekEnd.getDate() + 7);
+      
+      const filtered = deals.filter(d => {
+        const created = new Date(d.createdAt);
+        return created >= weekStart && created < weekEnd;
+      });
+      
+      return {
+        name: week,
+        New: filtered.filter(d => d.stage?.toLowerCase() === 'new').length,
+        Qualified: filtered.filter(d => d.stage?.toLowerCase() === 'qualified').length,
+        Proposal: filtered.filter(d => d.stage?.toLowerCase() === 'proposal').length,
+        Won: filtered.filter(d => d.stage?.toLowerCase() === 'won').length,
+        Lost: filtered.filter(d => d.stage?.toLowerCase() === 'lost').length,
+      };
+    });
+    return data;
+  }, [deals]);
+  // ===== EXPORT CSV =====
+  const handleExportCSV = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+      const baseUrl = getApiBaseUrl();
+      const response = await fetch(`${baseUrl}/api/reports/export/csv`, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+      if (!response.ok) throw new Error("CSV download failed");
+      const blob = await response.blob();
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `crm_report_${new Date().toISOString().split("T")[0]}.csv`;
+      link.click();
+    } catch (error) {
+      console.error("Failed to export CSV:", error);
+    }
+  };
+  // ===== PDF DOWNLOAD =====
+  const handleDownloadPDF = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+      const baseUrl = getApiBaseUrl();
+      const response = await fetch(`${baseUrl}/api/reports/export/pdf`, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+      if (!response.ok) throw new Error("PDF download failed");
+      const blob = await response.blob();
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `report_${new Date().toISOString().split("T")[0]}.pdf`;
+      link.click();
+    } catch (error) {
+      console.error("Failed to export PDF:", error);
+    }
+  };
+  // ===== REAL SALES DATA FROM LEADS =====
+
+
+  // ===== REAL SALES DATA FROM DEALS =====
+  const salesWiseData = reports.salesWise.length > 0
+    ? reports.salesWise.map((item: any) => ({
+      week: item.week || 'Week',
+      target: 100000,
+      achieved: item.total_value || 0,
+      deals: item.deals_count || 0,
+      avgDealSize: item.avg_value || 0,
+    }))
+    : [];
+
+  const totalDeals = deals.length;
+  const lostDeals = deals.filter(d => d.stage?.toLowerCase() === "lost").length;
+  const dropOffRate = totalDeals > 0 ? ((lostDeals / totalDeals) * 100).toFixed(1) : "0";
+
+
+
+  const filteredEmpData = empWiseData;
 
   // console.log("Filtered Employee Data is: ", filteredEmpData);
 
@@ -280,37 +298,36 @@ const winRate = deals.length > 0
           <h1 className="text-slate-900 dark:text-white">Analysis & Reports</h1>
           <p className="text-sm text-slate-500 mt-0.5">AI-powered insights · Real-time data</p>
         </div>
-       <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2">
 
-  <button
-    onClick={() => setShowAI(!showAI)}
-    className={`flex items-center gap-2 px-3 py-2 text-xs rounded-xl border transition-colors ${
-      showAI
-        ? "bg-purple-50 border-purple-200 text-purple-700"
-        : "bg-white border-slate-200 text-slate-600"
-    }`}
-  >
-    <Brain size={13} />
-    AI Insights
-  </button>
+          <button
+            onClick={() => setShowAI(!showAI)}
+            className={`flex items-center gap-2 px-3 py-2 text-xs rounded-xl border transition-colors ${showAI
+              ? "bg-purple-50 border-purple-200 text-purple-700"
+              : "bg-white border-slate-200 text-slate-600"
+              }`}
+          >
+            <Brain size={13} />
+            AI Insights
+          </button>
 
-  <button
-    onClick={handleExportCSV}
-    className="px-3 py-2 text-sm text-slate-600 border border-slate-200 bg-white hover:bg-slate-50 rounded-xl flex items-center gap-2 transition-colors"
-  >
-    <Download size={14} />
-    Export
-  </button>
+          <button
+            onClick={handleExportCSV}
+            className="px-3 py-2 text-sm text-slate-600 border border-slate-200 bg-white hover:bg-slate-50 rounded-xl flex items-center gap-2 transition-colors"
+          >
+            <Download size={14} />
+            Export
+          </button>
 
-  <button
-    onClick={handleDownloadPDF}
-    className="px-3 py-2 text-sm text-slate-600 border border-slate-200 bg-white hover:bg-slate-50 rounded-xl flex items-center gap-2 transition-colors"
-  >
-    <FileText size={14} />
-    PDF Report
-  </button>
+          <button
+            onClick={handleDownloadPDF}
+            className="px-3 py-2 text-sm text-slate-600 border border-slate-200 bg-white hover:bg-slate-50 rounded-xl flex items-center gap-2 transition-colors"
+          >
+            <FileText size={14} />
+            PDF Report
+          </button>
 
-</div>
+        </div>
       </div>
 
       {/* Report Type Selector */}
@@ -323,11 +340,10 @@ const winRate = deals.length > 0
           <button
             key={type}
             onClick={() => setReportType(type)}
-            className={`p-4 rounded-2xl border-2 text-left transition-all ${
-              reportType === type
-                ? `border-${color}-500 bg-${color}-50 shadow-sm`
-                : "border-slate-200 bg-white hover:border-slate-300"
-            }`}
+            className={`p-4 rounded-2xl border-2 text-left transition-all ${reportType === type
+              ? `border-${color}-500 bg-${color}-50 shadow-sm`
+              : "border-slate-200 bg-white hover:border-slate-300"
+              }`}
           >
             <div className={`w-9 h-9 rounded-xl flex items-center justify-center mb-2 ${reportType === type ? `bg-${color}-100` : "bg-slate-100"}`}>
               <Icon size={16} className={reportType === type ? `text-${color}-600` : "text-slate-500"} />
@@ -372,7 +388,7 @@ const winRate = deals.length > 0
               onChange={e => setEndDate(e.target.value)}
               className="px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
             />
-            <button className="px-3 py-2 text-xs bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors">
+            <button onClick={handleApplyCustomRange} className="px-3 py-2 text-xs bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors">
               Apply
             </button>
           </div>
@@ -400,7 +416,6 @@ const winRate = deals.length > 0
             <div>
               <div className="flex items-center gap-2 mb-1.5">
                 <span className="text-sm font-semibold text-purple-800">AI Analysis Summary</span>
-                <span className="text-[10px] bg-purple-200 text-purple-700 px-2 py-0.5 rounded-full">GPT-4 Powered</span>
                 <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
               </div>
               <p className="text-sm text-purple-700 leading-relaxed">{aiComments[reportType][dateFilter]}</p>
@@ -415,10 +430,10 @@ const winRate = deals.length > 0
           {/* Summary Cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {[
-              { label: "Total Leads", value: filteredEmpData.reduce((s, e) => s + e.new + (e.contacted || 0) + e.qualified + (e.proposal || 0) + (e.negotiation || 0) + e.won + e.lost, 0), trend: "+18%", color: "indigo" },
-              { label: "Total Won", value: filteredEmpData.reduce((s, e) => s + e.won, 0), trend: "+23%", color: "emerald" },
-              { label: "Total Lost", value: filteredEmpData.reduce((s, e) => s + e.lost, 0), trend: "-5%", color: "red" },
-              { label: "Avg Conv. Rate", value: `${(filteredEmpData.reduce((s, e) => s + (e.won / (e.won + e.lost || 1)) * 100, 0) / filteredEmpData.length).toFixed(1)}%`, trend: "+2.3%", color: "purple" },
+              { label: "Total Leads", value: reports.summary?.totalLeads || 0, trend: "+18%", color: "indigo" },
+              { label: "Total Won", value: reports.summary?.wonDeals || 0, trend: "+23%", color: "emerald" },
+              { label: "Total Lost", value: lostDeals, trend: "-5%", color: "red" },
+              { label: "Avg Conv. Rate", value: reports.summary?.winRate ? `${reports.summary.winRate}%` : "0%", trend: "+2.3%", color: "purple" },
             ].map(stat => (
               <div key={stat.label} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
                 <div className="text-2xl font-bold text-slate-900">{stat.value}</div>
@@ -483,7 +498,7 @@ const winRate = deals.length > 0
                   <tbody className="divide-y divide-slate-50">
                     {filteredEmpData.map((e: EmployeeSummary) => {
                       const total = e.won + e.lost;
-const conv = total > 0 ? ((e.won / total) * 100).toFixed(0) : "0";
+                      const conv = total > 0 ? ((e.won / total) * 100).toFixed(0) : "0";
                       return (
                         <tr key={e.name} className="hover:bg-slate-50">
                           <td className="py-2.5">
@@ -517,38 +532,43 @@ const conv = total > 0 ? ((e.won / total) * 100).toFixed(0) : "0";
       {/* ===== STATUS WISE REPORT ===== */}
       {reportType === "status" && (
         <div className="space-y-5">
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
             {[
               {
                 label: "Total in Funnel",
-                value: totalDeals,
+                value: reports.summary?.totalDeals || 0,
                 trend: "",
                 color: "indigo"
               },
               {
-                label: "Avg Stage Duration",
-                value: avgStageDuration,
+                label: "Revenue",
+                value: reports.summary?.totalRevenue ? `₹${(reports.summary.totalRevenue / 100000).toFixed(2)}L` : "₹0",
                 trend: "",
                 color: "emerald"
               },
               {
-                label: "Funnel Velocity",
-                value: `${funnelVelocity}/wk`,
+                label: "Active Deals",
+                value: reports.summary?.activeDeals || 0,
                 trend: "",
                 color: "amber"
               },
               {
-                label: "Drop-off Rate",
-                value: `${dropOffRate}%`,
+                label: "Win Rate",
+                value: reports.summary?.winRate ? `${reports.summary.winRate}%` : "0%",
                 trend: "",
                 color: "purple"
+              },
+              {
+                label: "Total Lost",
+                value: lostDeals,
+                trend: "",
+                color: "red"
               },
             ].map(stat => (
               <div key={stat.label} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
                 <div className="text-2xl font-bold text-slate-900">{stat.value}</div>
-                <div className="text-xs text-slate-500 mt-0.5">{stat.label}</div>
-                <div className={`text-xs mt-1 flex items-center gap-1 ${stat.trend.startsWith("-") && stat.label !== "Drop-off Rate" ? "text-red-500" : "text-emerald-600"}`}>
-                  <ArrowUp size={10} />{stat.trend} vs last period
+                <div className="text-xs mt-1 flex items-center gap-1 text-slate-400">
+                  <ArrowUp size={10} className="opacity-0" />{stat.trend} vs last period
                 </div>
               </div>
             ))}
@@ -586,34 +606,34 @@ const conv = total > 0 ? ((e.won / total) * 100).toFixed(0) : "0";
                   ))}
                 </tr>
               </thead>
-            <tbody className="divide-y divide-slate-50">
-  {statusWiseData.map((row: any) => {
-    return (
-      <tr key={row.status} className="hover:bg-slate-50 transition-colors">
-        
-        <td className="py-3 px-4">
-          <span className="text-xs px-2 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
-            {row.status}
-          </span>
-        </td>
+              <tbody className="divide-y divide-slate-50">
+                {statusWiseData.map((row: any) => {
+                  return (
+                    <tr key={row.status} className="hover:bg-slate-50 transition-colors">
 
-        <td className="py-3 px-4 text-xs font-semibold text-slate-800">
-          {row.count}
-        </td>
+                      <td className="py-3 px-4">
+                        <span className="text-xs px-2 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
+                          {row.status}
+                        </span>
+                      </td>
 
-        <td className="py-3 px-4 text-xs text-slate-600">
-          ₹{(row.value / 1000).toFixed(1)}K
-        </td>
+                      <td className="py-3 px-4 text-xs font-semibold text-slate-800">
+                        {row.count}
+                      </td>
 
-        <td className="py-3 px-4 text-xs text-slate-500">-</td>
-        <td className="py-3 px-4 text-xs text-slate-500">-</td>
-        <td className="py-3 px-4 text-xs text-slate-500">-</td>
-        <td className="py-3 px-4 text-xs text-slate-500">-</td>
+                      <td className="py-3 px-4 text-xs text-slate-600">
+                        ₹{(row.value / 1000).toFixed(1)}K
+                      </td>
 
-      </tr>
-    );
-  })}
-</tbody>
+                      <td className="py-3 px-4 text-xs text-slate-500">-</td>
+                      <td className="py-3 px-4 text-xs text-slate-500">-</td>
+                      <td className="py-3 px-4 text-xs text-slate-500">-</td>
+                      <td className="py-3 px-4 text-xs text-slate-500">-</td>
+
+                    </tr>
+                  );
+                })}
+              </tbody>
             </table>
           </div>
         </div>
@@ -626,25 +646,25 @@ const conv = total > 0 ? ((e.won / total) * 100).toFixed(0) : "0";
             {[
               {
                 label: "Total Revenue",
-                value: `₹${(totalRevenue / 100000).toFixed(2)}L`,
+                value: reports.summary?.totalRevenue ? `₹${(reports.summary.totalRevenue / 100000).toFixed(2)}L` : "₹0",
                 trend: "+0%",
                 up: true
               },
               {
                 label: "Total Deals Won",
-                value: totalDealsCount,
+                value: reports.summary?.wonDeals || 0,
                 trend: "+0%",
                 up: true
               },
               {
                 label: "Avg Deal Size",
-                value: `₹${(avgDealSize / 1000).toFixed(1)}K`,
+                value: reports.summary?.totalDeals && reports.summary.wonDeals ? `₹${((reports.summary.totalRevenue || 0) / (reports.summary.wonDeals || 1) / 1000).toFixed(1)}K` : "₹0",
                 trend: "+0%",
                 up: true
               },
               {
                 label: "Win Rate",
-                value: `${winRate.toFixed(1)}%`,
+                value: reports.summary?.winRate ? `${reports.summary.winRate}%` : "0%",
                 trend: "+0%",
                 up: true
               }
@@ -714,8 +734,8 @@ const conv = total > 0 ? ((e.won / total) * 100).toFixed(0) : "0";
                 {salesWiseData.map(row => {
                   const variance = row.achieved - row.target;
                   const pct = row.target > 0
-  ? ((row.achieved / row.target) * 100 - 100).toFixed(1)
-  : "0";
+                    ? ((row.achieved / row.target) * 100 - 100).toFixed(1)
+                    : "0";
                   const grade = row.achieved >= row.target * 1.1 ? "A+" : row.achieved >= row.target ? "A" : row.achieved >= row.target * 0.9 ? "B" : "C";
                   return (
                     <tr key={row.week} className="hover:bg-slate-50 transition-colors">

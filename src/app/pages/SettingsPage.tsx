@@ -1007,7 +1007,7 @@ export default function SettingsPage() {
                               const token = localStorage.getItem('token') || session?.access_token;
                               if (!token) throw new Error("Not logged in");
 
-                              const subscriptionId = userProfile?.subscription_id;
+                              const subscriptionId = (userProfile as any)?.subscription_id;
                               
                               // Cancel in Razorpay first
                               if (subscriptionId) {

@@ -157,7 +157,7 @@ export default function NotificationDropdown({ onClose }: NotificationDropdownPr
                                     <div className="px-4 py-1.5 text-[10px] font-semibold text-slate-400 bg-slate-50 uppercase tracking-wider">
                                         {group}
                                     </div>
-                                    {items.map((n) => (
+                                    {(items as any[]).map((n) => (
                                         <div
                                             key={n.id}
                                             className={`px-4 py-3 border-b border-slate-50 hover:bg-slate-50 transition-colors cursor-pointer ${

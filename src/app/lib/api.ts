@@ -27,7 +27,7 @@ async function request<T = any>(
     "Content-Type": "application/json",
   };
 
-  const savedToken = typeof window !== 'undefined' 
+  const savedToken = typeof window !== 'undefined'
     ? (localStorage.getItem("vigo_token") || localStorage.getItem("auth_token") || localStorage.getItem("token") || sessionStorage.getItem("vigo_token"))
     : null;
   const activeToken = (token && token !== "local-dev-bypass-token") ? token : (savedToken || publicAnonKey);
@@ -121,10 +121,12 @@ export const api = {
       request("PUT", `/users/${userId}/payment-method`, { payment_method_id: null }, token),
     toggleAccess: (userId: string, isActive: boolean, token: string) =>
       request("PUT", `/users/${userId}/toggle-access`, { isActive }, token),
-    
+    // ── Bulk User Actions ── ✅ ADD THIS
+    bulkAction: (data: { userIds: string[]; action: string; value?: any }, token: string) =>
+      request("POST", "/users/bulk/action", data, token),
   },
 
-  
+
   guides: {
     list: (token?: string) => request("GET", "/guides", undefined, token),
     create: (data: any, token?: string) => request("POST", "/guides", data, token),
@@ -197,9 +199,22 @@ export const api = {
     delete: (id: string, token?: string) => request("DELETE", `/notifications/${id}`, undefined, token),
   },
 
+  // ── Reports API ──
+  reports: {
+    getSummary: (params?: string, token?: string) => request("GET", `/api/reports/summary${params ? `?${params}` : ""}`, undefined, token),
+    getEmployeeWise: (params?: string, token?: string) => request("GET", `/api/reports/employee-wise${params ? `?${params}` : ""}`, undefined, token),
+    getStatusWise: (params?: string, token?: string) => request("GET", `/api/reports/status-wise${params ? `?${params}` : ""}`, undefined, token),
+    getSalesWise: (params?: string, token?: string) => request("GET", `/api/reports/sales-wise${params ? `?${params}` : ""}`, undefined, token),
+    exportCSV: (token?: string) => request("GET", "/api/reports/export/csv", undefined, token),
+    exportPDF: (token?: string) => request("GET", "/api/reports/export/pdf", undefined, token),
+  },
 
+  auditLogs: {
+    list: (params: { page?: number; limit?: number; action?: string; entity_type?: string; user_id?: string }, token?: string) =>
+      request("GET", `/api/audit-logs?${new URLSearchParams(params as any).toString()}`, undefined, token),
+  },
 
-    // ── Payment Methods - UPDATED FOR PAYU ──
+  // ── Payment Methods - UPDATED FOR PAYU ──
   payments: {
     /**
      * Create a PayU order for one-time payment
@@ -245,7 +260,7 @@ export const api = {
       request("GET", `/payments/history/${userId}`, undefined, token),
   },
 
-    // ── Subscription API ──
+  // ── Subscription API ──
   subscription: {
     status: (token?: string) =>
       request("GET", "/subscription/status", undefined, token),

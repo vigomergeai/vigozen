@@ -820,6 +820,25 @@ useEffect(() => {
     }
   };
 
+  // ── Bulk User Action ──
+  const bulkUserAction = async (userIds: string[], action: string, value?: any) => {
+    const token = getToken();
+    if (!token) {
+      toast.error("Unauthorized");
+      throw new Error("Unauthorized");
+    }
+    
+    try {
+      const result = await api.users.bulkAction({ userIds, action, value }, token);
+      toast.success(`${action} completed for ${userIds.length} users`);
+      await loadUsers();
+      return result;
+    } catch (error: any) {
+      toast.error(`Bulk action failed: ${error.message}`);
+      throw error;
+    }
+  };
+
   // ── Lead CRUD ──────────────────────────────────────────────────────────────
   const addLead = async (data: Partial<Lead>): Promise<any | null> => {
     try {

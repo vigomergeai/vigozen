@@ -3,6 +3,7 @@ const multer = require("multer");
 const XLSX = require("xlsx");
 const fs = require("fs");
 const cors = require("cors");
+const PDFDocument = require("pdfkit");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const pool = require("./db");
@@ -78,6 +79,17 @@ require("dotenv").config();
         scheduled_at TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID,
+        user_name VARCHAR(255),
+        action VARCHAR(50) NOT NULL,
+        entity_type VARCHAR(50) NOT NULL,
+        entity_id UUID,
+        changes JSONB,
+        ip_address VARCHAR(45),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
     `);
     await pool.query(`ALTER TABLE integrations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`).catch(() => {});
     await pool.query(`ALTER TABLE integrations ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`).catch(() => {});
@@ -118,6 +130,19 @@ require("dotenv").config();
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
 });
+
+// Helper: Audit Logging
+const logAudit = async (userId, userName, action, entityType, entityId, changes = null, ipAddress = null) => {
+  try {
+    await pool.query(
+      `INSERT INTO audit_logs (id, user_id, user_name, action, entity_type, entity_id, changes, ip_address, created_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, NOW())`,
+      [userId || null, userName || 'System', action, entityType, entityId || null, changes ? JSON.stringify(changes) : null, ipAddress || null]
+    );
+  } catch (err) {
+    console.error("Audit log error:", err);
+  }
+};
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection:', reason);
 });
@@ -233,7 +258,16 @@ app.delete("/leads/:id", authenticateToken, async (req, res) => {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
       return res.status(400).json({ error: "Invalid UUID format" });
     }
-
+    // After lead delete
+    await logAudit(
+      req.user?.id || null,
+      req.user?.name || 'System',
+      'DELETE',
+      'lead',
+      req.params.id,
+      null,
+      req.ip
+    );
     await pool.query("DELETE FROM leads WHERE id = $1", [id]);
     res.json({ success: true, deleted: id });
   } catch (err) {
@@ -428,7 +462,23 @@ app.get("/activities", authenticateToken, async (req, res) => {
 // Users
 app.get("/users", authenticateToken, async (req, res) => {
   try {
-    const result = await pool.query("SELECT * FROM users WHERE is_active = true;");
+    const companyId = req.user.company_id;
+    let query = "SELECT * FROM users";
+    const params = [];
+    
+    if (companyId) {
+      query += " WHERE company_id = $1";
+      params.push(companyId);
+      if (req.user.role !== 'admin') {
+        query += " AND is_active = true";
+      }
+    } else {
+      if (req.user.role !== 'admin') {
+        query += " WHERE is_active = true";
+      }
+    }
+    query += " ORDER BY name ASC;";
+    const result = await pool.query(query, params);
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -541,6 +591,10 @@ app.put("/users/:id", authenticateToken, async (req, res) => {
     const { id } = req.params;
     const { name, email, phone, company, department, timezone, language } = req.body;
 
+    // Fetch existing user before update for audit trail
+    const existingUserRes = await pool.query("SELECT * FROM users WHERE id = $1", [id]);
+    const existingUser = existingUserRes.rows[0];
+
     const result = await pool.query(
       `UPDATE users
        SET
@@ -559,6 +613,17 @@ app.put("/users/:id", authenticateToken, async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "User not found" });
     }
+
+    // Audit log
+    await logAudit(
+      req.user?.id || null,
+      req.user?.name || 'System',
+      'UPDATE',
+      'user',
+      id,
+      { old: existingUser, new: result.rows[0] },
+      req.ip
+    );
 
     res.json(result.rows[0]);
   } catch (err) {
@@ -692,6 +757,45 @@ app.put("/users/:id/password", authenticateToken, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Bulk User Actions
+app.post("/users/bulk/action", authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== "admin") {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    const { userIds, action, payload } = req.body;
+    if (!userIds || !Array.isArray(userIds) || !action) {
+      return res.status(400).json({ error: "userIds array and action required" });
+    }
+
+    if (action === "activate") {
+      await pool.query("UPDATE users SET is_active = true WHERE id = ANY($1)", [userIds]);
+    } else if (action === "deactivate") {
+      await pool.query("UPDATE users SET is_active = false WHERE id = ANY($1)", [userIds]);
+    } else if (action === "delete") {
+      await pool.query("DELETE FROM users WHERE id = ANY($1)", [userIds]);
+    }
+
+    await logAudit(
+      req.user?.id || null,
+      req.user?.name || 'System',
+      'BULK_' + action.toUpperCase(),
+      'user',
+      null,
+      { userIds, action, payload },
+      req.ip
+    );
+
+    res.json({ success: true, count: userIds.length });
+  } catch (err) {
+    console.error("BULK USER ACTION ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
 // Settings
 app.get("/settings/:userId", async (req, res) => {
   try {
@@ -708,8 +812,6 @@ app.post("/leads", authenticateToken, async (req, res) => {
     
     // Get owner_id from request body or logged-in user
     const ownerId = req.body.owner_id || req.user?.id || null;
-    
-    // ✅ FIXED: Complete INSERT statement
     const result = await pool.query(
       `INSERT INTO leads (id, name, email, phone, company, value, status, source, industry, notes, owner_id, created_at, updated_at)
        VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
@@ -717,13 +819,25 @@ app.post("/leads", authenticateToken, async (req, res) => {
       [name, email, phone, company, value, status, source, industry, notes, ownerId]
     );
 
+    const lead = result.rows[0];
+
+    // Audit log inside route
+    await logAudit(
+      req.user?.id || null,
+      req.user?.name || 'System',
+      'CREATE',
+      'lead',
+      lead.id,
+      lead,
+      req.ip
+    );
+
     // ── Notification Trigger ──
     try {
-      const lead = result.rows[0];
       const userId = req.body.userId || lead.owner_id || req.user?.id;
       const companyId = req.user?.company_id || null;
       const leadValue = parseFloat(lead.value) || 0;
-      
+
       // Notify assigned user
       if (userId) {
         await notificationService.createNotification(
@@ -756,6 +870,7 @@ app.post("/leads", authenticateToken, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 // Leads PUT
 app.put("/leads/:id", authenticateToken, async (req, res) => {
@@ -829,6 +944,17 @@ app.put("/leads/:id", authenticateToken, async (req, res) => {
       console.error("Status change notification error:", notifErr);
     }
 
+    // Audit log inside route
+    await logAudit(
+      req.user?.id || null,
+      req.user?.name || 'System',
+      'UPDATE',
+      'lead',
+      req.params.id,
+      { old: existing, new: result.rows[0] },
+      req.ip
+    );
+
     res.json({
       ...result.rows[0],
       converted_to_deal: result.rows[0].converted_to_deal || false,
@@ -836,6 +962,59 @@ app.put("/leads/:id", authenticateToken, async (req, res) => {
     });
   } catch (err) {
     console.error("PUT LEAD ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Bulk delete leads
+app.delete("/leads", authenticateToken, async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!ids || !Array.isArray(ids)) {
+      return res.status(400).json({ error: "ids array required" });
+    }
+    const validIds = ids.filter(id =>
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
+    );
+    if (validIds.length !== ids.length) {
+      return res.status(400).json({ error: "One or more IDs are not valid UUIDs" });
+    }
+    await pool.query("DELETE FROM leads WHERE id = ANY($1)", [validIds]);
+    await logAudit(
+      req.user?.id || null,
+      req.user?.name || 'System',
+      'BULK_DELETE',
+      'lead',
+      null,
+      { ids: validIds },
+      req.ip
+    );
+    res.json({ success: true, deleted: validIds.length });
+  } catch (err) {
+    console.error("Bulk delete error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Single delete lead
+app.delete("/leads/:id", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      return res.status(400).json({ error: "Invalid UUID format" });
+    }
+    await pool.query("DELETE FROM leads WHERE id = $1", [id]);
+    await logAudit(
+      req.user?.id || null,
+      req.user?.name || 'System',
+      'DELETE',
+      'lead',
+      id,
+      null,
+      req.ip
+    );
+    res.json({ success: true, deleted: id });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -865,6 +1044,17 @@ app.post("/deals", authenticateToken, async (req, res) => {
     const companyId = req.user?.company_id || null;
     const isWon = String(deal.stage).toLowerCase() === 'won';
     
+    // Audit log
+    await logAudit(
+      req.user?.id || null,
+      req.user?.name || 'System',
+      'CREATE',
+      'deal',
+      deal.id,
+      deal,
+      req.ip
+    );
+
     // Notify company about new deal
     if (isWon) {
       await notificationService.createCompanyNotification(
@@ -991,7 +1181,10 @@ app.put("/leads/:id/comments/:commentId", authenticateToken, async (req, res) =>
     try {
         const { id, commentId } = req.params;
         const { comment } = req.body;
-        const user_id = req.user.id;
+        
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({ error: "Only admins are allowed to edit comments" });
+        }
         
         const checkResult = await pool.query(
             `SELECT user_id FROM lead_comments WHERE id = $1 AND lead_id = $2`,
@@ -1000,10 +1193,6 @@ app.put("/leads/:id/comments/:commentId", authenticateToken, async (req, res) =>
         
         if (checkResult.rows.length === 0) {
             return res.status(404).json({ error: "Comment not found" });
-        }
-        
-        if (checkResult.rows[0].user_id && checkResult.rows[0].user_id !== user_id) {
-            return res.status(403).json({ error: "You can only edit your own comments" });
         }
         
         const result = await pool.query(
@@ -1036,7 +1225,10 @@ app.put("/leads/:id/comments/:commentId", authenticateToken, async (req, res) =>
 app.delete("/leads/:id/comments/:commentId", authenticateToken, async (req, res) => {
     try {
         const { id, commentId } = req.params;
-        const user_id = req.user.id;
+        
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({ error: "Only admins are allowed to delete comments" });
+        }
         
         const checkResult = await pool.query(
             `SELECT user_id FROM lead_comments WHERE id = $1 AND lead_id = $2`,
@@ -1045,10 +1237,6 @@ app.delete("/leads/:id/comments/:commentId", authenticateToken, async (req, res)
         
         if (checkResult.rows.length === 0) {
             return res.status(404).json({ error: "Comment not found" });
-        }
-        
-        if (checkResult.rows[0].user_id && checkResult.rows[0].user_id !== user_id) {
-            return res.status(403).json({ error: "You can only delete your own comments" });
         }
         
         await pool.query(
@@ -1276,6 +1464,17 @@ app.put("/deals/:id", authenticateToken, async (req, res) => {
       }
     }
 
+    // Audit log
+    await logAudit(
+      req.user?.id || null,
+      req.user?.name || 'System',
+      'UPDATE',
+      'deal',
+      req.params.id,
+      { old: existing, new: deal },
+      req.ip
+    );
+
     console.log("Updated:", deal);
     res.json(deal);
   } catch (err) {
@@ -1294,6 +1493,18 @@ app.delete("/deals/:id", authenticateToken, async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "Deal not found" });
     }
+
+    // Audit log
+    await logAudit(
+      req.user?.id || null,
+      req.user?.name || 'System',
+      'DELETE',
+      'deal',
+      req.params.id,
+      null,
+      req.ip
+    );
+
     res.json({ success: true, deleted: result.rows[0] });
   } catch (err) {
     console.error("DELETE DEAL ERROR:", err);
@@ -1402,7 +1613,7 @@ app.post("/leads/import-excel", authenticateToken, upload.single("file"), async 
           aiscore,
           created_at
         )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, NOW())
         `,
         [
           row.name || "",
@@ -2097,6 +2308,344 @@ app.put("/users/:id/payment-method", authenticateToken, async (req, res) => {
 // NOTIFICATION ROUTES
 // ──────────────────────────────────────────────────────────────
 
+// GET /api/audit-logs (Admin only)
+app.get("/api/audit-logs", authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+    
+    const { limit = 50, offset = 0, action, entity_type, user_id } = req.query;
+    const companyId = req.user.company_id;
+    
+    let query = `
+      SELECT * FROM audit_logs 
+    `;
+    const params = [];
+    let paramIndex = 1;
+    
+    if (companyId) {
+      query += ` WHERE user_id IN (SELECT id FROM users WHERE company_id = $${paramIndex})`;
+      params.push(companyId);
+      paramIndex++;
+    } else {
+      query += ` WHERE user_id IS NULL OR user_id IN (SELECT id FROM users WHERE company_id IS NULL)`;
+    }
+    
+    if (action) {
+      query += ` AND action = $${paramIndex}`;
+      params.push(action);
+      paramIndex++;
+    }
+    
+    if (entity_type) {
+      query += ` AND entity_type = $${paramIndex}`;
+      params.push(entity_type);
+      paramIndex++;
+    }
+    
+    if (user_id) {
+      query += ` AND user_id = $${paramIndex}`;
+      params.push(user_id);
+      paramIndex++;
+    }
+    
+    query += ` ORDER BY created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+    params.push(parseInt(limit), parseInt(offset));
+    
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (error) {
+    console.error("Error fetching audit logs:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /users/bulk/action (Admin only)
+app.post("/users/bulk/action", authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+    
+    const { userIds, action, value } = req.body;
+    
+    if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
+      return res.status(400).json({ error: "User IDs required" });
+    }
+    
+    const companyId = req.user.company_id;
+    
+    // Verify all users belong to same company
+    let verify;
+    if (companyId) {
+      verify = await pool.query(
+        "SELECT id FROM users WHERE id = ANY($1) AND company_id = $2",
+        [userIds, companyId]
+      );
+    } else {
+      verify = await pool.query(
+        "SELECT id FROM users WHERE id = ANY($1) AND company_id IS NULL",
+        [userIds]
+      );
+    }
+    
+    if (verify.rows.length !== userIds.length) {
+      return res.status(403).json({ error: "Some users don't belong to your company" });
+    }
+    
+    let result;
+    
+    switch (action) {
+      case 'activate':
+        result = await pool.query(
+          "UPDATE users SET is_active = true, updated_at = NOW() WHERE id = ANY($1) RETURNING id, name",
+          [userIds]
+        );
+        break;
+        
+      case 'deactivate':
+        result = await pool.query(
+          "UPDATE users SET is_active = false, updated_at = NOW() WHERE id = ANY($1) RETURNING id, name",
+          [userIds]
+        );
+        break;
+        
+      case 'delete':
+        result = await pool.query(
+          "UPDATE users SET is_active = false, updated_at = NOW() WHERE id = ANY($1) RETURNING id, name",
+          [userIds]
+        );
+        break;
+        
+      case 'assign_department':
+        if (!value) {
+          return res.status(400).json({ error: "Department value required" });
+        }
+        result = await pool.query(
+          "UPDATE users SET department = $1, updated_at = NOW() WHERE id = ANY($2) RETURNING id, name",
+          [value, userIds]
+        );
+        break;
+        
+      case 'assign_role':
+        if (!value || !['admin', 'user', 'sales'].includes(value)) {
+          return res.status(400).json({ error: "Invalid role" });
+        }
+        result = await pool.query(
+          "UPDATE users SET role = $1, updated_at = NOW() WHERE id = ANY($2) RETURNING id, name",
+          [value, userIds]
+        );
+        break;
+        
+      default:
+        return res.status(400).json({ error: "Invalid action" });
+    }
+    
+    // Log audit
+    await logAudit(
+      req.user.id,
+      req.user.name,
+      'BULK_' + action.toUpperCase(),
+      'user',
+      null,
+      { userIds, action, value, affected: result.rows.length },
+      req.ip
+    );
+    
+    res.json({
+      success: true,
+      action,
+      affected: result.rows.length,
+      users: result.rows
+    });
+  } catch (error) {
+    console.error("Error performing bulk action:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── Reports API ──
+app.get("/api/reports/summary", authenticateToken, async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    let dateFilter = '';
+    const params = [];
+    
+    if (startDate && endDate) {
+      dateFilter = ` AND created_at::date BETWEEN $1 AND $2`;
+      params.push(startDate, endDate);
+    }
+    
+    const query = `
+      SELECT 
+        (SELECT COUNT(*) FROM leads WHERE 1=1 ${dateFilter}) as total_leads,
+        (SELECT COUNT(*) FROM deals WHERE 1=1 ${dateFilter}) as total_deals,
+        (SELECT COUNT(*) FROM deals WHERE LOWER(stage::text) = 'won' ${dateFilter}) as won_deals,
+        (SELECT COUNT(*) FROM deals WHERE stage::text IN ('New','Contacted','Qualified','Proposal','Negotiation') ${dateFilter}) as active_deals,
+        (SELECT COALESCE(SUM(value), 0) FROM deals WHERE LOWER(stage::text) = 'won' ${dateFilter}) as total_revenue,
+        CASE 
+          WHEN (SELECT COUNT(*) FROM deals WHERE 1=1 ${dateFilter}) > 0 
+          THEN ROUND(((SELECT COUNT(*) FROM deals WHERE LOWER(stage::text) = 'won' ${dateFilter})::numeric / 
+                     (SELECT COUNT(*) FROM deals WHERE 1=1 ${dateFilter})::numeric * 100), 1)
+          ELSE 0 
+        END as win_rate
+    `;
+    const result = await pool.query(query, params);
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("Reports Summary Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/reports/employee-wise", authenticateToken, async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    let dateFilter = '';
+    const params = [];
+    
+    if (startDate && endDate) {
+      dateFilter = ` WHERE l.created_at::date BETWEEN $1 AND $2`;
+      params.push(startDate, endDate);
+    }
+    
+    const query = `
+      SELECT 
+        COALESCE(u.name, 'Unassigned') as name,
+        COUNT(DISTINCT l.id) as total_leads,
+        COUNT(DISTINCT l.id) FILTER (WHERE LOWER(l.status::text) = 'new') as new,
+        COUNT(DISTINCT l.id) FILTER (WHERE LOWER(l.status::text) = 'contacted') as contacted,
+        COUNT(DISTINCT l.id) FILTER (WHERE LOWER(l.status::text) = 'qualified') as qualified,
+        COUNT(DISTINCT l.id) FILTER (WHERE LOWER(l.status::text) = 'proposal') as proposal,
+        COUNT(DISTINCT l.id) FILTER (WHERE LOWER(l.status::text) = 'negotiation') as negotiation,
+        COUNT(DISTINCT l.id) FILTER (WHERE LOWER(l.status::text) = 'won') as won,
+        COUNT(DISTINCT l.id) FILTER (WHERE LOWER(l.status::text) = 'lost') as lost,
+        COALESCE(SUM(l.value) FILTER (WHERE LOWER(l.status::text) = 'won'), 0) as total_value
+      FROM leads l
+      LEFT JOIN users u ON l.owner_id = u.id
+      ${dateFilter}
+      GROUP BY COALESCE(u.name, 'Unassigned')
+      ORDER BY won DESC
+    `;
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Employee-wise report error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/reports/status-wise", authenticateToken, async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    let dateFilter = '';
+    const params = [];
+    
+    if (startDate && endDate) {
+      dateFilter = ` WHERE created_at::date BETWEEN $1 AND $2`;
+      params.push(startDate, endDate);
+    }
+    
+    const query = `
+      SELECT stage as status, COUNT(*) as count, COALESCE(SUM(value), 0) as total_value
+      FROM deals
+      ${dateFilter}
+      GROUP BY stage
+      ORDER BY count DESC
+    `;
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Reports Status Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/reports/sales-wise", authenticateToken, async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    let dateFilter = '';
+    const params = [];
+    
+    if (startDate && endDate) {
+      dateFilter = ` AND created_at::date BETWEEN $1 AND $2`;
+      params.push(startDate, endDate);
+    }
+    
+    const query = `
+      SELECT TO_CHAR(created_at, 'YYYY-"W"IW') as week,
+             COUNT(*) as deals_count,
+             COALESCE(SUM(value), 0) as total_value,
+             COALESCE(AVG(value), 0) as avg_value
+      FROM deals
+      WHERE LOWER(stage::text) = 'won' ${dateFilter}
+      GROUP BY TO_CHAR(created_at, 'YYYY-"W"IW')
+      ORDER BY week ASC
+    `;
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Reports Sales Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── CSV Export Endpoint ──
+app.get("/api/reports/export/csv", authenticateToken, async (req, res) => {
+  try {
+    const leadsResult = await pool.query("SELECT name, company, email, phone, status, value, created_at FROM leads ORDER BY created_at DESC");
+    const dealsResult = await pool.query("SELECT title, company, stage, value, owner, created_at FROM deals ORDER BY created_at DESC");
+    
+    const csvRows = [];
+    csvRows.push("Section,Title/Name,Company,Status/Stage,Value (₹),Owner/Contact,Created Date");
+    
+    leadsResult.rows.forEach(l => {
+      csvRows.push(`Lead,"${(l.name||'').replace(/"/g, '""')}","${(l.company||'').replace(/"/g, '""')}","${l.status||''}",${l.value||0},"${(l.email||'').replace(/"/g, '""')}",${l.created_at ? new Date(l.created_at).toISOString().split('T')[0] : ''}`);
+    });
+
+    dealsResult.rows.forEach(d => {
+      csvRows.push(`Deal,"${(d.title||'').replace(/"/g, '""')}","${(d.company||'').replace(/"/g, '""')}","${d.stage||''}",${d.value||0},"${(d.owner||'').replace(/"/g, '""')}",${d.created_at ? new Date(d.created_at).toISOString().split('T')[0] : ''}`);
+    });
+    
+    const csv = csvRows.join("\n");
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", `attachment; filename=crm_report_${new Date().toISOString().split("T")[0]}.csv`);
+    res.send(csv);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── PDF Export Endpoint ──
+app.get("/api/reports/export/pdf", authenticateToken, async (req, res) => {
+  try {
+    const leadsRes = await pool.query("SELECT COUNT(*) as total FROM leads");
+    const dealsRes = await pool.query("SELECT COUNT(*) as total, COALESCE(SUM(value) FILTER (WHERE LOWER(stage) = 'won'), 0) as revenue FROM deals");
+
+    const doc = new PDFDocument({ margin: 50 });
+    const filename = `report_${new Date().toISOString().split("T")[0]}.pdf`;
+    
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename=${filename}`);
+    doc.pipe(res);
+    
+    doc.fontSize(24).fillColor('#4F46E5').text("VigoZen CRM Report", { align: "center" });
+    doc.fontSize(10).fillColor('#64748B').text(`Generated on: ${new Date().toLocaleString()}`, { align: "center" });
+    doc.moveDown(2);
+    
+    doc.fontSize(16).fillColor('#1E293B').text("Executive Summary");
+    doc.moveDown(0.5);
+    doc.fontSize(12).fillColor('#334155').text(`Total Leads: ${leadsRes.rows[0].total || 0}`);
+    doc.fontSize(12).fillColor('#334155').text(`Total Deals: ${dealsRes.rows[0].total || 0}`);
+    doc.fontSize(12).fillColor('#334155').text(`Total Won Revenue: ₹${parseFloat(dealsRes.rows[0].revenue || 0).toLocaleString('en-IN')}`);
+    
+    doc.end();
+  } catch (error) {
+    console.error("PDF Export Error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 app.listen(5000, "0.0.0.0", () => {
   console.log("Server running on port 5000");

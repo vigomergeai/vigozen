@@ -78,7 +78,7 @@ export default function NotificationDropdown({ onClose }: NotificationDropdownPr
     };
 
     // Group notifications by time
-    const groupedNotifications = notificationItems.reduce((acc, n) => {
+    const groupedNotifications = notificationItems.reduce<Record<string, typeof notificationItems>>((acc, n) => {
         const group = getTimeGroup(n.created_at);
         if (!acc[group]) acc[group] = [];
         acc[group].push(n);

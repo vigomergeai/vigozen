@@ -1007,11 +1007,9 @@ export default function SettingsPage() {
                               const token = localStorage.getItem('token') || session?.access_token;
                               if (!token) throw new Error("Not logged in");
 
-                              const subscriptionId = (userProfile as any)?.subscription_id;
-                              
                               // Cancel in Razorpay first
-                              if (subscriptionId) {
-                                await api.payments.cancelSubscription(subscriptionId, token);
+                              if (userProfile?.razorpay_subscription_id) {
+                                await api.payments.cancelSubscription(userProfile.razorpay_subscription_id, token);
                               }
                               
                               // Then update database

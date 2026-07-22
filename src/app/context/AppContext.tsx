@@ -20,6 +20,7 @@ interface Session {
   };
 }
 export interface UserProfile {
+  [x: string]: any;
   id: string;
   email: string;
   name: string;

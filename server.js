@@ -2161,7 +2161,26 @@ app.put("/ad-connections/update-count", authenticateToken, async (req, res) => {
 
 //const speakeasy = require("speakeasy");
 const speakeasy = require("speakeasy");
+app.post("/auth/2fa/setup", authenticateToken, async (req, res) => {
+  try {
+    const secret = speakeasy.generateSecret({
+      name: `VigoMerge (${req.user.email})`,
+    });
 
+    await pool.query(
+      "UPDATE users SET two_fa_secret = $1 WHERE id = $2",
+      [secret.base32, req.user.id]
+    );
+
+    res.json({
+      secret: secret.base32,
+      otpauth_url: secret.otpauth_url,
+    });
+  } catch (err) {
+    console.error("2FA SETUP ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 // ── 2FA Setup ──────────────────────────────────────────────
 app.post("/auth/2fa/verify", authenticateToken, async (req, res) => {
   try {

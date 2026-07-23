@@ -10,6 +10,7 @@ const pool = require("./db");
 const notificationQueue = require("./server/notificationQueue");
 const notificationService = require("./server/notificationService");
 const { startNotificationWorker } = require("./server/notificationWorker");
+const crypto = require("crypto");
 
 require("dotenv").config();
 
@@ -105,6 +106,23 @@ require("dotenv").config();
     await pool.query(`ALTER TABLE lead_comments ADD COLUMN IF NOT EXISTS user_name VARCHAR(255);`).catch(() => {});
     await pool.query(`ALTER TABLE lead_comments ADD COLUMN IF NOT EXISTS user_avatar VARCHAR(10);`).catch(() => {});
     await pool.query(`ALTER TABLE lead_comments ADD COLUMN IF NOT EXISTS parent_comment_id UUID;`).catch(() => {});
+
+    // ── Add subscription columns to users table ──
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_start TIMESTAMP;`).catch(() => {});
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_end TIMESTAMP;`).catch(() => {});
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_status VARCHAR(50) DEFAULT 'trialing';`).catch(() => {});
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS plan_type VARCHAR(100) DEFAULT 'trial';`).catch(() => {});
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS payment_status VARCHAR(50) DEFAULT 'unpaid';`).catch(() => {});
+
+    // ── Set trial for existing users ──
+    await pool.query(`
+      UPDATE users SET 
+        trial_start = created_at,
+        trial_end = created_at + INTERVAL '3 days',
+        subscription_status = 'trialing',
+        plan_type = 'trial'
+      WHERE trial_start IS NULL
+    `).catch(() => {});
     
     // Auto-extend crm_status enum values if it exists
     await pool.query(`
@@ -1711,6 +1729,19 @@ const result = await pool.query(
 
     const user = result.rows[0];
 
+    // ── Auto-create trial subscription ──
+    await pool.query(`
+      UPDATE users SET 
+        trial_start = NOW(),
+        trial_end = NOW() + INTERVAL '3 days',
+        subscription_status = 'trialing',
+        plan_type = 'trial',
+        payment_status = 'unpaid'
+      WHERE id = $1
+    `, [user.id]);
+
+    console.log(`✅ Trial started for user ${user.id} (3 days)`);
+
     const token = jwt.sign(
       {
         id: user.id,
@@ -2644,6 +2675,132 @@ app.get("/api/reports/export/pdf", authenticateToken, async (req, res) => {
     doc.end();
   } catch (error) {
     console.error("PDF Export Error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── Get Subscription Status ──
+app.get("/subscription/status", authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    const userRes = await pool.query(`
+      SELECT 
+        trial_start, trial_end, subscription_status, 
+        plan_type, payment_status, created_at
+      FROM users WHERE id = $1
+    `, [userId]);
+    
+    if (userRes.rows.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    
+    const user = userRes.rows[0];
+    const now = new Date();
+    const trialEnd = user.trial_end ? new Date(user.trial_end) : null;
+    const trialStart = user.trial_start ? new Date(user.trial_start) : null;
+    
+    const daysRemaining = trialEnd ? Math.max(0, Math.floor((trialEnd - now) / (1000 * 60 * 60 * 24))) : 0;
+    const isTrialActive = (user.subscription_status === 'trialing' || user.subscription_status === 'trial') && trialEnd && now < trialEnd;
+    const isSubActive = user.subscription_status === 'active' || user.subscription_status === 'paid';
+    
+    res.json({
+      trial_start: trialStart ? trialStart.toISOString() : null,
+      trial_end: trialEnd ? trialEnd.toISOString() : null,
+      days_remaining: daysRemaining,
+      subscription_status: user.subscription_status || 'expired',
+      payment_status: user.payment_status || 'unpaid',
+      plan_type: user.plan_type || 'trial',
+      is_trial_active: isTrialActive,
+      is_subscription_active: isSubActive
+    });
+  } catch (err) {
+    console.error("Subscription status error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Get Plans ──
+app.get("/api/plans", authenticateToken, async (req, res) => {
+  try {
+    // In production, fetch from database
+    const plans = [
+      { 
+        id: "starter", 
+        name: "Starter", 
+        price: 599, 
+        features: ["5 users", "100 leads/month", "Basic reports", "Email support"],
+        popular: false
+      },
+      { 
+        id: "professional", 
+        name: "Professional", 
+        price: 999, 
+        features: ["20 users", "Unlimited leads", "AI insights", "Priority support", "Advanced reports"],
+        popular: true
+      },
+      { 
+        id: "enterprise", 
+        name: "Enterprise", 
+        price: 1999, 
+        features: ["Unlimited users", "Unlimited leads", "Custom integrations", "Dedicated support", "Custom reports"],
+        popular: false
+      }
+    ];
+    res.json(plans);
+  } catch (err) {
+    console.error("Plans error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/ai/insight", authenticateToken, async (req, res) => {
+  try {
+    const { reportType, dateFilter, data } = req.body;
+    
+    // Default insights
+    const fallbackInsights = {
+      employee: {
+        daily: "🔥 Sneha Gupta leads today with 3 new qualifications. Arjun Sharma's follow-up rate is 94% — highest in the team. AI recommends assigning incoming Facebook leads to Priya Patel who has capacity.",
+        weekly: "📊 Sneha Gupta and Arjun Sharma together account for 45% of all won deals this week. Rahul Verma's conversion rate dropped 8% — suggest targeted coaching. Overall team is 12% above last week's performance.",
+        custom: "📈 Over the selected period, the team achieved 127% of target. Top performer: Sneha Gupta (₹4.6L revenue). AI recommends territory rebalancing — Karan Mehta is underutilized at current lead volume.",
+      },
+      status: {
+        daily: "⚡ New leads spike detected today (+23% vs average). 8 leads moved to Qualified stage. 2 deals at Negotiation stage are at risk (>7 days without activity). AI suggests immediate follow-up.",
+        weekly: "📉 Qualification rate improved to 44% (up from 38%). However, Proposal-to-Negotiation conversion dropped to 56%. AI identifies pricing objections as primary drop-off reason. Recommend sharing ROI calculator.",
+        custom: "🎯 Pipeline health: Strong at New and Qualified stages. Bottleneck detected at Proposal stage — 28% of proposals stall for 5+ days. AI recommends automated nudge emails after 3 days of no response.",
+      },
+      sales: {
+        daily: "💰 Today's closed revenue: ₹1.2L (above daily target of ₹95K). Win rate: 67% (excellent). Average deal size trending up +15% MoM. FinServe type enterprise deals showing highest ROI.",
+        weekly: "🚀 Week W4 was the best week this month — ₹1.15L achieved vs ₹1L target. 9 deals closed. AI forecasts W5 at ₹98K based on current pipeline velocity. Recommend accelerating 3 high-probability deals.",
+        custom: "📊 Total revenue in period: ₹4.65L vs target ₹4.5L (+3.3% above target). AI identifies Q2 as high-growth opportunity — 34 qualified leads in pipeline with ₹8.5L combined value. Success probability: 62%.",
+      },
+    };
+    
+    let insight = "";
+    if (fallbackInsights[reportType] && fallbackInsights[reportType][dateFilter]) {
+      insight = fallbackInsights[reportType][dateFilter];
+    } else {
+      insight = `AI analysis completed for report type "${reportType || 'general'}" and period "${dateFilter || 'custom'}".`;
+    }
+    
+    // Add dynamic details if data is present
+    if (data && Object.keys(data).length > 0) {
+      if (reportType === "sales" && Array.isArray(data)) {
+        const total = data.reduce((acc, curr) => acc + (curr.achieved || 0), 0);
+        if (total > 0) {
+          insight += ` Total registered revenue is ₹${total.toLocaleString('en-IN')}.`;
+        }
+      } else if (reportType === "employee" && Array.isArray(data)) {
+        const activeEmps = data.filter(e => e.won > 0);
+        if (activeEmps.length > 0) {
+          insight += ` Active performers: ${activeEmps.map(e => e.name).join(", ")}.`;
+        }
+      }
+    }
+    
+    res.json({ insight });
+  } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });

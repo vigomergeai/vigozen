@@ -1785,7 +1785,34 @@ app.post("/auth/login", async (req, res) => {
         expiresIn: "7d"
       }
     );
+// Mark previous sessions as inactive
+await pool.query(
+  `UPDATE user_sessions
+   SET is_current = false
+   WHERE user_id = $1`,
+  [user.id]
+);
 
+// Insert new session
+await pool.query(
+  `INSERT INTO user_sessions
+   (id, user_id, device, location, last_active, is_current, created_at, updated_at)
+   VALUES (
+      gen_random_uuid(),
+      $1,
+      $2,
+      $3,
+      NOW(),
+      true,
+      NOW(),
+      NOW()
+   )`,
+  [
+    user.id,
+    req.headers["user-agent"] || "Unknown Device",
+    req.ip || "Unknown Location"
+  ]
+);
     res.json({
       token,
       user: {
@@ -2136,29 +2163,10 @@ app.put("/ad-connections/update-count", authenticateToken, async (req, res) => {
 const speakeasy = require("speakeasy");
 
 // ── 2FA Setup ──────────────────────────────────────────────
-app.post("/auth/2fa/setup", authenticateToken, async (req, res) => {
-  try {
-    const secret = speakeasy.generateSecret({
-      name: `VigozenCRM (${req.user.email})`,
-      issuer: "VigozenCRM",
-    });
-
-    await pool.query(
-      "UPDATE users SET two_fa_secret = $1 WHERE id = $2",
-      [secret.base32, req.user.id]
-    );
-
-    res.json({ otpauth_url: secret.otpauth_url, secret: secret.base32 });
-  } catch (err) {
-    console.error("2FA SETUP ERROR:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── 2FA Enable (verify code) ──────────────────────────────
 app.post("/auth/2fa/verify", authenticateToken, async (req, res) => {
   try {
-    const { token } = req.body;
+    const rawToken = req.body.token;
+    const token = typeof rawToken === "string" ? rawToken.trim() : String(rawToken || "").trim();
 
     const result = await pool.query(
       "SELECT two_fa_secret FROM users WHERE id = $1",
@@ -2169,12 +2177,20 @@ app.post("/auth/2fa/verify", authenticateToken, async (req, res) => {
       return res.status(400).json({ error: "2FA setup not started" });
     }
 
+    const secret = result.rows[0].two_fa_secret.trim();
+
+    console.log("DEBUG userId:", req.user.id);
+    console.log("DEBUG secret from DB: [" + secret + "]");
+    console.log("DEBUG token received: [" + token + "]");
+
     const verified = speakeasy.totp.verify({
-      secret: result.rows[0].two_fa_secret,
+      secret: secret,
       encoding: "base32",
-      token,
-      window: 1,
+      token: token,
+      window: 2,
     });
+
+    console.log("DEBUG verified result:", verified);
 
     if (!verified) {
       return res.status(400).json({ error: "Invalid code" });
@@ -2191,6 +2207,7 @@ app.post("/auth/2fa/verify", authenticateToken, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 // ── Change Password (logged-in user, needs current password) ──
 app.put("/users/:id/change-password", authenticateToken, async (req, res) => {

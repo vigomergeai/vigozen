@@ -10,7 +10,7 @@ import { priceList as mockPriceList, PriceItem } from "../data/mockData";
 import { useApp } from "../context/AppContext";
 import { toast } from "sonner";
 import QRCode from "qrcode";
-import { api } from "../lib/api";
+import { api, getApiBaseUrl } from "../lib/api";
 
 type SettingsTab = "profile" | "integrations" | "pricing" | "notifications" | "security" | "system";
 
@@ -93,6 +93,7 @@ export default function SettingsPage() {
     }
   };
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [verifying2FA, setVerifying2FA] = useState(false);
   const [qrCode, setQrCode] = useState("");
   const [secretKey, setSecretKey] = useState("");
 
@@ -186,13 +187,13 @@ export default function SettingsPage() {
 
       // Create PayU order
       const response = await api.payments.createOrder(bundlePrice, "INR", `bundle_${userCount}`, token);
-      
+
       if (response && (response.success || response.order_id)) {
         toast.success(`Order ${response.order_id || response.txnid} created!`);
         const form = document.createElement('form');
         form.method = 'POST';
         form.action = response.payuUrl || response.action || "https://test.payu.in/_payment";
-        
+
         const payuData: Record<string, any> = response.payuData || {
           key: response.key || "PAYU_TEST_KEY",
           txnid: response.txnid || response.order_id,
@@ -204,7 +205,7 @@ export default function SettingsPage() {
           surl: `${window.location.origin}/settings?payment=success`,
           furl: `${window.location.origin}/settings?payment=failed`,
         };
-        
+
         Object.keys(payuData).forEach(key => {
           const input = document.createElement('input');
           input.type = 'hidden';
@@ -212,7 +213,7 @@ export default function SettingsPage() {
           input.value = String(payuData[key]);
           form.appendChild(input);
         });
-        
+
         document.body.appendChild(form);
         form.submit();
       }
@@ -223,7 +224,7 @@ export default function SettingsPage() {
   };
 
   // ── ADD THIS HANDLER ──
-  
+
   const handleAddPaymentMethod = async () => {
     try {
       const token = localStorage.getItem('token') || session?.access_token;
@@ -231,13 +232,13 @@ export default function SettingsPage() {
 
       // Create order for saving card (minimal amount ₹1)
       const response = await api.payments.createOrder(1, "INR", "save_card", token);
-      
+
       if (response.success) {
         // Create form and submit to PayU
         const form = document.createElement('form');
         form.method = 'POST';
         form.action = response.payuUrl;
-        
+
         const payuData = response.payuData;
         Object.keys(payuData).forEach(key => {
           const input = document.createElement('input');
@@ -246,14 +247,14 @@ export default function SettingsPage() {
           input.value = payuData[key];
           form.appendChild(input);
         });
-        
+
         // Add flag for saving card
         const saveCardInput = document.createElement('input');
         saveCardInput.type = 'hidden';
         saveCardInput.name = 'udf2';
         saveCardInput.value = 'save_card';
         form.appendChild(saveCardInput);
-        
+
         document.body.appendChild(form);
         form.submit();
       }
@@ -280,9 +281,9 @@ export default function SettingsPage() {
   }, [currentUser]);
   useEffect(() => {
     setPasswords({ current: "", newPass: "", confirm: "" });
-    setTwoFACode("");
+    //setTwoFACode("");
     setSaving(false);
-  }, [currentUser]);
+}, [currentUser]);
 
   // Load settings from userSettings
   useEffect(() => {
@@ -314,14 +315,7 @@ export default function SettingsPage() {
       setTwoFAEnabled(true);
     }
   }, [userProfile]);
-  useEffect(() => {
-    // Reset password form
-    setPasswords({ current: "", newPass: "", confirm: "" });
-    // Reset 2FA code
-    setTwoFACode("");
-    // Reset saving state
-    setSaving(false);
-  }, [currentUser]);
+ 
   useEffect(() => {
     if (session?.user?.id) {
       fetchActiveSessions();
@@ -336,14 +330,14 @@ export default function SettingsPage() {
     const status = urlParams.get('status');
     const hash = urlParams.get('hash');
     const mihpayid = urlParams.get('mihpayid');
-    
+
     if (txnid && status) {
       // Verify payment
       const verifyPayment = async () => {
         try {
           const token = localStorage.getItem('token');
           if (!token) return;
-          
+
           const result = await api.payments.verify({
             txnid,
             amount: parseFloat(urlParams.get('amount') || '0'),
@@ -355,7 +349,7 @@ export default function SettingsPage() {
             mihpayid: mihpayid || '',
             plan: urlParams.get('plan') || undefined,
           }, token);
-          
+
           if (result.success) {
             toast.success('Payment successful!');
             // Remove query params and reload
@@ -369,7 +363,7 @@ export default function SettingsPage() {
           toast.error('Payment verification failed');
         }
       };
-      
+
       verifyPayment();
     }
   }, []);
@@ -502,41 +496,40 @@ export default function SettingsPage() {
 
     try {
       const compressedFile = await compressImage(file);
-      
+
       // ── ACTUAL UPLOAD ──
       const token = localStorage.getItem('token') || session?.access_token;
       const userId = userProfile?.id || session?.user?.id;
-      
+
       if (!userId || !token) throw new Error("Not logged in");
-      
+
       const formData = new FormData();
       formData.append('avatar', compressedFile);
-      
-      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/users/${userId}/avatar`, {
+      const response = await fetch(`${getApiBaseUrl()}/users/${userId}/avatar`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
         },
         body: formData,
       });
-      
+
       if (!response.ok) throw new Error('Upload failed');
-      
+
       const data = await response.json();
       toast.success('Avatar updated successfully');
-      
+
       // Update local state
       if (userProfile) {
         userProfile.avatar_url = data.avatar_url;
       }
-      
+
       // Update localStorage
       const storedUser = JSON.parse(localStorage.getItem('user') || '{}');
       localStorage.setItem('user', JSON.stringify({
         ...storedUser,
         avatar_url: data.avatar_url
       }));
-      
+
       setTimeout(() => window.location.reload(), 500);
     } catch (error) {
       console.error(error);
@@ -570,10 +563,7 @@ export default function SettingsPage() {
     }
   };
   const handleOpen2FAModal = async () => {
-    if (qrCode && secretKey) {
-      setShow2FAModal(true);
-      return;
-    }
+
     // Get fresh token from Supabase
     const accessToken = session?.access_token;
 
@@ -594,15 +584,15 @@ export default function SettingsPage() {
     }
   };
 
+
   const handleEnable2FA = async () => {
     if (twoFACode.length !== 6) {
       toast.error("Enter 6-digit code");
       return;
     }
 
-    console.log("Verifying code:", twoFACode); // ADD THIS LINE
+    if (verifying2FA) return;
 
-    // Get fresh token from Supabase
     const accessToken = session?.access_token;
 
     if (!accessToken) {
@@ -610,6 +600,7 @@ export default function SettingsPage() {
       return;
     }
 
+    setVerifying2FA(true);
     try {
       await api.auth.verify2FA(twoFACode, accessToken);
       setTwoFAEnabled(true);
@@ -620,7 +611,9 @@ export default function SettingsPage() {
       setSecretKey("");
     } catch (error: any) {
       console.error("2FA Error:", error);
-      toast.error("Invalid OTP. Try again.");
+      toast.error(error?.message || "Invalid OTP. Try again.");
+    } finally {
+      setVerifying2FA(false);
     }
   };
   // Revoke a session
@@ -1112,17 +1105,17 @@ export default function SettingsPage() {
                               if (subscriptionId) {
                                 await api.payments.cancelSubscription(subscriptionId, token);
                               }
-                              
+
                               // Then update database
                               await api.users.updateSubscription(session.user.id, "cancelled", token);
-                              
+
                               toast.success("Subscription cancelled successfully");
-                              
+
                               // Update local state
                               if (userProfile) {
                                 userProfile.subscription_status = 'cancelled';
                               }
-                              
+
                               setTimeout(() => window.location.reload(), 500);
                             } catch (err: any) {
                               toast.error(err.message || "Failed to cancel subscription");
@@ -1163,10 +1156,10 @@ export default function SettingsPage() {
                           }
                         }}
                         className={`relative bg-white dark:bg-slate-800 rounded-2xl border-2 p-5 cursor-pointer transition-all hover:shadow-md ${isCurrentPlan
-                            ? "border-indigo-500 shadow-md shadow-indigo-100"
-                            : plan.isPopular
-                              ? "border-purple-300"
-                              : "border-slate-200"
+                          ? "border-indigo-500 shadow-md shadow-indigo-100"
+                          : plan.isPopular
+                            ? "border-purple-300"
+                            : "border-slate-200"
                           }`}
                       >
                         {plan.isPopular && (
@@ -1200,8 +1193,8 @@ export default function SettingsPage() {
                         </div>
 
                         <button className={`w-full py-2.5 text-xs rounded-xl font-medium transition-colors ${isCurrentPlan
-                            ? "bg-indigo-600 text-white cursor-default"
-                            : "border border-slate-200 text-slate-600 hover:border-indigo-300 hover:text-indigo-600"
+                          ? "bg-indigo-600 text-white cursor-default"
+                          : "border border-slate-200 text-slate-600 hover:border-indigo-300 hover:text-indigo-600"
                           }`}>
                           {isCurrentPlan ? "✓ Current Plan" : `Switch to ${plan.name}`}
                         </button>
@@ -1253,21 +1246,21 @@ export default function SettingsPage() {
                     <button onClick={handleAddPaymentMethod} className="text-xs text-indigo-600 hover:text-indigo-700">
                       Update
                     </button>
-                     <button onClick={async () => {
+                    <button onClick={async () => {
                       if (confirm("Remove payment method?")) {
                         try {
                           const token = localStorage.getItem('token') || session?.access_token;
                           if (!session?.user?.id || !token) throw new Error("Not logged in");
-                          
+
                           await api.users.removePaymentMethod(session.user.id, token);
                           toast.success("Payment method removed successfully");
-                          
+
                           // Update local state
                           if (userProfile) {
                             userProfile.payment_last4 = undefined;
                             userProfile.payment_brand = undefined;
                           }
-                          
+
                           setTimeout(() => window.location.reload(), 500);
                         } catch (err: any) {
                           toast.error(err.message || "Failed to remove payment method");
@@ -1280,8 +1273,8 @@ export default function SettingsPage() {
                 </div>
 
                 {userProfile?.payment_last4 ? (
-                <div className="flex items-center space-x-3">
-                  <div className="w-10 h-7 bg-gradient-to-r from-indigo-600 to-purple-600 rounded"></div>
+                  <div className="flex items-center space-x-3">
+                    <div className="w-10 h-7 bg-gradient-to-r from-indigo-600 to-purple-600 rounded"></div>
                     <div>
                       <p className="text-sm font-medium text-slate-800">•••• {userProfile.payment_last4}</p>
                       <p className="text-xs text-slate-500">{userProfile.payment_brand || "Card"} · Expires {userProfile.payment_expiry || "12/26"}</p>
@@ -1289,7 +1282,7 @@ export default function SettingsPage() {
                     <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full ml-auto">Default</span>
                   </div>
                 ) : (
-                  <button 
+                  <button
                     onClick={handleAddPaymentMethod}
                     className="w-full py-3 text-center border-2 border-dashed border-slate-300 rounded-xl text-sm text-slate-500 hover:border-indigo-300 hover:text-indigo-600 transition-colors"
                   >
@@ -1305,7 +1298,7 @@ export default function SettingsPage() {
                   <button onClick={async () => {
                   }} className="text-xs text-indigo-600 hover:text-indigo-700">Refresh</button>
                 </div>
-            
+
                 {/* Bundle Plan Card - Updated with Dynamic Slider */}
                 <div className="bg-white rounded-2xl border-2 border-indigo-200 shadow-md overflow-hidden">
                   <div className="bg-gradient-to-r from-indigo-50 to-purple-50 px-5 py-3 border-b border-indigo-100">
@@ -1318,7 +1311,7 @@ export default function SettingsPage() {
                         <div className="text-sm font-semibold text-slate-800">CRM</div>
                         <div className="text-xs text-slate-500 mt-0.5">Standard Plan ₹1,300 /user /month</div>
                       </div>
-                      
+
                       {/* Middle - Pay Period */}
                       <div>
                         <div className="text-xs text-slate-400 mb-1">Pay Period</div>
@@ -1327,19 +1320,19 @@ export default function SettingsPage() {
                           <button className="px-4 py-1.5 text-xs border border-slate-200 rounded-lg hover:bg-slate-50">Yearly</button>
                         </div>
                       </div>
-                      
+
                       {/* Middle - Users counter - DYNAMIC */}
                       <div>
                         <div className="text-xs text-slate-400 mb-1">Users</div>
                         <div className="flex items-center gap-2">
-                          <button 
+                          <button
                             onClick={() => handleUserCountChange(Math.max(1, userCount - 1))}
                             className="w-7 h-7 rounded-full border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50 transition-colors"
                           >
                             <Minus size={14} />
                           </button>
                           <span className="w-8 text-center text-sm font-medium text-slate-800">{userCount}</span>
-                          <button 
+                          <button
                             onClick={() => handleUserCountChange(Math.min(50, userCount + 1))}
                             className="w-7 h-7 rounded-full border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50 transition-colors"
                           >
@@ -1356,11 +1349,11 @@ export default function SettingsPage() {
                           className="w-full mt-1"
                         />
                       </div>
-                      
+
                       {/* Right side - Price and Next button */}
                       <div className="text-right">
                         <div className="text-2xl font-bold text-slate-900">₹{bundlePrice.toLocaleString()}</div>
-                        <button 
+                        <button
                           onClick={handlePurchaseBundle}
                           className="mt-2 px-6 py-2 bg-indigo-600 text-white text-sm rounded-xl hover:bg-indigo-700 transition-colors shadow-sm"
                         >
@@ -1368,7 +1361,7 @@ export default function SettingsPage() {
                         </button>
                       </div>
                     </div>
-                    
+
                     {/* Savings text */}
                     <div className="mt-4 pt-3 border-t border-slate-100">
                       <p className="text-xs text-emerald-600 flex items-center gap-1">
@@ -1466,15 +1459,15 @@ export default function SettingsPage() {
 
                         const planName = pendingPlan.id;
                         const planAmount = getPlanAmount(planName);
-                        
+
                         // Create PayU order
                         const response = await api.payments.createOrder(planAmount, "INR", pendingPlan.name, token);
-                        
+
                         if (response.success) {
                           const form = document.createElement('form');
                           form.method = 'POST';
                           form.action = response.payuUrl;
-                          
+
                           const payuData = response.payuData;
                           Object.keys(payuData).forEach(key => {
                             const input = document.createElement('input');
@@ -1483,14 +1476,14 @@ export default function SettingsPage() {
                             input.value = payuData[key];
                             form.appendChild(input);
                           });
-                          
+
                           // Add plan info
                           const planInput = document.createElement('input');
                           planInput.type = 'hidden';
                           planInput.name = 'plan';
                           planInput.value = planName;
                           form.appendChild(planInput);
-                          
+
                           document.body.appendChild(form);
                           form.submit();
                         }
@@ -1715,19 +1708,26 @@ export default function SettingsPage() {
                 onClick={() => {
                   setShow2FAModal(false);
                   setTwoFACode("");
+                  setQrCode("");
+                  setSecretKey("");
                 }}
                 className="flex-1 px-4 py-2.5 text-sm border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition-colors"
               >
                 Cancel
               </button>
               <button
-                onClick={() => {
-                  handleEnable2FA();
-                }}
-                disabled={twoFACode.length !== 6}
-                className="flex-1 px-4 py-2.5 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={handleEnable2FA}
+                disabled={twoFACode.length !== 6 || verifying2FA}
+                className="flex-1 px-4 py-2.5 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
-                Verify & Enable
+                {verifying2FA ? (
+                  <>
+                    <RefreshCw size={13} className="animate-spin" />
+                    Verifying...
+                  </>
+                ) : (
+                  "Verify & Enable"
+                )}
               </button>
             </div>
           </div>

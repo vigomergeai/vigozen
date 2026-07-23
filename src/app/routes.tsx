@@ -11,6 +11,9 @@ import SupportPage from "./pages/SupportPage";
 import SettingsPage from "./pages/SettingsPage";
 import LoginPage from "./pages/LoginPage";
 import AdminPage from "./pages/AdminPage";
+import PaymentSuccess from "./pages/PaymentSuccess";  
+import PaymentFailure from "./pages/PaymentFailure"; 
+import BillingPage from "./pages/BillingPage";
 import { Loader2, Zap } from "lucide-react";
 
 function NotFound() {
@@ -41,6 +44,22 @@ function AuthLoadingScreen() {
   );
 }
 
+// Guard: admin only
+function RequireAdmin({ children }: { children: React.ReactNode }) {
+  const { role, authLoading } = useApp();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!authLoading && role !== "admin") {
+      navigate("/", { replace: true });
+    }
+  }, [authLoading, role]);
+
+  if (authLoading) return null;
+  if (role !== "admin") return null;
+  return <>{children}</>;
+}
+
 // Guard: redirect to /login if not authenticated
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { authLoading, isAuthenticated } = useApp();
@@ -54,7 +73,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 
   if (authLoading) return <AuthLoadingScreen />;
   if (!isAuthenticated) return null;
-  return <>{children}</>
+  return <>{children}</>;
 }
 
 // Guard: redirect to / if already authenticated (for login page)
@@ -73,22 +92,28 @@ function RequireGuest({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+
+
 // Guard: admin only
-function RequireAdmin({ children }: { children: React.ReactNode }) {
-  const { role, authLoading } = useApp();
+// Guard: redirect to /billing if subscription expired
+function RequireSubscription({ children }: { children: React.ReactNode }) {
+  const { authLoading, isAuthenticated, subscription, subscriptionLoading } = useApp();
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!authLoading && role !== "admin") {
-      navigate("/", { replace: true });
+    if (!authLoading && !subscriptionLoading && isAuthenticated && subscription) {
+      const isExpired = !subscription.is_trial_active && !subscription.is_subscription_active;
+      if (isExpired) {
+        navigate("/billing", { replace: true });
+      }
     }
-  }, [authLoading, role]);
+  }, [authLoading, subscriptionLoading, isAuthenticated, subscription]);
 
-  if (authLoading) return null;
-  if (role !== "admin") return null;
-  return <>{children}</>
+  if (authLoading || subscriptionLoading) return <AuthLoadingScreen />;
+  if (!isAuthenticated) return null;
+  if (subscription && !subscription.is_trial_active && !subscription.is_subscription_active) return null;
+  return <>{children}</>;
 }
-
 // Root with app provider + auth guard
 function Root() {
   return (
@@ -117,15 +142,64 @@ export const router = createBrowserRouter([
     Component: LoginWrapper,
   },
   {
+    path: "/payment-success",
+    Component: PaymentSuccess,
+  },
+  {
+    path: "/payment-failure",
+    Component: PaymentFailure,
+  },
+  // ── ADD THIS BILLING ROUTE ──
+  {
+    path: "/billing",
+    Component: () => (
+      <AppProvider>
+        <RequireAuth>
+          <BillingPage />
+        </RequireAuth>
+      </AppProvider>
+    ),
+  },
+  {
     path: "/",
     Component: Root,
     children: [
-      { index: true, Component: DashboardPage },
-      { path: "leads", Component: LeadsPage },
-      { path: "sales", Component: SalesPage },
-      { path: "analysis", Component: AnalysisPage },
+      { 
+        index: true, 
+        Component: () => (
+          <RequireSubscription>
+            <DashboardPage />
+          </RequireSubscription>
+        )
+      },
+      { 
+        path: "leads", 
+        Component: () => (
+          <RequireSubscription>
+            <LeadsPage />
+          </RequireSubscription>
+        )
+      },
+      { 
+        path: "sales", 
+        Component: () => (
+          <RequireSubscription>
+            <SalesPage />
+          </RequireSubscription>
+        )
+      },
+      { 
+        path: "analysis", 
+        Component: () => (
+          <RequireSubscription>
+            <AnalysisPage />
+          </RequireSubscription>
+        )
+      },
+      // Help and Settings - No subscription required
       { path: "help", Component: SupportPage },
       { path: "settings", Component: SettingsPage },
+      // Admin - Admin only
       {
         path: "admin",
         Component: () => (

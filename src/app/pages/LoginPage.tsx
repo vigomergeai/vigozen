@@ -44,11 +44,21 @@ const loginSchema = z.object({
   email: z
     .string()
     .min(1, "Email is Required")
-    .email("Please input a valid email address"),
+    .regex(
+      /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/,
+      "Please Input a correct Email Field",
+    ),
   password: z
     .string()
-    .min(1, "Password is Required"),
-});
+    .min(6, "Password must be atleast 6 characters")
+    .max(12, "Password must be at most 12 characters")
+    .regex(/[a-zA-Z]/, "Password must contain at least one letter")
+    .regex(/\d/, "Password must contain at least one number")
+    .regex(
+      /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/,
+      "Password must contain at least one special character",
+    )
+})
 const getBrowserName = () => {
   const ua = navigator.userAgent;
   // Edge FIRST (since Edge contains 'Chrome' in its UA string)

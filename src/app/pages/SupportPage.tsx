@@ -1,13 +1,15 @@
 // src/app/pages/SupportPage.tsx
 import React, { useState, useRef, useEffect } from "react";
-
 import {
   HelpCircle, MessageSquare, Phone, Mail, Book, Search, ChevronDown,
   Plus, Send, Bot, CheckCircle, Clock, AlertTriangle, Star,
   Zap, ArrowRight, Headphones, X, ExternalLink, RefreshCw, Trash2, Edit, Users, User,
-  Layout, Code, Target, Facebook, Instagram, Linkedin, Webhook, Settings, Plug, Globe, Copy, MessageCircle
+  Layout, Code, Target, Facebook, Instagram, Linkedin, Webhook, Settings, Plug, Globe, Copy, MessageCircle, Lock
 } from "lucide-react";
-import { useTickets, useFAQs, useGuides } from "../../hooks/useSupport";
+import { useNavigate } from "react-router";
+import { useApp } from "../context/AppContext";
+
+import { useTickets, useFAQs, useGuides, Guide } from "../../hooks/useSupport";
 import { useUsers } from "../../hooks/useUsers";
 import { useLeadPages } from "../../hooks/useLeadPages";
 import { useAdConnections } from "../../hooks/useAdConnections";
@@ -28,13 +30,13 @@ const statusConfig = {
   Closed: { color: "bg-slate-50 text-slate-500 border-slate-200", icon: CheckCircle },
 };
 
-const guidesData = [
-  { title: "Getting Started with Vigozen CRM", read_time: "5 min", icon: "🚀", type: "Guide" as const },
-  { title: "Setting Up Facebook Lead Ads Integration", read_time: "8 min", icon: "📘", type: "Tutorial" as const },
-  { title: "AI Lead Scoring Explained", read_time: "10 min", icon: "🤖", type: "Video" as const },
-  { title: "Creating Custom Workflows", read_time: "12 min", icon: "⚙️", type: "Tutorial" as const },
-  { title: "Generating Advanced Reports", read_time: "6 min", icon: "📊", type: "Guide" as const },
-  { title: "Team Collaboration Best Practices", read_time: "7 min", icon: "👥", type: "Guide" as const },
+const guidesData: Guide[] = [
+  { id: "g1", title: "Getting Started with Vigozen CRM", read_time: "5 min", icon: "🚀", type: "Guide" as const, sort_order: 1 },
+  { id: "g2", title: "Setting Up Facebook Lead Ads Integration", read_time: "8 min", icon: "📘", type: "Tutorial" as const, sort_order: 2 },
+  { id: "g3", title: "AI Lead Scoring Explained", read_time: "10 min", icon: "🤖", type: "Video" as const, sort_order: 3 },
+  { id: "g4", title: "Creating Custom Workflows", read_time: "12 min", icon: "⚙️", type: "Tutorial" as const, sort_order: 4 },
+  { id: "g5", title: "Generating Advanced Reports", read_time: "6 min", icon: "📊", type: "Guide" as const, sort_order: 5 },
+  { id: "g6", title: "Team Collaboration Best Practices", read_time: "7 min", icon: "👥", type: "Guide" as const, sort_order: 6 },
 ];
 
 const aiResponses: Record<string, string> = {
@@ -61,6 +63,8 @@ export default function SupportPage() {
   const { faqs } = useFAQs();
   const { guides } = useGuides();
   const { users } = useUsers();
+  const { subscription } = useApp();  // ← ADD THIS
+  const navigate = useNavigate();  
   
   const [activeTab, setActiveTab] = useState<"overview" | "tickets" | "chat" | "docs" | "leadpages" | "adsmanager" | "leadintegrations">("overview");
   const [faqOpen, setFaqOpen] = useState<number | null>(null);
@@ -105,7 +109,42 @@ const [autoCreate, setAutoCreate] = useState(false);
     config: {}
   });
 
+  const [displayedGuides, setDisplayedGuides] = useState<Guide[]>(guidesData);
+
+  useEffect(() => {
+    if (guides && guides.length > 0) {
+      setDisplayedGuides(guides);
+    }
+  }, [guides]);
+
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // ── Check if trial expired ──
+  const isLocked = subscription && 
+    !subscription.is_trial_active && 
+    !subscription.is_subscription_active;
+
+  if (isLocked) {
+    return (
+      <div className="p-4 lg:p-6 flex items-center justify-center min-h-[60vh]">
+        <div className="text-center max-w-md">
+          <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <Lock size={40} className="text-red-500" />
+          </div>
+          <h2 className="text-2xl font-bold text-slate-800 mb-2">Your Trial Has Expired</h2>
+          <p className="text-slate-500 mb-6">
+            Upgrade to continue accessing support and help resources.
+          </p>
+          <button
+            onClick={() => navigate("/billing")}
+            className="px-6 py-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors"
+          >
+            Upgrade Now →
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -347,7 +386,7 @@ const handleDisconnectAd = async (id: string, platformName: string) => {
     f.answer?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const displayedGuides = guides.length > 0 ? guides : guidesData;
+
   const userOpenCount = tickets.filter((t: any) => t.status === "Open").length;
   const userResolvedCount = tickets.filter((t: any) => t.status === "Resolved").length;
 

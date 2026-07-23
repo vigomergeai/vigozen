@@ -1,4 +1,1 @@
-@import 'tailwindcss' source(none);
-@source '../**/*.{js,ts,jsx,tsx}';
-
-@plugin 'tailwindcss-animate';
+/* Tailwind entry file kept intentionally minimal for the Vite app. */

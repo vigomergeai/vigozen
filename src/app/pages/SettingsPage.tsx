@@ -3,14 +3,14 @@ import {
   User, Shield, Bell, Link, CreditCard, Save, Camera,
   Check, X, Eye, EyeOff, Plug, RefreshCw, Key, Bot, Zap,
   Plus, Minus, Trash2, Edit, ChevronRight, Star, Crown, CheckCircle,
-  Mail, Phone, Building, Globe, AlertTriangle, Database, RotateCcw, UserCog, ExternalLink
-
+  Mail, Phone, Building, Globe, AlertTriangle, Database, RotateCcw, UserCog, ExternalLink, Lock
 } from "lucide-react";
-import { priceList } from "../data/mockData";
+import { useNavigate } from "react-router";
+import { priceList as mockPriceList, PriceItem } from "../data/mockData";
 import { useApp } from "../context/AppContext";
 import { toast } from "sonner";
 import QRCode from "qrcode";
-import { api, getApiBaseUrl } from "../lib/api";
+import { api } from "../lib/api";
 
 type SettingsTab = "profile" | "integrations" | "pricing" | "notifications" | "security" | "system";
 
@@ -29,9 +29,13 @@ export default function SettingsPage() {
   const {
     role, currentUser, integrations, toggleIntegration, syncIntegration,
     saveSettings, resetDatabase, userSettings, loading, session, userProfile,
-    addIntegration,      // ADD THIS
-    updateIntegration    // ADD THIS
+    addIntegration, updateIntegration, subscription,
+    employees
   } = useApp();
+  const navigate = useNavigate();  // ← ADD THIS
+  const [plans, setPlans] = useState<PriceItem[]>(mockPriceList);
+  const priceList = plans;
+  const apiKey = (userProfile as any)?.api_key || "sk-leadops-a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6";
   const [activeTab, setActiveTab] = useState<SettingsTab>("profile");
   const [showPassword, setShowPassword] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
@@ -92,6 +96,19 @@ export default function SettingsPage() {
   const [qrCode, setQrCode] = useState("");
   const [secretKey, setSecretKey] = useState("");
 
+  useEffect(() => {
+    const fetchPlans = async () => {
+      const token = localStorage.getItem("token");
+      if (token) {
+        try {
+          const data = await api.plans.list(token);
+          setPlans(data || []);
+        } catch { setPlans([]); }
+      }
+    };
+    fetchPlans();
+  }, [userProfile?.id]);
+
   const [profile, setProfile] = useState({
     name: userProfile?.name || currentUser.name,
     email: userProfile?.email || currentUser.email,
@@ -134,8 +151,34 @@ export default function SettingsPage() {
     return count * 100; // ₹100 per user
   };
 
+  // ── Check if trial expired ──
+  const isLocked = subscription && 
+    !subscription.is_trial_active && 
+    !subscription.is_subscription_active;
 
-  // ── ADD THIS HANDLER ──
+  if (isLocked) {
+    return (
+      <div className="p-4 lg:p-6 flex items-center justify-center min-h-[60vh]">
+        <div className="text-center max-w-md">
+          <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <Lock size={40} className="text-red-500" />
+          </div>
+          <h2 className="text-2xl font-bold text-slate-800 mb-2">Your Trial Has Expired</h2>
+          <p className="text-slate-500 mb-6">
+            Upgrade to continue managing your account settings and preferences.
+          </p>
+          <button
+            onClick={() => navigate("/billing")}
+            className="px-6 py-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors"
+          >
+            Upgrade Now →
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Purchase Bundle Handler ──
   const handlePurchaseBundle = async () => {
     try {
       const token = localStorage.getItem('token') || session?.access_token;
@@ -469,7 +512,7 @@ export default function SettingsPage() {
       const formData = new FormData();
       formData.append('avatar', compressedFile);
       
-      const response = await fetch(`${getApiBaseUrl()}/users/${userId}/avatar`, {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/users/${userId}/avatar`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -583,7 +626,7 @@ export default function SettingsPage() {
   // Revoke a session
   const revokeSession = async (sessionId: string, deviceName: string) => {
     try {
-      await api.sessions.delete(sessionId, session?.access_token);
+      await api.sessions.delete(sessionId, session?.access_token || "");
       setSessions(prev => prev.filter(s => s.id !== sessionId));
       toast.success(`${deviceName} session revoked!`);
     } catch (error) {
@@ -801,6 +844,60 @@ export default function SettingsPage() {
                 </div>
               </div>
 
+              {/* ===== SUBSCRIPTION INFO ===== */}
+              {subscription && (
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 mt-5">
+                  <div className="flex items-center gap-2 mb-4">
+                    <CreditCard size={16} className="text-indigo-600" />
+                    <h3 className="text-slate-800">Subscription</h3>
+                    <span className={`ml-auto text-[10px] px-2 py-0.5 rounded-full font-medium ${
+                      subscription.is_subscription_active ? 'bg-emerald-100 text-emerald-700' :
+                      subscription.is_trial_active ? 'bg-indigo-100 text-indigo-700' :
+                      'bg-red-100 text-red-700'
+                    }`}>
+                      {subscription.is_subscription_active ? 'Active' :
+                       subscription.is_trial_active ? 'Trial' : 'Expired'}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                    <div>
+                      <p className="text-xs text-slate-400">Current Plan</p>
+                      <p className="text-sm font-semibold text-slate-800 capitalize mt-1">
+                        {subscription.plan_type || 'Free Trial'}
+                      </p>
+                    </div>
+                    {subscription.trial_start && (
+                      <div>
+                        <p className="text-xs text-slate-400">Started</p>
+                        <p className="text-sm text-slate-700 mt-1">
+                          {new Date(subscription.trial_start).toLocaleDateString()}
+                        </p>
+                      </div>
+                    )}
+                    {subscription.trial_end && (
+                      <div>
+                        <p className="text-xs text-slate-400">Expires</p>
+                        <p className="text-sm text-slate-700 mt-1">
+                          {new Date(subscription.trial_end).toLocaleDateString()}
+                        </p>
+                      </div>
+                    )}
+                    {subscription.days_remaining > 0 && (
+                      <div>
+                        <p className="text-xs text-slate-400">Days Left</p>
+                        <p className="text-sm font-bold text-amber-600 mt-1">{subscription.days_remaining}d</p>
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => navigate('/billing')}
+                    className="mt-4 px-4 py-2 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors"
+                  >
+                    {subscription.is_subscription_active ? 'Manage Plan' : 'Upgrade Plan'}
+                  </button>
+                </div>
+              )}
+
               {/* AI Preferences */}
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
                 <div className="flex items-center gap-2 mb-4"><Bot size={16} className="text-indigo-600" /><h3 className="text-slate-800">AI Preferences</h3></div>
@@ -964,7 +1061,9 @@ export default function SettingsPage() {
                     <div className="text-xs text-indigo-600 mb-3">Use our REST API to build custom integrations with any platform.</div>
                     <div className="flex items-center gap-2">
                       <code className="flex-1 text-xs bg-white border border-indigo-200 rounded-lg px-3 py-2 text-slate-600 font-mono">
-                        {showApiKey ? "sk-leadops-a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6" : "sk-leadops-••••••••••••••••••••••••••••••"}
+                        {showApiKey 
+                          ? (apiKey || "No API key") 
+                          : (apiKey ? apiKey.slice(0, 10) + "••••••••••••••••••••••••••••••" : "Loading...")}
                       </code>
                       <button onClick={() => setShowApiKey(!showApiKey)} className="px-3 py-2 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors">{showApiKey ? "Hide" : "Reveal"}</button>
                     </div>
@@ -1005,11 +1104,13 @@ export default function SettingsPage() {
                           if (confirm("Are you sure you want to cancel your subscription? This action cannot be undone.")) {
                             try {
                               const token = localStorage.getItem('token') || session?.access_token;
-                              if (!token) throw new Error("Not logged in");
+                              if (!token || !session?.user) throw new Error("Not logged in");
 
+                              const subscriptionId = (userProfile as any)?.subscription_id;
+                              
                               // Cancel in Razorpay first
-                              if (userProfile?.razorpay_subscription_id) {
-                                await api.payments.cancelSubscription(userProfile.razorpay_subscription_id, token);
+                              if (subscriptionId) {
+                                await api.payments.cancelSubscription(subscriptionId, token);
                               }
                               
                               // Then update database
@@ -1277,6 +1378,43 @@ export default function SettingsPage() {
                     </div>
                   </div>
                 </div>
+
+                {/* ────────────────────────────────────────────────────────────── */}
+                {/* PAYU DIRECT PAYMENT LINK - ADD THIS AFTER BUNDLE PLAN */}
+                {/* ────────────────────────────────────────────────────────────── */}
+
+                <div className="bg-white rounded-2xl border border-slate-200 p-5 mt-4">
+                  <h4 className="text-slate-800 font-semibold mb-2">Pay with PayU</h4>
+                  <p className="text-sm text-slate-500 mb-4">
+                    Click below to complete your payment securely via PayU
+                  </p>
+                  
+                  <a
+                    href="https://u.payu.in/PrZ2PnY224hC"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-block text-white text-center font-bold text-xs px-6 py-3 rounded"
+                    style={{
+                      width: '135px',
+                      backgroundColor: '#1065b7',
+                      textAlign: 'center',
+                      fontWeight: 800,
+                      padding: '11px 0px',
+                      color: 'white',
+                      fontSize: '12px',
+                      display: 'inline-block',
+                      textDecoration: 'none',
+                      borderRadius: '3.229px'
+                    }}
+                  >
+                    Pay Now
+                  </a>
+                  
+                  <p className="text-xs text-slate-400 mt-3">
+                    🔒 Secure payment via PayU Payment Gateway
+                  </p>
+                </div>
+
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead className="bg-slate-50">

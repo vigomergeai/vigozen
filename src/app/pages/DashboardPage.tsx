@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from "react";
-import { formatCurrency, formatNumber, formatPercentage } from '../../utils/formatters';
 import {
   Users, TrendingUp, IndianRupee, Target, ArrowUp, ArrowDown, Bot, AlertTriangle,
   Lightbulb, Activity, Star, Trophy, ChevronRight, RefreshCw, Flame
@@ -38,6 +37,16 @@ const activityIcons: Record<string, { icon: React.ElementType; color: string }> 
 };
 
 const COLORS = ["#6366F1", "#8B5CF6", "#F59E0B", "#3B82F6", "#10B981", "#22C55E"];
+
+const formatCurrency = (val: any) => {
+  const num = Number(val) || 0;
+  if (num >= 10000000) return `₹${(num / 10000000).toFixed(2)} Cr`;
+  if (num >= 100000) return `₹${(num / 100000).toFixed(2)} L`;
+  if (num >= 1000) return `₹${(num / 1000).toFixed(1)} K`;
+  return `₹${num.toLocaleString("en-IN")}`;
+};
+
+const formatNumber = (val: number) => (val || 0).toLocaleString("en-IN");
 
 export default function DashboardPage() {
   const { role, leads, deals, activities, loading, refreshData, subscription } = useApp();
@@ -155,9 +164,8 @@ export default function DashboardPage() {
     const list = [];
     const wonCount = leads.filter(l => l.status === "Won").length;
     const hotCount = leads.filter(l => l.aiScore >= 80).length;
-    const pipelineVal = deals
-    .filter(d => !["Won", "Lost"].includes(d.stage))
-    .reduce((s, d) => s + (Number(d.value) || 0), 0);
+    const pipelineVal = deals.filter(d => !["Won", "Lost"].includes(d.stage)).reduce((s, d) => s + d.value, 0);
+
     if (hotCount > 0) {
       list.push({
         id: 1,
@@ -340,6 +348,9 @@ useEffect(() => {
           </button>
         </div>
       </div>
+
+      {/* ── TRIAL BANNER ── */}
+      {renderTrialBanner()}
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

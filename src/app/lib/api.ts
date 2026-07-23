@@ -121,7 +121,7 @@ export const api = {
       request("PUT", `/users/${userId}/payment-method`, { payment_method_id: null }, token),
     toggleAccess: (userId: string, isActive: boolean, token: string) =>
       request("PUT", `/users/${userId}/toggle-access`, { isActive }, token),
-    // ── Bulk User Actions ── ✅ ADD THIS
+    // ── Bulk User Actions ──
     bulkAction: (data: { userIds: string[]; action: string; value?: any }, token: string) =>
       request("POST", "/users/bulk/action", data, token),
   },
@@ -132,6 +132,9 @@ export const api = {
     create: (data: any, token?: string) => request("POST", "/guides", data, token),
     update: (id: string, data: any, token?: string) => request("PUT", `/guides/${id}`, data, token),
     delete: (id: string, token?: string) => request("DELETE", `/guides/${id}`, undefined, token),
+  },
+  plans: {
+    list: (token?: string) => request("GET", "/api/plans", undefined, token),
   },
   leadSources: {
     list: (token: string) => request("GET", "/lead-sources", undefined, token),
@@ -201,10 +204,10 @@ export const api = {
 
   // ── Reports API ──
   reports: {
-    getSummary: (params?: string, token?: string) => request("GET", `/api/reports/summary${params ? `?${params}` : ""}`, undefined, token),
-    getEmployeeWise: (params?: string, token?: string) => request("GET", `/api/reports/employee-wise${params ? `?${params}` : ""}`, undefined, token),
-    getStatusWise: (params?: string, token?: string) => request("GET", `/api/reports/status-wise${params ? `?${params}` : ""}`, undefined, token),
-    getSalesWise: (params?: string, token?: string) => request("GET", `/api/reports/sales-wise${params ? `?${params}` : ""}`, undefined, token),
+    getSummary: (token?: string) => request("GET", "/api/reports/summary", undefined, token),
+    getEmployeeWise: (token?: string) => request("GET", "/api/reports/employee-wise", undefined, token),
+    getStatusWise: (token?: string) => request("GET", "/api/reports/status-wise", undefined, token),
+    getSalesWise: (token?: string) => request("GET", "/api/reports/sales-wise", undefined, token),
     exportCSV: (token?: string) => request("GET", "/api/reports/export/csv", undefined, token),
     exportPDF: (token?: string) => request("GET", "/api/reports/export/pdf", undefined, token),
   },
@@ -260,22 +263,16 @@ export const api = {
       request("GET", `/payments/history/${userId}`, undefined, token),
   },
 
-  // ── Subscription API ──
   subscription: {
-    status: (token?: string) =>
-      request("GET", "/subscription/status", undefined, token),
-
-    trial: (token?: string) =>
-      request("GET", "/subscription/trial", undefined, token),
-
-    create: (data: { plan_type: string }, token?: string) =>
-      request("POST", "/subscription/create", data, token),
-
+    status: (token?: string) => request("GET", "/subscription/status", undefined, token),
+    trial: {
+      start: (token?: string) => request("POST", "/subscription/trial/start", undefined, token),
+      check: (token?: string) => request("GET", "/subscription/trial/check", undefined, token),
+    },
+    create: (data: { plan_type: string }, token?: string) => request("POST", "/subscription/create", data, token),
     paymentSuccess: (data: { plan_type: string; payment_id: string; amount: number }, token?: string) =>
       request("POST", "/subscription/payment-success", data, token),
-
-    cancel: (subscriptionId: string, token?: string) =>
-      request("POST", "/subscription/cancel", { subscriptionId }, token),
+    cancel: (subscriptionId: string, token?: string) => request("POST", "/subscription/cancel", { subscriptionId }, token),
   },
 
   admin: {

@@ -19,7 +19,6 @@ import DeleteCommentModal from "../components/DeleteCommentModal";
 
 
 
-
 const statusConfig: Record<LeadStatus, { color: string; dot: string; icon: React.ElementType }> = {
   New: { color: "bg-blue-50 text-blue-700 border-blue-200", dot: "bg-blue-500", icon: Clock },
   Contacted: { color: "bg-amber-50 text-amber-700 border-amber-200", dot: "bg-amber-500", icon: Phone },
@@ -62,6 +61,7 @@ export default function LeadsPage() {
   const [showConvertModal, setShowConvertModal] = useState(false);
   const [convertLeadData, setConvertLeadData] = useState<Lead | null>(null);
   const [converting, setConverting] = useState(false);
+
   // ── Delete Comment Modal State ──
   const [showDeleteCommentModal, setShowDeleteCommentModal] = useState(false);
   const [deleteCommentData, setDeleteCommentData] = useState<{ id: string; text: string } | null>(null);
@@ -1276,7 +1276,7 @@ useEffect(() => {
                               ) : (
                                 <p className="text-xs text-slate-700 mt-0.5 whitespace-pre-wrap">{comment.comment}</p>
                               )}
-                              {!isEditing && isAdmin && (
+                              {!isEditing && canEdit && (
                                 <div className="flex gap-2 mt-1.5">
                                   <button
                                     onClick={() => {

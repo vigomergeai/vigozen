@@ -1,8 +1,8 @@
 /// <reference types="vite/client" />
 
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
 import { toast } from "sonner";
-import { api, getApiBaseUrl } from "../lib/api";
+import { api } from "../lib/api";
 
 import {
   Role, Lead, LeadStatus, LeadSource, Industry, Deal, Employee, Integration, Ticket,
@@ -20,7 +20,6 @@ interface Session {
   };
 }
 export interface UserProfile {
-  [x: string]: any;
   id: string;
   email: string;
   name: string;
@@ -43,7 +42,11 @@ export interface UserProfile {
   payment_last4?: string;
   payment_brand?: string;
   payment_expiry?: string;
-  subscription_status?: string
+  subscription_status?: string;
+  trial_start?: string;
+  trial_end?: string;
+  plan_type?: string;
+  payment_status?: string;
 }
 
 interface Activity {
@@ -197,12 +200,6 @@ interface AppContextType {
   markNotificationRead: (id: string) => Promise<void>;
   markAllNotificationsRead: () => Promise<void>;
   deleteNotification: (id: string) => Promise<void>;
-  
-  getNotificationsByType: (type: string) => any[];
-  getNotificationsByPriority: (priority: string) => any[];
-  getUnreadNotifications: () => any[];
-  getHighPriorityNotifications: () => any[];
-  getRecentNotifications: (limit?: number) => any[];
 
   // Utilities
   refreshData: () => Promise<void>;
@@ -367,7 +364,7 @@ const loadUserProfile = async (id: string) => {
   try {
     const token = localStorage.getItem("token") || "";
     const res = await fetch(
-      `${getApiBaseUrl()}/users/${id}`,
+      `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/users/${id}`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
     if (!res.ok) { console.log("loadUserProfile: not found"); return; }
@@ -398,7 +395,7 @@ const login = async (
 ): Promise<{ error: string | null; user?: any }> => {
   try {
     const response = await fetch(
-      `${getApiBaseUrl()}/auth/login`,
+      `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/auth/login`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -406,10 +403,10 @@ const login = async (
       }
     );
 
-    const data = await response.json().catch(() => ({}));
+    const data = await response.json();
 
     if (!response.ok) {
-      return { error: data.error || `Login failed (${response.status})` };
+      return { error: data.error || "Login failed" };
     }
 
     // Save JWT token and user to localStorage
@@ -433,15 +430,15 @@ const login = async (
       lastLogin: new Date().toISOString(),
     });
     setRole((data.user.role as Role) || "user");
+    setTimeout(() => fetchSubscriptionStatus(), 100);
 
     // Also save to userName so hooks can display it
     localStorage.setItem("userName", data.user.name || data.user.email);
 
     console.log("LOGIN SUCCESS:", data.user);
     return { error: null, user: data.user };
-  } catch (e: any) {
-    console.error("Login error:", e);
-    return { error: e.message || "Server unreachable. Please check backend connection." };
+  } catch (e) {
+    return { error: String(e) };
   }
 };
 
@@ -452,7 +449,7 @@ const signup = async (
 ): Promise<{ error: string | null }> => {
   try {
     const response = await fetch(
-      `${getApiBaseUrl()}/auth/signup`,
+      `${import.meta.env.VITE_API_URL}/auth/signup`,
       {
         method: "POST",
         headers: {
@@ -466,10 +463,10 @@ const signup = async (
       }
     );
 
-    const data = await response.json().catch(() => ({}));
+    const data = await response.json();
 
     if (!response.ok) {
-      return { error: data.error || `Signup failed (${response.status})` };
+      return { error: data.error };
     }
 
     // Save JWT token and user to localStorage
@@ -494,6 +491,7 @@ const signup = async (
       lastLogin: new Date().toISOString(),
     });
     setRole((data.user.role as Role) || "user");
+    setTimeout(() => fetchSubscriptionStatus(), 100);
 
     console.log("SIGNUP SUCCESS:", data.user);
 
@@ -531,80 +529,6 @@ const logout = async () => {
   employeeId: userProfile?.employeeId || "",
 };
   const isAuthenticated = !!session && !!session.access_token;
-  const getToken = () => localStorage.getItem("token") || session?.access_token;
-
-  const seenNotificationIdsRef = useRef<Set<string>>(new Set());
-  const isInitialNotificationFetchRef = useRef<boolean>(true);
-
-  const fetchNotifications = useCallback(async () => {
-    const token = getToken();
-    if (!token) return;
-    try {
-      const data = await api.notifications.list(token);
-      const items = Array.isArray(data) ? data : [];
-      setNotificationItems(items);
-
-      if (isInitialNotificationFetchRef.current) {
-        items.forEach((n: any) => seenNotificationIdsRef.current.add(n.id));
-        isInitialNotificationFetchRef.current = false;
-      } else {
-        items.forEach((n: any) => {
-          if (!n.is_read && !seenNotificationIdsRef.current.has(n.id)) {
-            seenNotificationIdsRef.current.add(n.id);
-            toast.info(n.title || "New Notification", {
-              description: n.message || "",
-            });
-          } else {
-            seenNotificationIdsRef.current.add(n.id);
-          }
-        });
-      }
-
-      const countRes = await api.notifications.getUnreadCount(token);
-      setUnreadCount(countRes?.count || 0);
-    } catch (error) {
-      console.error("Failed to fetch notifications:", error);
-    }
-  }, [session]);
-
-  const markNotificationRead = async (id: string) => {
-    const token = getToken();
-    if (!token) return;
-    try {
-      await api.notifications.markRead(id, token);
-      setNotificationItems(prev =>
-        prev.map(n => n.id === id ? { ...n, is_read: true, read_at: new Date().toISOString() } : n)
-      );
-      setUnreadCount(prev => Math.max(0, prev - 1));
-    } catch (error) {
-      console.error("Failed to mark notification as read:", error);
-    }
-  };
-
-  const markAllNotificationsRead = async () => {
-    const token = getToken();
-    if (!token) return;
-    try {
-      await api.notifications.markAllRead(token);
-      setNotificationItems(prev =>
-        prev.map(n => ({ ...n, is_read: true, read_at: new Date().toISOString() }))
-      );
-      setUnreadCount(0);
-    } catch (error) {
-      console.error("Failed to mark all as read:", error);
-    }
-  };
-
-  const deleteNotification = async (id: string) => {
-    const token = getToken();
-    if (!token) return;
-    try {
-      await api.notifications.delete(id, token);
-      setNotificationItems(prev => prev.filter(n => n.id !== id));
-    } catch (error) {
-      console.error("Failed to delete notification:", error);
-    }
-  };
 
   // ── Backend sync ───────────────────────────────────────────────────────────
   const refreshData = useCallback(async () => {
@@ -630,7 +554,7 @@ const logout = async () => {
       // Fetch employees/users from backend
       try {
         const empRes = await fetch(
-          `${getApiBaseUrl()}/users`,
+          `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/users`,
           { headers: { Authorization: `Bearer ${token}` } }
         );
         if (empRes.ok) {
@@ -661,23 +585,15 @@ const logout = async () => {
   }
 }, []);
 
+  //useEffect(() => { refreshData(); }, []);
 useEffect(() => {
   if (session && userProfile?.id) {
+//importLeads();
+
     refreshData();
     loadSettings();
   }
-}, [session, userProfile?.id]);
-
-// Poll for real-time notifications every 5 seconds
-useEffect(() => {
-  if (session) {
-    const interval = setInterval(() => {
-      fetchNotifications();
-    }, 5000);
-    return () => clearInterval(interval);
-  }
-}, [session, fetchNotifications]);
-
+}, [session, userProfile?.id]); // Add userProfile.id dependency
 // Auto-refresh revenue forecast when deals change
 useEffect(() => {
   refreshRevenueForecast();
@@ -692,6 +608,8 @@ useEffect(() => {
     try { await apiFn(); } catch { /* ignore */ }
   }
 
+  const getToken = () => localStorage.getItem("token") || session?.access_token;
+
   // ── User Management (Admin) ────────────────────────────────────────────────
   const loadUsers = async () => {
     const token = getToken();
@@ -699,7 +617,7 @@ useEffect(() => {
     setUsersLoading(true);
     try {
       const res = await fetch(
-        `${getApiBaseUrl()}/users`,
+        `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/users`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       if (!res.ok) throw new Error("Failed to load users");
@@ -754,7 +672,7 @@ useEffect(() => {
       if (data.name !== undefined) payload.name = data.name;
 
       const res = await fetch(
-        `${getApiBaseUrl()}/users/${userId}`,
+        `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/users/${userId}`,
         {
           method: "PUT",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -821,25 +739,6 @@ useEffect(() => {
     }
   };
 
-  // ── Bulk User Action ──
-  const bulkUserAction = async (userIds: string[], action: string, value?: any) => {
-    const token = getToken();
-    if (!token) {
-      toast.error("Unauthorized");
-      throw new Error("Unauthorized");
-    }
-    
-    try {
-      const result = await api.users.bulkAction({ userIds, action, value }, token);
-      toast.success(`${action} completed for ${userIds.length} users`);
-      await loadUsers();
-      return result;
-    } catch (error: any) {
-      toast.error(`Bulk action failed: ${error.message}`);
-      throw error;
-    }
-  };
-
   // ── Lead CRUD ──────────────────────────────────────────────────────────────
   const addLead = async (data: Partial<Lead>): Promise<any | null> => {
     try {
@@ -898,9 +797,9 @@ useEffect(() => {
 
 
       //  FIRST DB INSERT
-      const response = await fetch(`${getApiBaseUrl()}/leads`, {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/leads`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${getToken()}` },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: dbPayload.name, email: dbPayload.email, phone: dbPayload.phone, company: dbPayload.company, source: dbPayload.source, status: dbPayload.status, industry: dbPayload.industry, value: dbPayload.value, notes: dbPayload.notes })
       });
       const inserted = await response.json();
@@ -931,9 +830,9 @@ industry: data.industry ? (toDbIndustry[data.industry as keyof typeof toDbIndust
     };
     // console.log("Dataa got is ", data);
     setLeads(prev => prev.map(l => l.id === id ? { ...l, ...data } : l));
-  const response = await fetch(`${getApiBaseUrl()}/leads/${id}`, {
+  const response = await fetch(`${import.meta.env.VITE_API_URL}/leads/${id}`, {
   method: 'PUT',
-  headers: { 'Content-Type': 'application/json', "Authorization": `Bearer ${getToken()}` },
+  headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(dbPayload)
 });
 
@@ -1095,12 +994,11 @@ owner_id: validUUID(lead.ownerId) ? lead.ownerId : null,
       }));
 
       const bulkResponse = await fetch(
-        `${getApiBaseUrl()}/leads/bulk`,
+        `${import.meta.env.VITE_API_URL}/leads/bulk`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "Authorization": `Bearer ${getToken()}`
           },
           body: JSON.stringify({
             leads: leadsToInsert
@@ -1114,9 +1012,7 @@ owner_id: validUUID(lead.ownerId) ? lead.ownerId : null,
     }
 
     // ALWAYS REFRESH LEADS
-    const response = await fetch(`${getApiBaseUrl()}/leads`, {
-      headers: { "Authorization": `Bearer ${getToken()}` }
-    });
+    const response = await fetch(`${import.meta.env.VITE_API_URL}/leads`);
 
     const data = await response.json();
 
@@ -1240,7 +1136,7 @@ owner_id: validUUID(lead.ownerId) ? lead.ownerId : null,
 
     console.log("Insert payload being sent:", insertPayload);
     
-    const dealResponse = await fetch(`${getApiBaseUrl()}/deals`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${getToken()}` }, body: JSON.stringify(insertPayload) });
+    const dealResponse = await fetch(`${import.meta.env.VITE_API_URL}/deals`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(insertPayload) });
     //const insertedDeal = [await dealResponse.json()];
     const insertedDeal = await dealResponse.json();
     console.log(" Deal inserted successfully:", insertedDeal);
@@ -1278,10 +1174,10 @@ if (validUUID(data.ownerId)) {
     if (data.expectedClose !== undefined) payload.expectedclose = data.expectedClose;
     if (data.daysInStage !== undefined) payload.daysinstage = data.daysInStage;
 
-    const response = await fetch(`${getApiBaseUrl()}/deals/${id}`, {
+    const response = await fetch(`${import.meta.env.VITE_API_URL}/deals/${id}`, {
       
       method: "PUT",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${getToken()}` },
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${session?.access_token}` },
       body: JSON.stringify(payload),
     });
 
@@ -1306,11 +1202,11 @@ if (validUUID(data.ownerId)) {
 
 const deleteDeal = async (id: string): Promise<boolean> => {
   try {
-    const response = await fetch(`${getApiBaseUrl()}/deals/${id}`, {
+    const response = await fetch(`${import.meta.env.VITE_API_URL}/deals/${id}`, {
       method: "DELETE",
-      headers: {
-        "Authorization": `Bearer ${getToken()}`
-      }
+       headers: {
+    "Authorization": `Bearer ${session?.access_token}`
+  }
     });
 
     if (!response.ok) {
@@ -1378,9 +1274,7 @@ const deleteDeal = async (id: string): Promise<boolean> => {
   try {
     console.log("=== Fetching deals from RDS...");
     
-const response = await fetch(`${getApiBaseUrl()}/deals`, {
-  headers: { "Authorization": `Bearer ${getToken()}` }
-});
+const response = await fetch(`${import.meta.env.VITE_API_URL}/deals`);
 const allDeal = await response.json();      
 
     console.log("✅ Raw deals from DB:", allDeal);
@@ -1461,28 +1355,57 @@ const importActivities = async () => {
   }
 };
 
+const fetchNotifications = useCallback(async () => {
+  const token = getToken();
+  if (!token) return;
+  try {
+    const data = await api.notifications.list(token);
+    setNotificationItems(Array.isArray(data) ? data : []);
+    const countRes = await api.notifications.getUnreadCount(token);
+    setUnreadCount(countRes?.count || 0);
+  } catch (error) {
+    console.error("Failed to fetch notifications:", error);
+  }
+}, [session]);
 
-// ── Notification Filter Functions ──
-const getNotificationsByType = (type: string) => {
-  return notificationItems.filter(n => n.type === type);
+const markNotificationRead = async (id: string) => {
+  const token = getToken();
+  if (!token) return;
+  try {
+    await api.notifications.markRead(id, token);
+    setNotificationItems(prev =>
+      prev.map(n => n.id === id ? { ...n, is_read: true, read_at: new Date().toISOString() } : n)
+    );
+    setUnreadCount(prev => Math.max(0, prev - 1));
+  } catch (error) {
+    console.error("Failed to mark notification as read:", error);
+  }
 };
 
-const getNotificationsByPriority = (priority: string) => {
-  return notificationItems.filter(n => n.priority === priority);
+const markAllNotificationsRead = async () => {
+  const token = getToken();
+  if (!token) return;
+  try {
+    await api.notifications.markAllRead(token);
+    setNotificationItems(prev =>
+      prev.map(n => ({ ...n, is_read: true, read_at: new Date().toISOString() }))
+    );
+    setUnreadCount(0);
+  } catch (error) {
+    console.error("Failed to mark all as read:", error);
+  }
 };
 
-const getUnreadNotifications = () => {
-  return notificationItems.filter(n => !n.is_read);
+const deleteNotification = async (id: string) => {
+  const token = getToken();
+  if (!token) return;
+  try {
+    await api.notifications.delete(id, token);
+    setNotificationItems(prev => prev.filter(n => n.id !== id));
+  } catch (error) {
+    console.error("Failed to delete notification:", error);
+  }
 };
-
-const getHighPriorityNotifications = () => {
-  return notificationItems.filter(n => n.priority === 'high' && !n.is_read);
-};
-
-const getRecentNotifications = (limit: number = 10) => {
-  return notificationItems.slice(0, limit);
-};
-
   // Revenue Forecast Functions
 const refreshRevenueForecast = useCallback(async () => {
   try {
@@ -1704,7 +1627,7 @@ const saveSettings = async (data: UserSettings): Promise<boolean> => {
       try {
         const token = localStorage.getItem("token") || session?.access_token;
         const response = await fetch(
-          `${getApiBaseUrl()}/users/${userProfile.id}`,
+          `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/users/${userProfile.id}`,
           {
             method: "PUT",
             headers: {
@@ -1797,11 +1720,6 @@ const resetDatabase = async (): Promise<void> => {
       markNotificationRead,
       markAllNotificationsRead,
       deleteNotification,
-      getNotificationsByType,
-      getNotificationsByPriority,
-      getUnreadNotifications,
-      getHighPriorityNotifications,
-      getRecentNotifications,
       // Data
       leads, deals, employees, integrations, tickets, activities, userSettings,
       loading, dataReady, backendOnline,

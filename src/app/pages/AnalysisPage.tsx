@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from "react";
-import { api, getApiBaseUrl } from "../lib/api";
+import { api } from "../lib/api";
 import {
   BarChart3, Bot, Download, Calendar, Filter, TrendingUp, Users, Target,
-  ArrowUp, ArrowDown, ChevronDown, Sparkles, Brain, FileText, Lock
+  ArrowUp, ArrowDown, ChevronDown, Sparkles, Brain, FileText, Lock, RefreshCw
 } from "lucide-react";
 import { useNavigate } from "react-router";
 import {
@@ -60,12 +60,6 @@ export default function AnalysisPage() {
   const { role, leads, deals, refreshData, subscription } = useApp();
   const navigate = useNavigate();  // ← ADD THIS
 
-  const [reportType, setReportType] = useState<ReportType>("employee");
-  const [dateFilter, setDateFilter] = useState<DateFilter>("weekly");
-  const [startDate, setStartDate] = useState("2026-03-01");
-  const [endDate, setEndDate] = useState("2026-03-14");
-  const [showAI, setShowAI] = useState(true);
-
   // ── Reports State ──
   const [reports, setReports] = useState({
     summary: null as any,
@@ -74,23 +68,6 @@ export default function AnalysisPage() {
     salesWise: [] as any[],
     loading: true
   });
-
-  const [appliedRange, setAppliedRange] = useState<{ start: string; end: string } | null>(null);
-
-  // ── Date Range Sync ──
-  useEffect(() => {
-    if (dateFilter === "daily") {
-      setAppliedRange({ start: "2026-03-14", end: "2026-03-14" });
-    } else if (dateFilter === "weekly") {
-      setAppliedRange({ start: "2026-03-09", end: "2026-03-14" });
-    } else if (dateFilter === "custom") {
-      setAppliedRange({ start: startDate, end: endDate });
-    }
-  }, [dateFilter]);
-
-  const handleApplyCustomRange = () => {
-    setAppliedRange({ start: startDate, end: endDate });
-  };
 
   // ── Fetch Reports from API ──
   useEffect(() => {
@@ -103,31 +80,14 @@ export default function AnalysisPage() {
 
       setReports(prev => ({ ...prev, loading: true }));
       try {
-        const params = new URLSearchParams();
-        if (appliedRange) {
-          params.append("startDate", appliedRange.start);
-          params.append("endDate", appliedRange.end);
-        }
-        const queryStr = params.toString();
-
         const [summary, employeeWise, statusWise, salesWise] = await Promise.all([
-          api.reports.getSummary(queryStr, token),
-          api.reports.getEmployeeWise(queryStr, token),
-          api.reports.getStatusWise(queryStr, token),
-          api.reports.getSalesWise(queryStr, token),
+          api.reports.getSummary(token),
+          api.reports.getEmployeeWise(token),
+          api.reports.getStatusWise(token),
+          api.reports.getSalesWise(token),
         ]);
-
-        const camelSummary = summary ? {
-          totalLeads: parseInt(summary.total_leads) || 0,
-          totalDeals: parseInt(summary.total_deals) || 0,
-          wonDeals: parseInt(summary.won_deals) || 0,
-          activeDeals: parseInt(summary.active_deals) || 0,
-          totalRevenue: parseFloat(summary.total_revenue) || 0,
-          winRate: parseFloat(summary.win_rate) || 0
-        } : null;
-
         setReports({
-          summary: camelSummary,
+          summary,
           employeeWise: employeeWise || [],
           statusWise: statusWise || [],
           salesWise: salesWise || [],
@@ -140,7 +100,7 @@ export default function AnalysisPage() {
     };
 
     fetchReports();
-  }, [appliedRange]);
+  }, []);
 
   useEffect(() => {
     refreshData();
@@ -148,13 +108,13 @@ export default function AnalysisPage() {
   const empWiseData: EmployeeSummary[] = reports.employeeWise.length > 0
     ? reports.employeeWise.map((item: any) => ({
       name: item.name || 'Unassigned',
-      new: parseInt(item.new) || 0,
-      contacted: parseInt(item.contacted) || 0,
-      qualified: parseInt(item.qualified) || 0,
-      proposal: parseInt(item.proposal) || 0,
-      negotiation: parseInt(item.negotiation) || 0,
-      won: parseInt(item.won_deals) || 0,
-      lost: parseInt(item.lost) || 0,
+      new: 0,
+      contacted: 0,
+      qualified: 0,
+      proposal: 0,
+      negotiation: 0,
+      won: item.won_deals || 0,
+      lost: 0,
     }))
     : [];
 
@@ -199,72 +159,47 @@ export default function AnalysisPage() {
     );
   }
 
-  // ── Status Wise Data with Time Series ──
-  const statusChartData = React.useMemo(() => {
-    const weeks = ['Week 1', 'Week 2', 'Week 3', 'Week 4'];
-    const data = weeks.map((week, index) => {
-      const weekStart = new Date();
-      weekStart.setDate(weekStart.getDate() - (28 - index * 7));
-      const weekEnd = new Date(weekStart);
-      weekEnd.setDate(weekEnd.getDate() + 7);
-      
-      const filtered = deals.filter(d => {
-        const created = new Date(d.createdAt);
-        return created >= weekStart && created < weekEnd;
-      });
-      
-      return {
-        name: week,
-        New: filtered.filter(d => d.stage?.toLowerCase() === 'new').length,
-        Qualified: filtered.filter(d => d.stage?.toLowerCase() === 'qualified').length,
-        Proposal: filtered.filter(d => d.stage?.toLowerCase() === 'proposal').length,
-        Won: filtered.filter(d => d.stage?.toLowerCase() === 'won').length,
-        Lost: filtered.filter(d => d.stage?.toLowerCase() === 'lost').length,
-      };
-    });
-    return data;
-  }, [deals]);
-  // ===== EXPORT CSV =====
-  const handleExportCSV = async () => {
-    try {
-      const token = localStorage.getItem('token');
-      if (!token) return;
-      const baseUrl = getApiBaseUrl();
-      const response = await fetch(`${baseUrl}/api/reports/export/csv`, {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      });
-      if (!response.ok) throw new Error("CSV download failed");
-      const blob = await response.blob();
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = `crm_report_${new Date().toISOString().split("T")[0]}.csv`;
-      link.click();
-    } catch (error) {
-      console.error("Failed to export CSV:", error);
+  const statusChartData = [
+    {
+      name: "Deals",
+      New: statusWiseData.find((s: StatusSummary) => s.status === "new")?.count || 0,
+      Qualified: statusWiseData.find((s: StatusSummary) => s.status === "qualified")?.count || 0,
+      Proposal: statusWiseData.find((s: StatusSummary) => s.status === "proposal")?.count || 0,
+      Won: statusWiseData.find((s: StatusSummary) => s.status === "won")?.count || 0,
+      Lost: statusWiseData.find((s: StatusSummary) => s.status === "lost")?.count || 0,
     }
+  ];
+  // ===== EXPORT CSV =====
+  const handleExportCSV = () => {
+    if (!deals.length) return;
+
+    const headers = ["Title", "Company", "Stage", "Value", "Owner", "Expected Close", "Created At"];
+
+    const rows = deals.map((d: any) => [
+      d.title || '',
+      d.company || '',
+      d.stage || '',
+      d.value || 0,
+      d.owner || '',
+      d.expectedclose || '',
+      d.createdAt || ''
+    ]);
+
+    const csvContent =
+      [headers, ...rows]
+        .map(e => e.join(","))
+        .join("\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "crm-report.csv";
+    link.click();
   };
   // ===== PDF DOWNLOAD =====
-  const handleDownloadPDF = async () => {
-    try {
-      const token = localStorage.getItem('token');
-      if (!token) return;
-      const baseUrl = getApiBaseUrl();
-      const response = await fetch(`${baseUrl}/api/reports/export/pdf`, {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      });
-      if (!response.ok) throw new Error("PDF download failed");
-      const blob = await response.blob();
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = `report_${new Date().toISOString().split("T")[0]}.pdf`;
-      link.click();
-    } catch (error) {
-      console.error("Failed to export PDF:", error);
-    }
+  const handleDownloadPDF = () => {
+    window.print();
   };
   // ===== REAL SALES DATA FROM LEADS =====
 
@@ -280,13 +215,48 @@ export default function AnalysisPage() {
     }))
     : [];
 
-  const totalDeals = deals.length;
-  const lostDeals = deals.filter(d => d.stage?.toLowerCase() === "lost").length;
-  const dropOffRate = totalDeals > 0 ? ((lostDeals / totalDeals) * 100).toFixed(1) : "0";
-
-
+  const [reportType, setReportType] = useState<ReportType>("employee");
+  const [dateFilter, setDateFilter] = useState<DateFilter>("weekly");
+  const [startDate, setStartDate] = useState("2026-03-01");
+  const [endDate, setEndDate] = useState("2026-03-14");
+  const [showAI, setShowAI] = useState(true);
 
   const filteredEmpData = empWiseData;
+
+  const [aiInsight, setAiInsight] = useState("");
+  const [aiInsightLoading, setAiInsightLoading] = useState(false);
+
+  useEffect(() => {
+    const fetchInsight = async () => {
+      const token = localStorage.getItem("token");
+      if (!token) return;
+      setAiInsightLoading(true);
+      try {
+        // Determine which data to send based on reportType
+        let dataToSend = {};
+        if (reportType === "sales") dataToSend = salesWiseData;
+        else if (reportType === "employee") dataToSend = filteredEmpData;
+        else if (reportType === "status") dataToSend = statusWiseData;
+        
+        const res = await fetch(`${import.meta.env.VITE_API_URL}/api/ai/insight`, {
+          method: "POST",
+          headers: { 
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}` 
+          },
+          body: JSON.stringify({ 
+            reportType, 
+            dateFilter,
+            data: dataToSend
+          })
+        });
+        const data = await res.json();
+        setAiInsight(data.insight || "");
+      } catch { setAiInsight(""); }
+      finally { setAiInsightLoading(false); }
+    };
+    fetchInsight();
+  }, [reportType, dateFilter, reports.loading]);
 
   // console.log("Filtered Employee Data is: ", filteredEmpData);
 
@@ -388,7 +358,7 @@ export default function AnalysisPage() {
               onChange={e => setEndDate(e.target.value)}
               className="px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
             />
-            <button onClick={handleApplyCustomRange} className="px-3 py-2 text-xs bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors">
+            <button className="px-3 py-2 text-xs bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors">
               Apply
             </button>
           </div>
@@ -416,9 +386,17 @@ export default function AnalysisPage() {
             <div>
               <div className="flex items-center gap-2 mb-1.5">
                 <span className="text-sm font-semibold text-purple-800">AI Analysis Summary</span>
+                <span className="text-[10px] bg-purple-200 text-purple-700 px-2 py-0.5 rounded-full">GPT-4 Powered</span>
                 <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
               </div>
-              <p className="text-sm text-purple-700 leading-relaxed">{aiComments[reportType][dateFilter]}</p>
+              <p className="text-sm text-purple-700 leading-relaxed">
+                {aiInsightLoading ? (
+                  <span className="flex items-center gap-2">
+                    <RefreshCw size={13} className="animate-spin" /> 
+                    AI analyzing your data...
+                  </span>
+                ) : aiInsight || "No insights available for this period."}
+              </p>
             </div>
           </div>
         </div>
@@ -432,7 +410,7 @@ export default function AnalysisPage() {
             {[
               { label: "Total Leads", value: reports.summary?.totalLeads || 0, trend: "+18%", color: "indigo" },
               { label: "Total Won", value: reports.summary?.wonDeals || 0, trend: "+23%", color: "emerald" },
-              { label: "Total Lost", value: lostDeals, trend: "-5%", color: "red" },
+              { label: "Total Lost", value: 0, trend: "-5%", color: "red" },
               { label: "Avg Conv. Rate", value: reports.summary?.winRate ? `${reports.summary.winRate}%` : "0%", trend: "+2.3%", color: "purple" },
             ].map(stat => (
               <div key={stat.label} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
@@ -532,7 +510,7 @@ export default function AnalysisPage() {
       {/* ===== STATUS WISE REPORT ===== */}
       {reportType === "status" && (
         <div className="space-y-5">
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {[
               {
                 label: "Total in Funnel",
@@ -557,12 +535,6 @@ export default function AnalysisPage() {
                 value: reports.summary?.winRate ? `${reports.summary.winRate}%` : "0%",
                 trend: "",
                 color: "purple"
-              },
-              {
-                label: "Total Lost",
-                value: lostDeals,
-                trend: "",
-                color: "red"
               },
             ].map(stat => (
               <div key={stat.label} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">

@@ -8,6 +8,7 @@ import {
 import { Toaster } from "sonner";
 import { useApp } from "../context/AppContext";
 import NotificationDropdown from "../components/NotificationDropdown";
+import TrialExpiredModal from "../components/TrialExpiredModal";
 
 const navItems = [
   { path: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
@@ -26,6 +27,7 @@ export default function Layout() {
     notifications, refreshData: ctxRefresh, loading: ctxLoading,
     backendOnline, logout, activities,
     unreadCount,
+    subscription,
   } = useApp();
 
 
@@ -34,6 +36,18 @@ export default function Layout() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const navigate = useNavigate();
+  const [showTrialModal, setShowTrialModal] = useState(false);
+
+  // ── Route protection for expired trials ──
+  useEffect(() => {
+    if (subscription && !subscription.is_trial_active && !subscription.is_subscription_active) {
+      const currentPath = window.location.pathname;
+      const allowedPaths = ['/billing', '/login', '/signup', '/payment-success', '/payment-failure'];
+      if (!allowedPaths.includes(currentPath)) {
+        setShowTrialModal(true);
+      }
+    }
+  }, [subscription]);
   
   
   const handleSearch = (query: string) => {
@@ -229,6 +243,18 @@ export default function Layout() {
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-medium text-white truncate">{currentUser.name}</div>
                   <div className="text-[10px] text-slate-400 truncate capitalize">{currentUser.department}</div>
+                  {subscription && (
+                    <div className="mt-1">
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${
+                        subscription.is_subscription_active ? 'bg-emerald-500/20 text-emerald-300' :
+                        subscription.is_trial_active ? 'bg-indigo-500/20 text-indigo-300' :
+                        'bg-red-500/20 text-red-300'
+                      }`}>
+                        {subscription.is_subscription_active ? (subscription.plan_type || 'Pro') :
+                         subscription.is_trial_active ? 'Free Trial' : 'Expired'}
+                      </span>
+                    </div>
+                  )}
                 </div>
                 <button onClick={handleLogout} className="p-1 hover:bg-white/10 rounded-lg transition-colors" title="Sign Out">
                   <LogOut size={13} className="text-slate-400" />
@@ -296,17 +322,10 @@ export default function Layout() {
 
             
 
-
           
 
 {/* Notifications */}
 <NotificationDropdown />
-
-
-
-
-
-
 
             {/* User Menu */}
             <div className="relative">
@@ -337,6 +356,16 @@ export default function Layout() {
                       ) : (
                         <span className="text-[10px] bg-emerald-100 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full flex items-center gap-1">
                           <User size={9} />User
+                        </span>
+                      )}
+                      {subscription && (
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium border ${
+                          subscription.is_subscription_active ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                          subscription.is_trial_active ? 'bg-indigo-50 text-indigo-700 border-indigo-200' :
+                          'bg-red-50 text-red-700 border-red-200'
+                        }`}>
+                          {subscription.is_subscription_active ? (subscription.plan_type || 'Pro') :
+                           subscription.is_trial_active ? 'Free Trial' : 'Expired'}
                         </span>
                       )}
                       {backendOnline && (
@@ -385,6 +414,11 @@ export default function Layout() {
           </div>
         </main>
       </div>
+      <TrialExpiredModal
+        isOpen={showTrialModal}
+        onClose={() => setShowTrialModal(false)}
+        onUpgrade={() => { setShowTrialModal(false); navigate('/billing'); }}
+      />
     </div>
   );
 }

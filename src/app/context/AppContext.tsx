@@ -797,9 +797,13 @@ useEffect(() => {
 
 
       //  FIRST DB INSERT
+      const token = getToken();
       const response = await fetch(`${import.meta.env.VITE_API_URL}/leads`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          Authorization: token ? `Bearer ${token}` : ""
+        },
         body: JSON.stringify({ name: dbPayload.name, email: dbPayload.email, phone: dbPayload.phone, company: dbPayload.company, source: dbPayload.source, status: dbPayload.status, industry: dbPayload.industry, value: dbPayload.value, notes: dbPayload.notes })
       });
       const inserted = await response.json();
@@ -830,9 +834,13 @@ industry: data.industry ? (toDbIndustry[data.industry as keyof typeof toDbIndust
     };
     // console.log("Dataa got is ", data);
     setLeads(prev => prev.map(l => l.id === id ? { ...l, ...data } : l));
+  const token = getToken();
   const response = await fetch(`${import.meta.env.VITE_API_URL}/leads/${id}`, {
   method: 'PUT',
-  headers: { 'Content-Type': 'application/json' },
+  headers: { 
+    'Content-Type': 'application/json',
+    Authorization: token ? `Bearer ${token}` : ""
+  },
   body: JSON.stringify(dbPayload)
 });
 
@@ -993,12 +1001,14 @@ owner_id: validUUID(lead.ownerId) ? lead.ownerId : null,
         aiscore: lead.aiScore || 50,
       }));
 
+      const token = getToken();
       const bulkResponse = await fetch(
         `${import.meta.env.VITE_API_URL}/leads/bulk`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            Authorization: token ? `Bearer ${token}` : ""
           },
           body: JSON.stringify({
             leads: leadsToInsert
@@ -1012,7 +1022,12 @@ owner_id: validUUID(lead.ownerId) ? lead.ownerId : null,
     }
 
     // ALWAYS REFRESH LEADS
-    const response = await fetch(`${import.meta.env.VITE_API_URL}/leads`);
+    const token = getToken();
+    const response = await fetch(`${import.meta.env.VITE_API_URL}/leads`, {
+      headers: {
+        Authorization: token ? `Bearer ${token}` : ""
+      }
+    });
 
     const data = await response.json();
 
@@ -1136,7 +1151,15 @@ owner_id: validUUID(lead.ownerId) ? lead.ownerId : null,
 
     console.log("Insert payload being sent:", insertPayload);
     
-    const dealResponse = await fetch(`${import.meta.env.VITE_API_URL}/deals`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(insertPayload) });
+    const token = getToken();
+    const dealResponse = await fetch(`${import.meta.env.VITE_API_URL}/deals`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: token ? `Bearer ${token}` : ""
+      },
+      body: JSON.stringify(insertPayload)
+    });
     //const insertedDeal = [await dealResponse.json()];
     const insertedDeal = await dealResponse.json();
     console.log(" Deal inserted successfully:", insertedDeal);
@@ -1174,10 +1197,13 @@ if (validUUID(data.ownerId)) {
     if (data.expectedClose !== undefined) payload.expectedclose = data.expectedClose;
     if (data.daysInStage !== undefined) payload.daysinstage = data.daysInStage;
 
+    const token = getToken();
     const response = await fetch(`${import.meta.env.VITE_API_URL}/deals/${id}`, {
-      
       method: "PUT",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${session?.access_token}` },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: token ? `Bearer ${token}` : ""
+      },
       body: JSON.stringify(payload),
     });
 
@@ -1202,11 +1228,12 @@ if (validUUID(data.ownerId)) {
 
 const deleteDeal = async (id: string): Promise<boolean> => {
   try {
+    const token = getToken();
     const response = await fetch(`${import.meta.env.VITE_API_URL}/deals/${id}`, {
       method: "DELETE",
-       headers: {
-    "Authorization": `Bearer ${session?.access_token}`
-  }
+      headers: {
+        Authorization: token ? `Bearer ${token}` : ""
+      }
     });
 
     if (!response.ok) {
@@ -1274,11 +1301,21 @@ const deleteDeal = async (id: string): Promise<boolean> => {
   try {
     console.log("=== Fetching deals from RDS...");
     
-const response = await fetch(`${import.meta.env.VITE_API_URL}/deals`);
-const allDeal = await response.json();      
+    const token = getToken();
+    const response = await fetch(`${import.meta.env.VITE_API_URL}/deals`, {
+      headers: {
+        Authorization: token ? `Bearer ${token}` : ""
+      }
+    });
+    const allDeal = await response.json();      
 
     console.log("✅ Raw deals from DB:", allDeal);
 
+    if (!Array.isArray(allDeal)) {
+      console.warn("importDeals received non-array data:", allDeal);
+      setDeals([]);
+      return;
+    }
 
     const dealData: Deal[] = allDeal.map((l: any) => ({
       id: l.id,
@@ -1680,10 +1717,12 @@ const resetDatabase = async (): Promise<void> => {
     toast.info("Resetting database...");
     
     // Yeh fetch backend se DELETE request bhejega
+    const token = getToken();
     const response = await fetch(`${import.meta.env.VITE_API_URL}/admin/reset-database`, {
       method: "DELETE",
       headers: {
         "Content-Type": "application/json",
+        Authorization: token ? `Bearer ${token}` : ""
       },
     });
 

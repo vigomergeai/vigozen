@@ -49,6 +49,8 @@ export default function SettingsPage() {
   const [billingHistory, setBillingHistory] = useState<any[]>([]);
   const [userCount, setUserCount] = useState(10);
   const [bundlePrice, setBundlePrice] = useState(1000);
+  const [payPeriod, setPayPeriod] = useState<'monthly' | 'yearly'>('monthly');
+const PRICE_PER_USER = 1300;
   const [notifications, setNotifications] = useState({
     emailLeads: true, emailDeals: true, emailReports: false,
     pushLeads: true, pushDeals: false, pushTeam: true,
@@ -143,14 +145,23 @@ export default function SettingsPage() {
   };
 
   // ── ADD THIS HANDLER ──
-  const handleUserCountChange = (count: number) => {
-    setUserCount(count);
-    setBundlePrice(calculatePrice(count));
-  };
+  //const handleUserCountChange = (count: number) => {
+    //setUserCount(count);
+    //setBundlePrice(calculatePrice(count));
+  //};
 
-  const calculatePrice = (count: number): number => {
-    return count * 100; // ₹100 per user
-  };
+  const handleUserCountChange = (count: number) => {
+  setUserCount(count);
+  setBundlePrice(calculatePrice(count, payPeriod));
+};
+
+  //const calculatePrice = (count: number): number => {
+    //return count * 100; // ₹100 per user
+ // };
+ const calculatePrice = (count: number, period: 'monthly' | 'yearly' = payPeriod): number => {
+  const monthly = count * PRICE_PER_USER;
+  return period === 'yearly' ? Math.round(monthly * 12 * 0.665) : monthly;
+};
 
   const submitToPayU = (payuUrl: string, payuData: Record<string, any>) => {
     const form = document.createElement('form');
@@ -1275,21 +1286,37 @@ export default function SettingsPage() {
                     <h4 className="font-bold text-indigo-800">Bundle Plan</h4>
                   </div>
                   <div className="p-5">
-                    <div className="flex flex-wrap items-end justify-between gap-4">
+                  <div className="flex flex-wrap items-end justify-between gap-4">
                       {/* Left side - Plan info */}
                       <div>
                         <div className="text-sm font-semibold text-slate-800">CRM</div>
-                        <div className="text-xs text-slate-500 mt-0.5">Standard Plan ₹1,300 /user /month</div>
+                        <div className="text-xs text-slate-500 mt-0.5">Standard Plan ₹{PRICE_PER_USER.toLocaleString()} /user /month</div>
                       </div>
 
                       {/* Middle - Pay Period */}
                       <div>
                         <div className="text-xs text-slate-400 mb-1">Pay Period</div>
                         <div className="flex gap-2">
-                          <button className="px-4 py-1.5 text-xs bg-indigo-600 text-white rounded-lg shadow-sm">Monthly</button>
-                          <button className="px-4 py-1.5 text-xs border border-slate-200 rounded-lg hover:bg-slate-50">Yearly</button>
+                          <button
+                            onClick={() => { setPayPeriod('monthly'); setBundlePrice(calculatePrice(userCount, 'monthly')); }}
+                            className={`px-4 py-1.5 text-xs rounded-lg transition-colors ${
+                              payPeriod === 'monthly' ? 'bg-indigo-600 text-white shadow-sm' : 'border border-slate-200 hover:bg-slate-50'
+                            }`}
+                          >
+                            Monthly
+                          </button>
+                          <button
+                            onClick={() => { setPayPeriod('yearly'); setBundlePrice(calculatePrice(userCount, 'yearly')); }}
+                            className={`px-4 py-1.5 text-xs rounded-lg transition-colors ${
+                              payPeriod === 'yearly' ? 'bg-indigo-600 text-white shadow-sm' : 'border border-slate-200 hover:bg-slate-50'
+                            }`}
+                          >
+                            Yearly
+                          </button>
                         </div>
                       </div>
+
+                     
 
                       {/* Middle - Users counter - DYNAMIC */}
                       <div>

@@ -11,7 +11,6 @@ const pool = require("./db");
 const notificationQueue = require("./server/notificationQueue");
 const notificationService = require("./server/notificationService");
 const { startNotificationWorker } = require("./server/notificationWorker");
-const crypto = require("crypto");
 
 require("dotenv").config();
 

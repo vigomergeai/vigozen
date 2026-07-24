@@ -151,11 +151,25 @@ export default function SettingsPage() {
   const calculatePrice = (count: number): number => {
     return count * 100; // ₹100 per user
   };
-<<<<<<< Updated upstream
+
+  const submitToPayU = (payuUrl: string, payuData: Record<string, any>) => {
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = payuUrl;
+    Object.entries(payuData).forEach(([key, value]) => {
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = key;
+      input.value = String(value);
+      form.appendChild(input);
+    });
+    document.body.appendChild(form);
+    form.submit();
+  };
 
   // ── Check if trial expired ──
-  const isLocked = subscription && 
-    !subscription.is_trial_active && 
+  const isLocked = subscription &&
+    !subscription.is_trial_active &&
     !subscription.is_subscription_active;
 
   if (isLocked) {
@@ -182,25 +196,6 @@ export default function SettingsPage() {
 
   // ── Purchase Bundle Handler ──
   const handlePurchaseBundle = async () => {
-=======
-const submitToPayU = (payuUrl: string, payuData: Record<string, any>) => {
-  const form = document.createElement('form');
-  form.method = 'POST';
-  form.action = payuUrl;
-  Object.entries(payuData).forEach(([key, value]) => {
-    const input = document.createElement('input');
-    input.type = 'hidden';
-    input.name = key;
-    input.value = String(value);
-    form.appendChild(input);
-  });
-  document.body.appendChild(form);
-  form.submit();
-};
-
-  // ── ADD THIS HANDLER ──
- const handlePurchaseBundle = async () => {
->>>>>>> Stashed changes
     try {
       const token = localStorage.getItem('token') || session?.access_token;
       if (!token) throw new Error("Not logged in");
@@ -219,7 +214,6 @@ const submitToPayU = (payuUrl: string, payuData: Record<string, any>) => {
       console.error(error);
     }
   };
-  // ── ADD THIS HANDLER ──
 
   const handleAddPaymentMethod = async () => {
     try {

@@ -151,6 +151,7 @@ export default function SettingsPage() {
   const calculatePrice = (count: number): number => {
     return count * 100; // ₹100 per user
   };
+<<<<<<< Updated upstream
 
   // ── Check if trial expired ──
   const isLocked = subscription && 
@@ -181,48 +182,43 @@ export default function SettingsPage() {
 
   // ── Purchase Bundle Handler ──
   const handlePurchaseBundle = async () => {
+=======
+const submitToPayU = (payuUrl: string, payuData: Record<string, any>) => {
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = payuUrl;
+  Object.entries(payuData).forEach(([key, value]) => {
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = key;
+    input.value = String(value);
+    form.appendChild(input);
+  });
+  document.body.appendChild(form);
+  form.submit();
+};
+
+  // ── ADD THIS HANDLER ──
+ const handlePurchaseBundle = async () => {
+>>>>>>> Stashed changes
     try {
       const token = localStorage.getItem('token') || session?.access_token;
       if (!token) throw new Error("Not logged in");
 
-      // Create PayU order
       const response = await api.payments.createOrder(bundlePrice, "INR", `bundle_${userCount}`, token);
 
-      if (response && (response.success || response.order_id)) {
-        toast.success(`Order ${response.order_id || response.txnid} created!`);
-        const form = document.createElement('form');
-        form.method = 'POST';
-        form.action = response.payuUrl || response.action || "https://test.payu.in/_payment";
-
-        const payuData: Record<string, any> = response.payuData || {
-          key: response.key || "PAYU_TEST_KEY",
-          txnid: response.txnid || response.order_id,
-          amount: response.amount || bundlePrice,
-          productinfo: "Vigozen CRM Bundle",
-          firstname: currentUser.name || "Customer",
-          email: currentUser.email || "customer@example.com",
-          hash: response.hash || "test_hash",
-          surl: `${window.location.origin}/settings?payment=success`,
-          furl: `${window.location.origin}/settings?payment=failed`,
-        };
-
-        Object.keys(payuData).forEach(key => {
-          const input = document.createElement('input');
-          input.type = 'hidden';
-          input.name = key;
-          input.value = String(payuData[key]);
-          form.appendChild(input);
-        });
-
-        document.body.appendChild(form);
-        form.submit();
+      if (!response?.success || !response?.payuData || !response?.payuUrl) {
+        toast.error("Could not create payment order. Please try again.");
+        return;
       }
+
+      toast.success(`Order ${response.txnid} created!`);
+      submitToPayU(response.payuUrl, response.payuData);
     } catch (error: any) {
       toast.error(error.message || 'Failed to create payment');
       console.error(error);
     }
   };
-
   // ── ADD THIS HANDLER ──
 
   const handleAddPaymentMethod = async () => {
@@ -233,30 +229,10 @@ export default function SettingsPage() {
       // Create order for saving card (minimal amount ₹1)
       const response = await api.payments.createOrder(1, "INR", "save_card", token);
 
-      if (response.success) {
-        // Create form and submit to PayU
-        const form = document.createElement('form');
-        form.method = 'POST';
-        form.action = response.payuUrl;
-
-        const payuData = response.payuData;
-        Object.keys(payuData).forEach(key => {
-          const input = document.createElement('input');
-          input.type = 'hidden';
-          input.name = key;
-          input.value = payuData[key];
-          form.appendChild(input);
-        });
-
-        // Add flag for saving card
-        const saveCardInput = document.createElement('input');
-        saveCardInput.type = 'hidden';
-        saveCardInput.name = 'udf2';
-        saveCardInput.value = 'save_card';
-        form.appendChild(saveCardInput);
-
-        document.body.appendChild(form);
-        form.submit();
+     if (response?.success && response?.payuData && response?.payuUrl) {
+        submitToPayU(response.payuUrl, { ...response.payuData, udf2: 'save_card' });
+      } else {
+        toast.error("Could not create payment order. Please try again.");
       }
     } catch (error) {
       toast.error('Failed to add payment method');
@@ -377,6 +353,7 @@ export default function SettingsPage() {
         setBillingHistory(data || []);
       } catch (error) {
         console.error("Error fetching billing history:", error);
+         toast.error("Failed to refresh billing history");
       }
     };
     fetchBillingHistory();
@@ -1295,8 +1272,7 @@ export default function SettingsPage() {
               <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
                 <div className="px-5 py-3 bg-slate-50 border-b flex justify-between items-center">
                   <h4 className="font-semibold text-slate-800">Billing History</h4>
-                  <button onClick={async () => {
-                  }} className="text-xs text-indigo-600 hover:text-indigo-700">Refresh</button>
+                  <button onClick={() => setBillingHistory([])} className="text-xs text-indigo-600 hover:text-indigo-700">Refresh</button>
                 </div>
 
                 {/* Bundle Plan Card - Updated with Dynamic Slider */}
@@ -1463,29 +1439,10 @@ export default function SettingsPage() {
                         // Create PayU order
                         const response = await api.payments.createOrder(planAmount, "INR", pendingPlan.name, token);
 
-                        if (response.success) {
-                          const form = document.createElement('form');
-                          form.method = 'POST';
-                          form.action = response.payuUrl;
-
-                          const payuData = response.payuData;
-                          Object.keys(payuData).forEach(key => {
-                            const input = document.createElement('input');
-                            input.type = 'hidden';
-                            input.name = key;
-                            input.value = payuData[key];
-                            form.appendChild(input);
-                          });
-
-                          // Add plan info
-                          const planInput = document.createElement('input');
-                          planInput.type = 'hidden';
-                          planInput.name = 'plan';
-                          planInput.value = planName;
-                          form.appendChild(planInput);
-
-                          document.body.appendChild(form);
-                          form.submit();
+                       if (response?.success && response?.payuData && response?.payuUrl) {
+                          submitToPayU(response.payuUrl, { ...response.payuData, plan: planName });
+                        } else {
+                          toast.error("Failed to process plan change");
                         }
                       } catch (error) {
                         toast.error('Failed to process plan change');

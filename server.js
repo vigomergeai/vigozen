@@ -223,6 +223,8 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"]
 }));
 
+// Explicitly handle all OPTIONS preflight requests (required for production CORS)
+app.options('*', cors());
 
 app.use(express.json());
 const upload = multer({

@@ -6,6 +6,7 @@ const cors = require("cors");
 const PDFDocument = require("pdfkit");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const pool = require("./db");
 const notificationQueue = require("./server/notificationQueue");
 const notificationService = require("./server/notificationService");
@@ -2339,6 +2340,124 @@ app.put("/users/:id/payment-method", authenticateToken, async (req, res) => {
   } catch (err) {
     console.error("PAYMENT REMOVE ERROR:", err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ── PayU: Create Order ─────────────────────────────────────
+app.post("/payments/create-order", authenticateToken, async (req, res) => {
+  try {
+    const { amount, currency, receipt } = req.body;
+
+    if (!amount || Number(amount) <= 0) {
+      return res.status(400).json({ error: "Invalid amount" });
+    }
+
+    const PAYU_KEY = process.env.PAYU_MERCHANT_KEY;
+    const PAYU_SALT = process.env.PAYU_MERCHANT_SALT;
+    const PAYU_BASE_URL =
+      process.env.PAYU_ENV === "LIVE"
+        ? "https://secure.payu.in/_payment"
+        : "https://test.payu.in/_payment";
+
+    if (!PAYU_KEY || !PAYU_SALT) {
+      console.error("PAYU credentials missing in .env");
+      return res.status(500).json({ error: "Payment gateway not configured" });
+    }
+
+    const txnid = "TXN" + Date.now() + Math.floor(Math.random() * 1000);
+    const formattedAmount = Number(amount).toFixed(2);
+    const productinfo = receipt || "Vigozen CRM Payment";
+    const firstname = req.user.name || "Customer";
+    const email = req.user.email || "customer@example.com";
+    const phone = req.user.phone || "9999999999";
+
+    // exact PayU hash sequence
+    const hashString = `${PAYU_KEY}|${txnid}|${formattedAmount}|${productinfo}|${firstname}|${email}|||||||||||${PAYU_SALT}`;
+    const hash = crypto.createHash("sha512").update(hashString).digest("hex");
+
+    await pool.query(
+      `INSERT INTO payments (user_id, order_id, amount, plan, status, created_at)
+       VALUES ($1, $2, $3, $4, 'pending', NOW())`,
+      [req.user.id, txnid, formattedAmount, productinfo]
+    );
+
+    const APP_URL = process.env.APP_URL || `${req.protocol}://${req.get("host")}`;
+
+    res.json({
+      success: true,
+      txnid,
+      payuUrl: PAYU_BASE_URL,
+      payuData: {
+        key: PAYU_KEY,
+        txnid,
+        amount: formattedAmount,
+        productinfo,
+        firstname,
+        email,
+        phone,
+        hash,
+        surl: `${APP_URL}/payments/callback`,
+        furl: `${APP_URL}/payments/callback`,
+      },
+    });
+  } catch (err) {
+    console.error("PAYU CREATE ORDER ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── PayU: Server-side callback (surl/furl land here first) ──
+app.post("/payments/callback", async (req, res) => {
+  try {
+    const { status, txnid, hash: receivedHash, email, firstname, amount, productinfo, mihpayid } = req.body;
+
+    const PAYU_KEY = process.env.PAYU_MERCHANT_KEY;
+    const PAYU_SALT = process.env.PAYU_MERCHANT_SALT;
+
+    const reverseHashString = `${PAYU_SALT}|${status}|||||||||||${email}|${firstname}|${productinfo}|${amount}|${txnid}|${PAYU_KEY}`;
+    const expectedHash = crypto.createHash("sha512").update(reverseHashString).digest("hex");
+
+    const hashValid = expectedHash === receivedHash;
+    const finalStatus = hashValid && status === "success" ? "success" : "failed";
+
+    await pool.query(
+      `UPDATE payments SET status = $1, payment_id = $2, updated_at = NOW() WHERE order_id = $3`,
+      [finalStatus, mihpayid || null, txnid]
+    );
+
+    const FRONTEND_URL = process.env.VITE_API_URL
+      ? process.env.VITE_API_URL.replace("api.", "")
+      : "https://vigomerge.com";
+
+    const redirectPath = finalStatus === "success" ? "/payment-success" : "/payment-failure";
+    const params = new URLSearchParams({ txnid, status: finalStatus, mihpayid: mihpayid || "" });
+
+    res.redirect(`${FRONTEND_URL}${redirectPath}?${params.toString()}`);
+  } catch (err) {
+    console.error("PAYU CALLBACK ERROR:", err);
+    res.redirect("https://vigomerge.com/payment-failure");
+  }
+});
+
+// ── PayU: Verify (called by frontend after redirect) ────────
+app.post("/payments/verify", authenticateToken, async (req, res) => {
+  try {
+    const { txnid, status } = req.body;
+
+    const result = await pool.query(
+      "SELECT * FROM payments WHERE order_id = $1 AND user_id = $2",
+      [txnid, req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: "Order not found" });
+    }
+
+    const payment = result.rows[0];
+    res.json({ success: payment.status === "success", status: payment.status });
+  } catch (err) {
+    console.error("PAYU VERIFY ERROR:", err);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 // ──────────────────────────────────────────────────────────────

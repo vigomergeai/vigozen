@@ -94,6 +94,9 @@ require("dotenv").config();
     `);
     await pool.query(`ALTER TABLE integrations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`).catch(() => {});
     await pool.query(`ALTER TABLE integrations ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`).catch(() => {});
+    await pool.query(`ALTER TABLE integrations ADD COLUMN IF NOT EXISTS config JSONB;`).catch(() => {});
+    await pool.query(`ALTER TABLE guides ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;`).catch(() => {});
+    await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS user_id UUID;`).catch(() => {});
     // Add missing columns to notifications table if they don't exist
     await pool.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS priority VARCHAR(20) DEFAULT 'medium';`).catch(() => {});
     await pool.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'sent';`).catch(() => {});
@@ -664,16 +667,16 @@ app.post("/users", authenticateToken, async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
+    const companyId = req.user?.company_id || null;
 
     const result = await pool.query(
-      `INSERT INTO users (name, email, password, role, employee_id, department, is_active, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, true, NOW())
-       RETURNING id, name, email, role, employee_id AS "employeeId", department, is_active AS "isActive", created_at AS "createdAt"`,
-      [name, email, hashedPassword, role || "user", employeeId || null, department || "sales"]
+      `INSERT INTO users (name, email, password, role, employee_id, department, is_active, company_id, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, true, $7, NOW())
+       RETURNING id, name, email, role, employee_id AS "employeeId", department, is_active AS "isActive", company_id AS "companyId", created_at AS "createdAt"`,
+      [name, email, hashedPassword, role || "user", employeeId || null, department || "sales", companyId]
     );
 
     const newUser = result.rows[0];
-    const companyId = req.user?.company_id;
 
     // Company-wide notification for new user
     if (companyId) {
@@ -2809,3 +2812,4 @@ app.listen(5000, "0.0.0.0", () => {
   console.log("Server running on port 5000");
   startNotificationWorker();
 });
+// Nodemon trigger restart comment

@@ -423,8 +423,10 @@ export default function AdminPage() {
       </div>
 
 
-      {/* Filters */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-4 flex flex-wrap gap-3 items-center">
+      {activeTab === "users" && (
+        <>
+          {/* Filters */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-4 flex flex-wrap gap-3 items-center">
         <div className="relative flex-1 min-w-48">
           <Search
             size={14}
@@ -653,6 +655,8 @@ export default function AdminPage() {
           </div>
         )}
       </div>
+      </>
+      )}
 
 
       {/* Audit Logs Tab */}

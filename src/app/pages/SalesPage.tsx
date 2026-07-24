@@ -122,9 +122,9 @@ export default function SalesPage() {
   }, [deals]);
 
   const dealsByStage = (stage: LeadStatus) => visibleDeals.filter(d => d.stage === stage);
-  const stageValue = (stage: LeadStatus) => dealsByStage(stage).reduce((s, d) => s + d.value, 0);
-  const totalPipeline = visibleDeals.filter(d => d.stage !== "Lost").reduce((s, d) => s + d.value * (d.probability / 100), 0);
-  const wonValue = visibleDeals.filter(d => d.stage === "Won").reduce((s, d) => s + d.value, 0);
+  const stageValue = (stage: LeadStatus) => dealsByStage(stage).reduce((s, d) => s + (Number(d.value) || 0), 0);
+  const totalPipeline = visibleDeals.filter(d => d.stage !== "Lost").reduce((s, d) => s + (Number(d.value) || 0) * (d.probability / 100), 0);
+  const wonValue = visibleDeals.filter(d => d.stage === "Won").reduce((s, d) => s + (Number(d.value) || 0), 0);
   const activeDeals = visibleDeals.filter(d => !["Won", "Lost"].includes(d.stage)).length;
 
   const handleDragStart = (dealId: string) => setDraggedDeal(dealId);
@@ -138,7 +138,7 @@ export default function SalesPage() {
   const forecastData = stages.filter(s => s !== "Lost").map(s => ({
     stage: s,
     value: stageValue(s),
-    weighted: dealsByStage(s).reduce((sum, d) => sum + d.value * (d.probability / 100), 0),
+    weighted: dealsByStage(s).reduce((sum, d) => sum + (Number(d.value) || 0) * (d.probability / 100), 0),
     count: dealsByStage(s).length,
   }));
 
@@ -225,7 +225,7 @@ export default function SalesPage() {
           { label: "Won (MTD)", value: formatCurrency(wonValue), icon: Trophy, color: "text-emerald-600", bg: "bg-emerald-50", trend: "+23%" },
           { label: "Pipeline Value", value: formatCurrency(totalPipeline), icon: TrendingUp, color: "text-indigo-600", bg: "bg-indigo-50", trend: "+12%" },
           { label: "Active Deals", value: activeDeals, icon: BarChart2, color: "text-blue-600", bg: "bg-blue-50", trend: `${activeDeals > 0 ? "+" : ""}${activeDeals}` },
-          { label: "Avg Deal Size", value: visibleDeals.length > 0 ? formatCurrency(visibleDeals.reduce((s, d) => s + d.value, 0) / visibleDeals.length) : "₹0", icon: Target, color: "text-purple-600", bg: "bg-purple-50", trend: "+8%" },
+          { label: "Avg Deal Size", value: visibleDeals.length > 0 ? formatCurrency(visibleDeals.reduce((s, d) => s + (Number(d.value) || 0), 0) / visibleDeals.length) : "₹0", icon: Target, color: "text-purple-600", bg: "bg-purple-50", trend: "+8%" },
         ].map(kpi => {
           const Icon = kpi.icon;
           return (

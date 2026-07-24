@@ -164,7 +164,7 @@ export default function DashboardPage() {
     const list = [];
     const wonCount = leads.filter(l => l.status === "Won").length;
     const hotCount = leads.filter(l => l.aiScore >= 80).length;
-    const pipelineVal = deals.filter(d => !["Won", "Lost"].includes(d.stage)).reduce((s, d) => s + d.value, 0);
+    const pipelineVal = deals.filter(d => !["Won", "Lost"].includes(d.stage)).reduce((s, d) => s + (Number(d.value) || 0), 0);
 
     if (hotCount > 0) {
       list.push({
@@ -280,39 +280,46 @@ export default function DashboardPage() {
   ];
 
   const liveActivities = activities;
+
+  // Pre-group deal values by leadId to achieve O(D) complexity
+  const dealsByLeadId = React.useMemo(() => {
+    const map: Record<string, number> = {};
+    deals.forEach((d: any) => {
+      if (d.leadId) {
+        map[d.leadId] = (map[d.leadId] || 0) + (Number(d.value) || 0);
+      }
+    });
+    return map;
+  }, [deals]);
+
   const leaderboardData = Object.values(
-  leads.reduce((acc: any, lead: any) => {
+    leads.reduce((acc: any, lead: any) => {
+      if (!lead.owner) return acc; // 🔥 skip unassigned
+      const owner = lead.owner;
 
-    if (!lead.owner) return acc; // 🔥 skip unassigned
+      if (!acc[owner]) {
+        acc[owner] = {
+          name: owner,
+          leads: 0,
+          won: 0,
+          revenue: 0,
+        };
+      }
 
-    const owner = lead.owner;
+      acc[owner].leads += 1;
 
-    if (!acc[owner]) {
-      acc[owner] = {
-        name: owner,
-        leads: 0,
-        won: 0,
-        revenue: 0,
-      };
-    }
+      if (lead.status === "Won") {
+        acc[owner].won += 1;
+        // O(1) lookup instead of O(D) array filtering inside loop
+        acc[owner].revenue += (dealsByLeadId[lead.id] || 0);
+      }
 
-    acc[owner].leads += 1;
-
-    if (lead.status === "Won") {
-      acc[owner].won += 1;
-
-      const relatedDeals = deals.filter((d: any) => d.leadId === lead.id);
-      const totalDealValue = relatedDeals.reduce((s: number, d: any) => s + d.value, 0);
-
-      acc[owner].revenue += totalDealValue;
-    }
-
-    return acc;
-  }, {})
-).map((emp: any) => ({
-  ...emp,
-  conversionRate: emp.leads > 0 ? Math.round((emp.won / emp.leads) * 100) : 0,
-}));
+      return acc;
+    }, {})
+  ).map((emp: any) => ({
+    ...emp,
+    conversionRate: emp.leads > 0 ? Math.round((emp.won / emp.leads) * 100) : 0,
+  }));
   const location = useLocation();
 
 useEffect(() => {

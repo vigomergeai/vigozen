@@ -1,20 +1,22 @@
-import React, { useEffect } from "react";
+import React, { useEffect, lazy, Suspense } from "react";
 import { createBrowserRouter, useNavigate } from "react-router";
 import { AppProvider } from "./context/AppContext";
 import { useApp } from "./context/AppContext";
 import Layout from "./components/Layout";
-import DashboardPage from "./pages/DashboardPage";
-import LeadsPage from "./pages/LeadsPage";
-import SalesPage from "./pages/SalesPage";
-import AnalysisPage from "./pages/AnalysisPage";
-import SupportPage from "./pages/SupportPage";
-import SettingsPage from "./pages/SettingsPage";
-import LoginPage from "./pages/LoginPage";
-import AdminPage from "./pages/AdminPage";
-import PaymentSuccess from "./pages/PaymentSuccess";  
-import PaymentFailure from "./pages/PaymentFailure"; 
-import BillingPage from "./pages/BillingPage";
 import { Loader2, Zap } from "lucide-react";
+
+// Lazy load route pages
+const DashboardPage = lazy(() => import("./pages/DashboardPage"));
+const LeadsPage = lazy(() => import("./pages/LeadsPage"));
+const SalesPage = lazy(() => import("./pages/SalesPage"));
+const AnalysisPage = lazy(() => import("./pages/AnalysisPage"));
+const SupportPage = lazy(() => import("./pages/SupportPage"));
+const SettingsPage = lazy(() => import("./pages/SettingsPage"));
+const LoginPage = lazy(() => import("./pages/LoginPage"));
+const AdminPage = lazy(() => import("./pages/AdminPage"));
+const PaymentSuccess = lazy(() => import("./pages/PaymentSuccess"));  
+const PaymentFailure = lazy(() => import("./pages/PaymentFailure")); 
+const BillingPage = lazy(() => import("./pages/BillingPage"));
 
 function NotFound() {
   return (
@@ -41,6 +43,15 @@ function AuthLoadingScreen() {
         <Loader2 size={20} className="text-indigo-400 animate-spin mt-2" />
       </div>
     </div>
+  );
+}
+
+// Helper to wrap lazy-loaded components with Suspense
+function LazyRoute({ Component }: { Component: React.ComponentType<any> }) {
+  return (
+    <Suspense fallback={<AuthLoadingScreen />}>
+      <Component />
+    </Suspense>
   );
 }
 
@@ -92,9 +103,6 @@ function RequireGuest({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-
-
-// Guard: admin only
 // Guard: redirect to /billing if subscription expired
 function RequireSubscription({ children }: { children: React.ReactNode }) {
   const { authLoading, isAuthenticated, subscription, subscriptionLoading } = useApp();
@@ -114,6 +122,7 @@ function RequireSubscription({ children }: { children: React.ReactNode }) {
   if (subscription && !subscription.is_trial_active && !subscription.is_subscription_active) return null;
   return <>{children}</>;
 }
+
 // Root with app provider + auth guard
 function Root() {
   return (
@@ -130,7 +139,7 @@ function LoginWrapper() {
   return (
     <AppProvider>
       <RequireGuest>
-        <LoginPage />
+        <LazyRoute Component={LoginPage} />
       </RequireGuest>
     </AppProvider>
   );
@@ -143,19 +152,19 @@ export const router = createBrowserRouter([
   },
   {
     path: "/payment-success",
-    Component: PaymentSuccess,
+    Component: () => <LazyRoute Component={PaymentSuccess} />,
   },
   {
     path: "/payment-failure",
-    Component: PaymentFailure,
+    Component: () => <LazyRoute Component={PaymentFailure} />,
   },
-  // ── ADD THIS BILLING ROUTE ──
+  // ── BILLING ROUTE ──
   {
     path: "/billing",
     Component: () => (
       <AppProvider>
         <RequireAuth>
-          <BillingPage />
+          <LazyRoute Component={BillingPage} />
         </RequireAuth>
       </AppProvider>
     ),
@@ -168,7 +177,7 @@ export const router = createBrowserRouter([
         index: true, 
         Component: () => (
           <RequireSubscription>
-            <DashboardPage />
+            <LazyRoute Component={DashboardPage} />
           </RequireSubscription>
         )
       },
@@ -176,7 +185,7 @@ export const router = createBrowserRouter([
         path: "leads", 
         Component: () => (
           <RequireSubscription>
-            <LeadsPage />
+            <LazyRoute Component={LeadsPage} />
           </RequireSubscription>
         )
       },
@@ -184,7 +193,7 @@ export const router = createBrowserRouter([
         path: "sales", 
         Component: () => (
           <RequireSubscription>
-            <SalesPage />
+            <LazyRoute Component={SalesPage} />
           </RequireSubscription>
         )
       },
@@ -192,19 +201,19 @@ export const router = createBrowserRouter([
         path: "analysis", 
         Component: () => (
           <RequireSubscription>
-            <AnalysisPage />
+            <LazyRoute Component={AnalysisPage} />
           </RequireSubscription>
         )
       },
       // Help and Settings - No subscription required
-      { path: "help", Component: SupportPage },
-      { path: "settings", Component: SettingsPage },
+      { path: "help", Component: () => <LazyRoute Component={SupportPage} /> },
+      { path: "settings", Component: () => <LazyRoute Component={SettingsPage} /> },
       // Admin - Admin only
       {
         path: "admin",
         Component: () => (
           <RequireAdmin>
-            <AdminPage />
+            <LazyRoute Component={AdminPage} />
           </RequireAdmin>
         ),
       },

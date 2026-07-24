@@ -338,7 +338,7 @@ const handleConvert = async (data: { title: string; value: number; stage: LeadSt
       { "Metric": "Won Leads", "Value": filtered.filter(l => l.status === "Won").length },
       { "Metric": "Lost Leads", "Value": filtered.filter(l => l.status === "Lost").length },
       { "Metric": "Hot Leads (AI≥80)", "Value": filtered.filter(l => l.aiScore >= 80).length },
-      { "Metric": "Total Pipeline Value (₹)", "Value": filtered.reduce((s, l) => s + l.value, 0) },
+      { "Metric": "Total Pipeline Value (₹)", "Value": filtered.reduce((s, l) => s + (Number(l.value) || 0), 0) },
       { "Metric": "Avg AI Score", "Value": filtered.length > 0 ? Math.round(filtered.reduce((s, l) => s + l.aiScore, 0) / filtered.length) : 0 },
       { "Metric": "Export Date", "Value": new Date().toLocaleDateString() },
     ];
@@ -1276,28 +1276,7 @@ useEffect(() => {
                               ) : (
                                 <p className="text-xs text-slate-700 mt-0.5 whitespace-pre-wrap">{comment.comment}</p>
                               )}
-                              {!isEditing && canEdit && (
-                                <div className="flex gap-2 mt-1.5">
-                                  <button
-                                    onClick={() => {
-                                      setEditingCommentId(comment.id);
-                                      setEditingCommentText(comment.comment);
-                                    }}
-                                    className="text-[10px] text-indigo-500 hover:text-indigo-700"
-                                  >
-                                    ✏️ Edit
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      setDeleteCommentData({ id: comment.id, text: comment.comment });
-                                      setShowDeleteCommentModal(true);
-                                    }}
-                                    className="text-[10px] text-red-500 hover:text-red-700"
-                                  >
-                                    🗑️ Delete
-                                  </button>
-                                </div>
-                              )}
+
                             </div>
                           </div>
                         </div>

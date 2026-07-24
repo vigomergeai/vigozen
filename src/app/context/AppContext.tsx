@@ -542,29 +542,39 @@ const logout = async () => {
       }
       console.log("TOKEN:", token);
 
+      // Core startup APIs required for dashboard landing
       await Promise.all([
         importLeads(),
         importDeals(),
-        importTickets(),
-        importIntegrations(),
-        importActivities(),
         fetchNotifications(),
       ]);
 
-      // Fetch employees/users from backend
-      try {
-        const empRes = await fetch(
-          `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/users`,
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
-        if (empRes.ok) {
-          const empData = await empRes.json();
-          setEmployees(empData.map((u: any) => ({ id: u.id, name: u.name || u.email })) || []);
-        }
-      } catch { /* ignore */ }
-
       setBackendOnline(true);
       setDataReady(true);
+
+      // Stagger non-critical startup APIs to background to optimize speed
+      setTimeout(async () => {
+        try {
+          await Promise.all([
+            importTickets(),
+            importIntegrations(),
+            importActivities(),
+          ]);
+
+          // Fetch employees/users from backend
+          const empRes = await fetch(
+            `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/users`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          if (empRes.ok) {
+            const empData = await empRes.json();
+            setEmployees(empData.map((u: any) => ({ id: u.id, name: u.name || u.email })) || []);
+          }
+        } catch (err) {
+          console.warn("Background startup data fetch failed:", err);
+        }
+      }, 300);
+
     } catch (e) {
       setBackendOnline(false);
       console.error("refreshData error:", e);
@@ -1328,7 +1338,8 @@ const deleteDeal = async (id: string): Promise<boolean> => {
       probability: l.probability || 50,
       expectedClose: l.expectedclose || "",  // Note: 'expectedclose' from DB
       daysInStage: l.daysinstage || 0,       // Note: 'daysinstage' from DB
-      createdAt: l.created_at ? l.created_at.split("T")[0] : ""
+      createdAt: l.created_at ? l.created_at.split("T")[0] : "",
+      lead_id: l.lead_id || null,
     }));
 
     console.log("✅ Formatted deals:", dealData.length);

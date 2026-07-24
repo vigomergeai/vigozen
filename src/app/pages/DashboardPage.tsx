@@ -285,8 +285,9 @@ export default function DashboardPage() {
   const dealsByLeadId = React.useMemo(() => {
     const map: Record<string, number> = {};
     deals.forEach((d: any) => {
-      if (d.leadId) {
-        map[d.leadId] = (map[d.leadId] || 0) + (Number(d.value) || 0);
+      const lid = d.lead_id || d.leadId;
+      if (lid) {
+        map[lid] = (map[lid] || 0) + (Number(d.value) || 0);
       }
     });
     return map;

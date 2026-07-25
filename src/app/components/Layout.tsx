@@ -20,7 +20,7 @@ const navItems = [
 ];
 
 export default function Layout() {
-  
+
   const {
     role, setRole, currentUser, userProfile,
     sidebarCollapsed, setSidebarCollapsed,
@@ -48,21 +48,21 @@ export default function Layout() {
       }
     }
   }, [subscription]);
-  
-  
+
+
   const handleSearch = (query: string) => {
-  const q = query.toLowerCase();
+    const q = query.toLowerCase();
 
-  if (q.includes("lead")) return navigate("/leads");
-  if (q.includes("sale")) return navigate("/sales");
-  if (q.includes("analysis") || q.includes("report")) return navigate("/analysis");
-  if (q.includes("help") || q.includes("support")) return navigate("/help");
-  if (q.includes("setting")) return navigate("/settings");
-  if (q.includes("admin")) return navigate("/admin");
+    if (q.includes("lead")) return navigate("/leads");
+    if (q.includes("sale")) return navigate("/sales");
+    if (q.includes("analysis") || q.includes("report")) return navigate("/analysis");
+    if (q.includes("help") || q.includes("support")) return navigate("/help");
+    if (q.includes("setting")) return navigate("/settings");
+    if (q.includes("admin")) return navigate("/admin");
 
-  // default
-  navigate("/");
-};
+    // default
+    navigate("/");
+  };
   useEffect(() => {
     const savedTheme = localStorage.getItem("theme");
     if (savedTheme === "dark") {
@@ -71,7 +71,7 @@ export default function Layout() {
     }
   }, []);
   const [searchQuery, setSearchQuery] = useState("");
-  
+
 
   // unreadCount comes directly from context (notifUnreadCount alias removed)
 
@@ -105,9 +105,9 @@ export default function Layout() {
         {/* Logo */}
         <div className="flex items-center gap-3 px-4 py-5 border-b border-white/10">
           <div className="flex-shrink-0 w-9 h-9 rounded-xl overflow-hidden shadow-lg border border-white/10 bg-indigo-600 flex items-center justify-center">
-            <img 
-              src="/logo.png" 
-              alt="VigoZen CRM" 
+            <img
+              src="/logo.png"
+              alt="VigoZen CRM"
               className="w-full h-full object-cover"
             />
           </div>
@@ -166,8 +166,12 @@ export default function Layout() {
               {({ isActive }) => (
                 <>
                   {isActive && <div className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-6 bg-indigo-300 rounded-r-full" />}
-                  <Icon size={18} className={`flex-shrink-0 ${isActive ? "text-white" : "text-slate-400 group-hover:text-white"}`} />
-                  {!sidebarCollapsed && <span className="text-sm">{label}</span>}
+                  <Icon size={18} className={`flex-shrink-0 transition-colors ${isActive ? "text-white" : "text-slate-400 group-hover:text-white"}`} />
+                  {!sidebarCollapsed && (
+                    <span className={`text-sm transition-colors ${isActive ? "text-white font-medium" : "text-slate-400 group-hover:text-white"}`}>
+                      {label}
+                    </span>
+                  )}
                   {sidebarCollapsed && (
                     <div className="absolute left-full ml-2 px-2 py-1 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50 shadow-lg">
                       {label}
@@ -214,18 +218,20 @@ export default function Layout() {
 
         {/* AI Assistant */}
         {!sidebarCollapsed && (
-          <div className="mx-3 mb-3 p-4 rounded-xl bg-gradient-to-br from-indigo-600/30 to-purple-600/30 border border-indigo-500/20">
-            <div className="flex items-center gap-2 mb-1.5">
-              <Bot size={14} className="text-indigo-300" />
+          <div className="mx-3 mb-3 p-4 rounded-xl bg-gradient-to-br from-indigo-600/20 to-purple-600/20 border border-indigo-500/20 hover:border-indigo-500/40 transition-all duration-300">
+            <div className="flex items-center gap-2 mb-2">
+              <div className="p-1.5 rounded-lg bg-indigo-500/20">
+                <Bot size={14} className="text-indigo-300" />
+              </div>
               <span className="text-xs text-indigo-200 font-medium">AI Assistant</span>
               <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse ml-auto" />
             </div>
-            <p className="text-[11px] text-slate-400 leading-relaxed">
-              5 high-priority leads need attention today.
+            <p className="text-[11px] text-slate-300 leading-relaxed">
+              {subscription?.is_trial_active ? 'Your trial ends soon. Upgrade to unlock full AI features.' : '5 high-priority leads need attention today.'}
             </p>
             <button
               onClick={() => navigate("/analysis")}
-              className="mt-2 w-full text-[11px] bg-indigo-500/30 hover:bg-indigo-500/50 text-indigo-200 py-1.5 rounded-lg transition-colors"
+              className="mt-2.5 w-full text-[11px] font-medium bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-200 py-1.5 rounded-lg transition-all duration-200 border border-indigo-500/10 hover:border-indigo-500/30"
             >
               View AI Insights →
             </button>
@@ -235,29 +241,40 @@ export default function Layout() {
         {/* User section */}
         <div className="border-t border-white/10 p-3">
           <div className="flex items-center gap-2">
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-white text-xs font-semibold flex-shrink-0 ${role === "admin" ? "bg-gradient-to-br from-purple-500 to-indigo-600" : "bg-gradient-to-br from-emerald-500 to-teal-600"}`}>
-              {currentUser.avatar}
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-white text-xs font-semibold flex-shrink-0 overflow-hidden ${role === "admin" ? "bg-gradient-to-br from-purple-500 to-indigo-600" : "bg-gradient-to-br from-emerald-500 to-teal-600"}`}>
+              {userProfile?.avatar_url ? (
+                <img
+                  src={userProfile.avatar_url.startsWith('http') ? userProfile.avatar_url : `http://localhost:5000${userProfile.avatar_url}`}
+                  alt={currentUser.name}
+                  className="w-full h-full object-cover"
+                  onError={(e) => {
+                    e.currentTarget.style.display = 'none';
+                    e.currentTarget.parentElement!.innerHTML = currentUser.avatar;
+                  }}
+                />
+              ) : (
+                currentUser.avatar
+              )}
             </div>
             {!sidebarCollapsed && (
               <>
                 <div className="flex-1 min-w-0">
-                  <div className="text-xs font-medium text-white truncate">{currentUser.name}</div>
-                  <div className="text-[10px] text-slate-400 truncate capitalize">{currentUser.department}</div>
+                  <div className="text-xs font-medium text-white truncate">{currentUser.name || 'User'}</div>
+                  <div className="text-[10px] text-slate-400 truncate capitalize">{currentUser.department || role || 'Member'}</div>
                   {subscription && (
                     <div className="mt-1">
-                      <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${
-                        subscription.is_subscription_active ? 'bg-emerald-500/20 text-emerald-300' :
-                        subscription.is_trial_active ? 'bg-indigo-500/20 text-indigo-300' :
-                        'bg-red-500/20 text-red-300'
-                      }`}>
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${subscription.is_subscription_active ? 'bg-emerald-500/20 text-emerald-300' :
+                          subscription.is_trial_active ? 'bg-indigo-500/20 text-indigo-300' :
+                            'bg-red-500/20 text-red-300'
+                        }`}>
                         {subscription.is_subscription_active ? (subscription.plan_type || 'Pro') :
-                         subscription.is_trial_active ? 'Free Trial' : 'Expired'}
+                          subscription.is_trial_active ? 'Free Trial' : 'Expired'}
                       </span>
                     </div>
                   )}
                 </div>
-                <button onClick={handleLogout} className="p-1 hover:bg-white/10 rounded-lg transition-colors" title="Sign Out">
-                  <LogOut size={13} className="text-slate-400" />
+                <button onClick={handleLogout} className="p-1.5 hover:bg-white/10 rounded-lg transition-colors" title="Sign Out">
+                  <LogOut size={13} className="text-slate-400 hover:text-white transition-colors" />
                 </button>
               </>
             )}
@@ -275,17 +292,17 @@ export default function Layout() {
 
           {/* Search */}
           <div className="flex-1 max-w-md relative">
-            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500"/>
-         <input
-  onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") {
-      const value = (e.target as HTMLInputElement).value;
-      handleSearch(value);
-    }
-  }}
-  placeholder="Search leads, deals, contacts..."
-  className="w-full pl-9 pr-4 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 transition-all"
-/>
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500" />
+            <input
+              onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
+                if (e.key === "Enter") {
+                  const value = (e.target as HTMLInputElement).value;
+                  handleSearch(value);
+                }
+              }}
+              placeholder="Search leads, deals, contacts..."
+              className="w-full pl-9 pr-4 py-2 text-sm bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 transition-all"
+            />
             <kbd className="absolute right-3 top-1/2 -translate-y-1/2 hidden sm:inline-flex text-[10px] text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded px-1.5 py-0.5">⌘K</kbd>
           </div>
 
@@ -320,12 +337,12 @@ export default function Layout() {
               {darkMode ? <Sun size={17} className="text-amber-500" /> : <Moon size={17} className="text-slate-500" />}
             </button>
 
-            
 
-          
 
-{/* Notifications */}
-<NotificationDropdown />
+
+
+            {/* Notifications */}
+            <NotificationDropdown />
 
             {/* User Menu */}
             <div className="relative">
@@ -333,8 +350,20 @@ export default function Layout() {
                 onClick={() => { setShowUserMenu(!showUserMenu); setShowNotifications(false); }}
                 className="flex items-center gap-2 pl-2 pr-3 py-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
               >
-                <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-white text-xs font-semibold ${role === "admin" ? "bg-gradient-to-br from-purple-500 to-indigo-600" : "bg-gradient-to-br from-emerald-500 to-teal-600"}`}>
-                  {currentUser.avatar}
+                <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-white text-xs font-semibold overflow-hidden ${role === "admin" ? "bg-gradient-to-br from-purple-500 to-indigo-600" : "bg-gradient-to-br from-emerald-500 to-teal-600"}`}>
+                  {userProfile?.avatar_url ? (
+                    <img
+                      src={userProfile.avatar_url.startsWith('http') ? userProfile.avatar_url : `http://localhost:5000${userProfile.avatar_url}`}
+                      alt={currentUser.name}
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        e.currentTarget.style.display = 'none';
+                        e.currentTarget.parentElement!.innerHTML = currentUser.avatar;
+                      }}
+                    />
+                  ) : (
+                    currentUser.avatar
+                  )}
                 </div>
                 <div className="hidden sm:block text-left">
                   <div className="text-xs font-semibold text-slate-800 dark:text-slate-100 leading-tight">{currentUser.name}</div>
@@ -346,8 +375,27 @@ export default function Layout() {
               {showUserMenu && (
                 <div className="absolute right-0 top-full mt-2 w-56 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-xl z-50 overflow-hidden">
                   <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-700 bg-gradient-to-br from-slate-50 to-indigo-50 dark:from-slate-800 dark:to-slate-900">
-                    <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">{currentUser.name}</div>
-                    <div className="text-xs text-slate-400 dark:text-slate-300">{currentUser.email}</div>
+                    <div className="flex items-center gap-3 mb-2">
+                      <div className={`w-10 h-10 rounded-lg flex items-center justify-center text-white text-sm font-semibold overflow-hidden ${role === "admin" ? "bg-gradient-to-br from-purple-500 to-indigo-600" : "bg-gradient-to-br from-emerald-500 to-teal-600"}`}>
+                        {userProfile?.avatar_url ? (
+                          <img
+                            src={userProfile.avatar_url.startsWith('http') ? userProfile.avatar_url : `http://localhost:5000${userProfile.avatar_url}`}
+                            alt={currentUser.name}
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              e.currentTarget.style.display = 'none';
+                              e.currentTarget.parentElement!.innerHTML = currentUser.avatar;
+                            }}
+                          />
+                        ) : (
+                          currentUser.avatar
+                        )}
+                      </div>
+                      <div>
+                        <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">{currentUser.name}</div>
+                        <div className="text-xs text-slate-400 dark:text-slate-300">{currentUser.email}</div>
+                      </div>
+                    </div>
                     <div className="mt-1.5 flex items-center gap-1.5">
                       {role === "admin" ? (
                         <span className="text-[10px] bg-purple-100 text-purple-700 border border-purple-200 px-2 py-0.5 rounded-full flex items-center gap-1">
@@ -359,13 +407,12 @@ export default function Layout() {
                         </span>
                       )}
                       {subscription && (
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium border ${
-                          subscription.is_subscription_active ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium border ${subscription.is_subscription_active ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
                           subscription.is_trial_active ? 'bg-indigo-50 text-indigo-700 border-indigo-200' :
-                          'bg-red-50 text-red-700 border-red-200'
-                        }`}>
+                            'bg-red-50 text-red-700 border-red-200'
+                          }`}>
                           {subscription.is_subscription_active ? (subscription.plan_type || 'Pro') :
-                           subscription.is_trial_active ? 'Free Trial' : 'Expired'}
+                            subscription.is_trial_active ? 'Free Trial' : 'Expired'}
                         </span>
                       )}
                       {backendOnline && (
@@ -376,7 +423,7 @@ export default function Layout() {
                     </div>
                   </div>
                   <div className="py-1">
-                    
+
                     <button onClick={() => { navigate("/settings"); setShowUserMenu(false); }} className="w-full text-left px-4 py-2 text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700">Profile Settings</button>
                     {role === "admin" && (
                       <button onClick={() => { navigate("/admin"); setShowUserMenu(false); }} className="w-full text-left px-4 py-2 text-sm text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-900/30 flex items-center gap-2">

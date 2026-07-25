@@ -29,10 +29,10 @@ export interface UserProfile {
   isActive: boolean;
   createdAt: string;
   lastLogin: string | null;
-    avatar_url?: string;
-    phone?: string;       
-  company?: string;     
-  timezone?: string;     
+  avatar_url?: string | null;  // ← Make sure this is included
+  phone?: string;
+  company?: string;
+  timezone?: string;
   language?: string;
   two_fa_enabled?: boolean;
   subscription_renewal_date?: string;
@@ -80,14 +80,15 @@ interface UserSettings {
   [key: string]: any;
 }
 export interface SubscriptionStatus {
-  trial_start: string;
-  trial_end: string;
+  trial_start?: string;
+  trial_end?: string;
   days_remaining: number;
-  subscription_status: 'TRIAL' | 'ACTIVE' | 'EXPIRED' | 'CANCELLED';
-  payment_status: 'PAID' | 'UNPAID' | 'PENDING';
-  plan_type: string;
+  subscription_status: 'TRIAL' | 'ACTIVE' | 'EXPIRED' | 'CANCELLED' | string;
+  payment_status?: 'PAID' | 'UNPAID' | 'PENDING' | string;
+  plan_type?: string;
   is_trial_active: boolean;
   is_subscription_active: boolean;
+  is_trialing?: boolean;  // ← ADD THIS for compatibility
 }
 interface AppContextType {
   // Auth
@@ -95,7 +96,7 @@ interface AppContextType {
   userProfile: UserProfile | null;
   authLoading: boolean;
   isAuthenticated: boolean;
-  
+
   login: (email: string, password: string) => Promise<{ error: string | null; user?: any }>;
   signup: (
     email: string,
@@ -111,6 +112,7 @@ interface AppContextType {
     name: string;
     email: string;
     avatar: string;
+    avatar_url?: string | null;  // ← ADD THIS
     department: string;
     employeeId: string;
   };
@@ -159,11 +161,11 @@ interface AppContextType {
   updateLead: (id: string, data: Partial<Lead>) => Promise<boolean>;
   deleteLead: (id: string) => Promise<boolean>;
   bulkDeleteLeads: (ids: string[]) => Promise<boolean>;
- 
+
   importLeads: (newLeads?: Partial<Lead>[]) => Promise<{ imported: number }>;
 
   // Deal CRUD
-    // Deal CRUD
+  // Deal CRUD
   addDeal: (data: Partial<Deal>) => Promise<Deal | null>;
   updateDeal: (id: string, data: Partial<Deal>) => Promise<boolean>;
   deleteDeal: (id: string) => Promise<boolean>;
@@ -178,8 +180,8 @@ interface AppContextType {
   // Integration  
   toggleIntegration: (id: string) => Promise<boolean>;
   syncIntegration: (id: string) => Promise<boolean>;
-  addIntegration: (data: Partial<Integration>) => Promise<Integration | null>;  
-  updateIntegration: (id: string, data: Partial<Integration>) => Promise<boolean>;  
+  addIntegration: (data: Partial<Integration>) => Promise<Integration | null>;
+  updateIntegration: (id: string, data: Partial<Integration>) => Promise<boolean>;
 
   // Ticket CRUD
   addTicket: (data: Partial<Ticket>) => Promise<Ticket | null>;
@@ -204,12 +206,12 @@ interface AppContextType {
   // Utilities
   refreshData: () => Promise<void>;
   resetDatabase: () => Promise<void>;
-   revenueForecast: RevenueForecast | null;  // ← ADD THIS
+  revenueForecast: RevenueForecast | null;  // ← ADD THIS
   refreshRevenueForecast: () => Promise<void>;  // ← ADD THIS
   subscription: SubscriptionStatus | null;
   subscriptionLoading: boolean;
 }
-  
+
 export interface LeadComment {
   id: string;
   lead_id: string;
@@ -296,14 +298,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     Others: "others",
   };
 
-    // ── Subscription ──
+  // ── Subscription ──
   const fetchSubscriptionStatus = async () => {
     const token = getToken();
     if (!token) return;
     setSubscriptionLoading(true);
     try {
       const data = await api.subscription.status(token);
-      setSubscription(data);
+      // Ensure all required fields exist
+      setSubscription({
+        ...data,
+        is_trialing: data.is_trial_active || false,
+        days_remaining: data.days_remaining || 0,
+      });
     } catch (error) {
       console.error("Failed to fetch subscription:", error);
     } finally {
@@ -331,6 +338,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             access_token: token,
             user: { id: user.id, email: user.email },
           });
+          // ✅ Use 'user' instead of undefined 'data'
           setUserProfile({
             id: user.id,
             email: user.email,
@@ -340,7 +348,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
             department: user.department || "",
             isActive: user.is_active !== false,
             createdAt: user.created_at || new Date().toISOString(),
-            lastLogin: null,
+            lastLogin: user.last_login || null,
+            avatar_url: user.avatar_url || null,
           });
           setRole((user.role as Role) || "user");
           // Load saved settings from localStorage
@@ -360,174 +369,192 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
 
-const loadUserProfile = async (id: string) => {
-  try {
-    const token = localStorage.getItem("token") || "";
-    const res = await fetch(
-      `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/users/${id}`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-    if (!res.ok) { console.log("loadUserProfile: not found"); return; }
-    const data = await res.json();
-    if (data) {
-      setUserProfile(data);
-      setRole(data.role as Role);
-      const settings = {
-        name: data.name,
-        email: data.email,
-        phone: data.phone || "",
-        company: data.company || "",
-        role: data.department || "",
-        timezone: data.timezone || "Asia/Kolkata",
-        language: data.language || "English",
-      };
-      setUserSettings(settings);
-      localStorage.setItem("userSettings", JSON.stringify(settings));
-    }
-  } catch (e) {
-    console.log("loadUserProfile error:", e);
-  }
-};
+  const loadUserProfile = async (id: string) => {
+    try {
+      const token = localStorage.getItem("token") || "";
+      const res = await fetch(
+        `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/users/${id}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (!res.ok) { console.log("loadUserProfile: not found"); return; }
+      const data = await res.json();
+      if (data) {
+        // Ensure avatar_url is preserved
+        const profileData = {
+          ...data,
+          avatar_url: data.avatar_url || null,
+        };
+        setUserProfile(profileData);
+        setRole(data.role as Role);
 
-const login = async (
-  email: string,
-  password: string
-): Promise<{ error: string | null; user?: any }> => {
-  try {
-    const response = await fetch(
-      `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/auth/login`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        // Also update localStorage user with avatar_url
+        const storedUser = JSON.parse(localStorage.getItem('user') || '{}');
+        localStorage.setItem('user', JSON.stringify({
+          ...storedUser,
+          ...profileData,
+          avatar_url: profileData.avatar_url
+        }));
+
+        const settings = {
+          name: data.name,
+          email: data.email,
+          phone: data.phone || "",
+          company: data.company || "",
+          role: data.department || "",
+          timezone: data.timezone || "Asia/Kolkata",
+          language: data.language || "English",
+        };
+        setUserSettings(settings);
+        localStorage.setItem("userSettings", JSON.stringify(settings));
       }
-    );
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      return { error: data.error || "Login failed" };
+    } catch (e) {
+      console.log("loadUserProfile error:", e);
     }
+  };
 
-    // Save JWT token and user to localStorage
-    localStorage.setItem("token", data.token);
-    localStorage.setItem("user", JSON.stringify(data.user));
+  const login = async (
+    email: string,
+    password: string
+  ): Promise<{ error: string | null; user?: any }> => {
+    try {
+      const response = await fetch(
+        `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/auth/login`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password }),
+        }
+      );
 
-    // Update session and profile state
-    setSession({
-      access_token: data.token,
-      user: { id: data.user.id, email: data.user.email },
-    });
-    setUserProfile({
-      id: data.user.id,
-      email: data.user.email,
-      name: data.user.name,
-      role: data.user.role || "user",
-      employeeId: data.user.employee_id || null,
-      department: data.user.department || "",
-      isActive: data.user.is_active !== false,
-      createdAt: data.user.created_at || new Date().toISOString(),
-      lastLogin: new Date().toISOString(),
-    });
-    setRole((data.user.role as Role) || "user");
-    setTimeout(() => fetchSubscriptionStatus(), 100);
+      const data = await response.json();
 
-    // Also save to userName so hooks can display it
-    localStorage.setItem("userName", data.user.name || data.user.email);
-
-    console.log("LOGIN SUCCESS:", data.user);
-    return { error: null, user: data.user };
-  } catch (e) {
-    return { error: String(e) };
-  }
-};
-
-const signup = async (
-  email: string,
-  password: string,
-  name: string
-): Promise<{ error: string | null }> => {
-  try {
-    const response = await fetch(
-      `${import.meta.env.VITE_API_URL}/auth/signup`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          name,
-          email,
-          password,
-        }),
+      if (!response.ok) {
+        return { error: data.error || "Login failed" };
       }
-    );
 
-    const data = await response.json();
+      // Save JWT token and user to localStorage
+      localStorage.setItem("token", data.token);
+      localStorage.setItem("user", JSON.stringify(data.user));
 
-    if (!response.ok) {
-      return { error: data.error };
+      // Update session and profile state
+      setSession({
+        access_token: data.token,
+        user: { id: data.user.id, email: data.user.email },
+      });
+      setUserProfile({
+        id: data.user.id,
+        email: data.user.email,
+        name: data.user.name,
+        role: data.user.role || "user",
+        employeeId: data.user.employee_id || null,
+        department: data.user.department || "",
+        isActive: true,
+        createdAt: new Date().toISOString(),
+        lastLogin: new Date().toISOString(),
+        avatar_url: data.user.avatar_url || null,  // ← ADD THIS
+      });
+      setRole((data.user.role as Role) || "user");
+      setTimeout(() => fetchSubscriptionStatus(), 100);
+
+      // Also save to userName so hooks can display it
+      localStorage.setItem("userName", data.user.name || data.user.email);
+
+      console.log("LOGIN SUCCESS:", data.user);
+      return { error: null, user: data.user };
+    } catch (e) {
+      return { error: String(e) };
     }
+  };
 
-    // Save JWT token and user to localStorage
-    localStorage.setItem("token", data.token);
-    localStorage.setItem("user", JSON.stringify(data.user));
-    localStorage.setItem("userName", data.user.name || data.user.email);
+  const signup = async (
+    email: string,
+    password: string,
+    name: string
+  ): Promise<{ error: string | null }> => {
+    try {
+      const response = await fetch(
+        `${import.meta.env.VITE_API_URL}/auth/signup`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            name,
+            email,
+            password,
+          }),
+        }
+      );
 
-    // Update session and profile state
-    setSession({
-      access_token: data.token,
-      user: { id: data.user.id, email: data.user.email },
-    });
-    setUserProfile({
-      id: data.user.id,
-      email: data.user.email,
-      name: data.user.name,
-      role: data.user.role || "user",
-      employeeId: data.user.employee_id || null,
-      department: data.user.department || "",
-      isActive: true,
-      createdAt: new Date().toISOString(),
-      lastLogin: new Date().toISOString(),
-    });
-    setRole((data.user.role as Role) || "user");
-    setTimeout(() => fetchSubscriptionStatus(), 100);
+      const data = await response.json();
 
-    console.log("SIGNUP SUCCESS:", data.user);
+      if (!response.ok) {
+        return { error: data.error };
+      }
 
-    return { error: null };
-  } catch (error) {
-    return { error: String(error) };
-  }
-};
+      // Save JWT token and user to localStorage
+      localStorage.setItem("token", data.token);
+      localStorage.setItem("user", JSON.stringify(data.user));
+      localStorage.setItem("userName", data.user.name || data.user.email);
 
-const logout = async () => {
-  // Clear auth data from localStorage
-  localStorage.removeItem("token");
-  localStorage.removeItem("user");
-  localStorage.removeItem("userSettings");
-  localStorage.removeItem("userProfile");
-  localStorage.removeItem("userName");
+      // Update session and profile state
+      setSession({
+        access_token: data.token,
+        user: { id: data.user.id, email: data.user.email },
+      });
+      setUserProfile({
+        id: data.user.id,
+        email: data.user.email,
+        name: data.user.name,
+        role: data.user.role || "user",
+        employeeId: data.user.employee_id || null,
+        department: data.user.department || "",
+        isActive: true,
+        createdAt: new Date().toISOString(),
+        lastLogin: new Date().toISOString(),
+        avatar_url: data.user.avatar_url || null,  // ✅ ADD THIS
+      });
+      setRole((data.user.role as Role) || "user");
+      setTimeout(() => fetchSubscriptionStatus(), 100);
 
-  setSession(null);
-  setUserProfile(null);
-  setRole("user");
+      console.log("SIGNUP SUCCESS:", data.user);
 
-  toast.success("Logged out successfully!");
-};
+      return { error: null };
+    } catch (error) {
+      return { error: String(error) };
+    }
+  };
+
+  const logout = async () => {
+    // Clear auth data from localStorage
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+    localStorage.removeItem("userSettings");
+    localStorage.removeItem("userProfile");
+    localStorage.removeItem("userName");
+
+    setSession(null);
+    setUserProfile(null);
+    setRole("user");
+
+    toast.success("Logged out successfully!");
+  };
   // ── Current user ───────────────────────────────────────────────────────────
- const currentUser = {
-  name: userProfile?.name || "User",
-  email: userProfile?.email || "",
-  avatar: (userProfile?.name || "User")
-    .split(" ")
-    .map(n => n[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase(),
-  department: userProfile?.department || "Not Assigned",
-  employeeId: userProfile?.employeeId || "",
-};
+  const currentUser = {
+    name: userProfile?.name || "User",
+    email: userProfile?.email || "",
+    avatar: (userProfile?.name || "User")
+      .split(" ")
+      .map(n => n[0])
+      .join("")
+      .slice(0, 2)
+      .toUpperCase(),
+    avatar_url: userProfile?.avatar_url || null,  // ← ADD THIS
+    department: userProfile?.department || "Not Assigned",
+    employeeId: userProfile?.employeeId || "",
+  };
+
   const isAuthenticated = !!session && !!session.access_token;
 
   // ── Backend sync ───────────────────────────────────────────────────────────
@@ -584,30 +611,30 @@ const logout = async () => {
   }, [session]);
 
   const loadSettings = useCallback(async () => {
-  try {
-    //  Load from localStorage
-    const saved = localStorage.getItem("userSettings");
-    if (saved) {
-      setUserSettings(JSON.parse(saved));
+    try {
+      //  Load from localStorage
+      const saved = localStorage.getItem("userSettings");
+      if (saved) {
+        setUserSettings(JSON.parse(saved));
+      }
+    } catch {
+      // ignore
     }
-  } catch {
-    // ignore
-  }
-}, []);
+  }, []);
 
   //useEffect(() => { refreshData(); }, []);
-useEffect(() => {
-  if (session && userProfile?.id) {
-//importLeads();
+  useEffect(() => {
+    if (session && userProfile?.id) {
+      //importLeads();
 
-    refreshData();
-    loadSettings();
-  }
-}, [session, userProfile?.id]); // Add userProfile.id dependency
-// Auto-refresh revenue forecast when deals change
-useEffect(() => {
-  refreshRevenueForecast();
-}, []);
+      refreshData();
+      loadSettings();
+    }
+  }, [session, userProfile?.id]); // Add userProfile.id dependency
+  // Auto-refresh revenue forecast when deals change
+  useEffect(() => {
+    refreshRevenueForecast();
+  }, []);
   // ── Sync helpers ───────────────────────────────────────────────────────────
   async function trySyncCreate<T>(apiFn: () => Promise<T>): Promise<T | null> {
     if (!backendOnline) return null;
@@ -618,8 +645,10 @@ useEffect(() => {
     try { await apiFn(); } catch { /* ignore */ }
   }
 
-  const getToken = () => localStorage.getItem("token") || session?.access_token;
-
+  const getToken = (): string | null => {
+    const token = localStorage.getItem("token") || session?.access_token;
+    return token || null;
+  };
   // ── User Management (Admin) ────────────────────────────────────────────────
   const loadUsers = async () => {
     const token = getToken();
@@ -789,40 +818,40 @@ useEffect(() => {
         aiScore: newLead.aiScore || 50,
         //tags: newLead.tags || [],
       };
-   console.log("FINAL INSERT PAYLOAD:", JSON.stringify({
-  name: dbPayload.name,
-  email: dbPayload.email,
-  phone: dbPayload.phone,
-  company: dbPayload.company,
-  source: dbPayload.source,
-  status: dbPayload.status,
-  industry: dbPayload.industry,
-  value: dbPayload.value,
-  probability: dbPayload.probability,
-  owner: dbPayload.owner,
-  //owner: dbPayload.owner || userProfile?.name,
-  notes: dbPayload.notes,
-  aiscore: dbPayload.aiScore
-}, null, 2));
+      console.log("FINAL INSERT PAYLOAD:", JSON.stringify({
+        name: dbPayload.name,
+        email: dbPayload.email,
+        phone: dbPayload.phone,
+        company: dbPayload.company,
+        source: dbPayload.source,
+        status: dbPayload.status,
+        industry: dbPayload.industry,
+        value: dbPayload.value,
+        probability: dbPayload.probability,
+        owner: dbPayload.owner,
+        //owner: dbPayload.owner || userProfile?.name,
+        notes: dbPayload.notes,
+        aiscore: dbPayload.aiScore
+      }, null, 2));
 
 
       //  FIRST DB INSERT
       const token = getToken();
       const response = await fetch(`${import.meta.env.VITE_API_URL}/leads`, {
         method: "POST",
-        headers: { 
+        headers: {
           "Content-Type": "application/json",
           Authorization: token ? `Bearer ${token}` : ""
         },
-        body: JSON.stringify({ 
-          name: dbPayload.name, 
-          email: dbPayload.email, 
-          phone: dbPayload.phone, 
-          company: dbPayload.company, 
-          source: dbPayload.source, 
-          status: dbPayload.status, 
-          industry: dbPayload.industry, 
-          value: dbPayload.value, 
+        body: JSON.stringify({
+          name: dbPayload.name,
+          email: dbPayload.email,
+          phone: dbPayload.phone,
+          company: dbPayload.company,
+          source: dbPayload.source,
+          status: dbPayload.status,
+          industry: dbPayload.industry,
+          value: dbPayload.value,
           notes: dbPayload.notes,
           probability: dbPayload.probability,
           aiscore: dbPayload.aiScore,
@@ -832,6 +861,7 @@ useEffect(() => {
 
       if (!response.ok) {
         const errorText = await response.text();
+        toast.error(`Failed to create lead: ${errorText}`);
         throw new Error(`Failed to create lead: ${response.status} - ${errorText}`);
       }
 
@@ -857,25 +887,25 @@ useEffect(() => {
     const dbPayload = {
       ...data,
       status: data.status ? (toDbStatus[data.status as keyof typeof toDbStatus] ?? "new") : "new",
-source: data.source ? (toDbSource[data.source as keyof typeof toDbSource] ?? "website") : "website",
-industry: data.industry ? (toDbIndustry[data.industry as keyof typeof toDbIndustry] ?? "technology") : "technology",
+      source: data.source ? (toDbSource[data.source as keyof typeof toDbSource] ?? "website") : "website",
+      industry: data.industry ? (toDbIndustry[data.industry as keyof typeof toDbIndustry] ?? "technology") : "technology",
     };
     // console.log("Dataa got is ", data);
     setLeads(prev => prev.map(l => l.id === id ? { ...l, ...data } : l));
-  const token = getToken();
-  const response = await fetch(`${import.meta.env.VITE_API_URL}/leads/${id}`, {
-  method: 'PUT',
-  headers: { 
-    'Content-Type': 'application/json',
-    Authorization: token ? `Bearer ${token}` : ""
-  },
-  body: JSON.stringify(dbPayload)
-});
+    const token = getToken();
+    const response = await fetch(`${import.meta.env.VITE_API_URL}/leads/${id}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: token ? `Bearer ${token}` : ""
+      },
+      body: JSON.stringify(dbPayload)
+    });
 
-if (!response.ok) {
-  toast.error("Cannot Update Lead");
-  return false;
-}
+    if (!response.ok) {
+      toast.error("Cannot Update Lead");
+      return false;
+    }
     toast.success("Lead updated successfully!");
     return true;
   };
@@ -898,7 +928,7 @@ if (!response.ok) {
     }
   };
 
-    // ── Lead Comments (Internal Conversation) ──
+  // ── Lead Comments (Internal Conversation) ──
   const fetchLeadComments = async (leadId: string) => {
     const token = getToken();
     if (!token) {
@@ -979,129 +1009,129 @@ if (!response.ok) {
     }
   };
 
-const bulkDeleteLeads = async (ids: string[]): Promise<boolean> => {
-  const token = getToken();
-  if (!token) {
-    toast.error("Not logged in");
-    return false;
-  }
-  try {
-    // ✅ Filter only UUIDs before sending
-    const validIds = ids.filter(id =>
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
-    );
-
-    if (validIds.length === 0) {
-      toast.error("No valid UUIDs to delete");
+  const bulkDeleteLeads = async (ids: string[]): Promise<boolean> => {
+    const token = getToken();
+    if (!token) {
+      toast.error("Not logged in");
       return false;
     }
-
-    await api.leads.bulkDelete(validIds, token);
-
-    setLeads(prev => prev.filter(l => !validIds.includes(l.id)));
-    toast.success(`${validIds.length} leads deleted`);
-    return true;
-  } catch (error: any) {
-    console.error("Bulk delete error:", error);
-    toast.error(error.message || "Cannot bulk delete leads");
-    return false;
-  }
-};
-const importLeads = async (newLeads?: Partial<Lead>[]): Promise<{ imported: number }> => {
-  try {
-
-    // INSERT NEW LEADS
-    if (newLeads && newLeads.length > 0) {
-
-      const leadsToInsert = newLeads.map(lead => ({
-        name: lead.name || "No Name",
-        email: lead.email || null,
-        phone: lead.phone || null,
-        company: lead.company || "Unknown",
-        source: toDbSource[lead.source as LeadSource] || "website",
-        status: toDbStatus[lead.status as LeadStatus] || "new",
-        industry: toDbIndustry[lead.industry as Industry] || "technology",
-        value: lead.value || 0,
-        probability: lead.probability || 50,
-        owner: lead.owner || currentUser.name,
-owner_id: validUUID(lead.ownerId) ? lead.ownerId : null,
-        notes: lead.notes || null,
-        aiscore: lead.aiScore || 50,
-      }));
-
-      const token = getToken();
-      const bulkResponse = await fetch(
-        `${import.meta.env.VITE_API_URL}/leads/bulk`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: token ? `Bearer ${token}` : ""
-          },
-          body: JSON.stringify({
-            leads: leadsToInsert
-          }),
-        }
+    try {
+      // ✅ Filter only UUIDs before sending
+      const validIds = ids.filter(id =>
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
       );
 
-      if (!bulkResponse.ok) {
-        throw new Error("Bulk insert failed");
+      if (validIds.length === 0) {
+        toast.error("No valid UUIDs to delete");
+        return false;
       }
-    }
 
-    // ALWAYS REFRESH LEADS
-    const token = getToken();
-    const response = await fetch(`${import.meta.env.VITE_API_URL}/leads`, {
-      headers: {
-        Authorization: token ? `Bearer ${token}` : ""
+      await api.leads.bulkDelete(validIds, token);
+
+      setLeads(prev => prev.filter(l => !validIds.includes(l.id)));
+      toast.success(`${validIds.length} leads deleted`);
+      return true;
+    } catch (error: any) {
+      console.error("Bulk delete error:", error);
+      toast.error(error.message || "Cannot bulk delete leads");
+      return false;
+    }
+  };
+  const importLeads = async (newLeads?: Partial<Lead>[]): Promise<{ imported: number }> => {
+    try {
+
+      // INSERT NEW LEADS
+      if (newLeads && newLeads.length > 0) {
+
+        const leadsToInsert = newLeads.map(lead => ({
+          name: lead.name || "No Name",
+          email: lead.email || null,
+          phone: lead.phone || null,
+          company: lead.company || "Unknown",
+          source: toDbSource[lead.source as LeadSource] || "website",
+          status: toDbStatus[lead.status as LeadStatus] || "new",
+          industry: toDbIndustry[lead.industry as Industry] || "technology",
+          value: lead.value || 0,
+          probability: lead.probability || 50,
+          owner: lead.owner || currentUser.name,
+          owner_id: validUUID(lead.ownerId) ? lead.ownerId : null,
+          notes: lead.notes || null,
+          aiscore: lead.aiScore || 50,
+        }));
+
+        const token = getToken();
+        const bulkResponse = await fetch(
+          `${import.meta.env.VITE_API_URL}/leads/bulk`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: token ? `Bearer ${token}` : ""
+            },
+            body: JSON.stringify({
+              leads: leadsToInsert
+            }),
+          }
+        );
+
+        if (!bulkResponse.ok) {
+          throw new Error("Bulk insert failed");
+        }
       }
-    });
 
-    const data = await response.json();
+      // ALWAYS REFRESH LEADS
+      const token = getToken();
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/leads`, {
+        headers: {
+          Authorization: token ? `Bearer ${token}` : ""
+        }
+      });
 
-    if (!Array.isArray(data)) {
-      setLeads([]);
-      return { imported: 0 };
+      const data = await response.json();
+
+      if (!Array.isArray(data)) {
+        setLeads([]);
+        return { imported: 0 };
+      }
+
+      const formatted = data.map((l) => ({
+        lastContact: l.last_contact ?? new Date().toISOString(),
+        id: l.id,
+        name: l.name || "",
+        email: l.email || "",
+        phone: l.phone || "",
+        company: l.company || "",
+        status: (fromDbStatus[l.status] ?? "New") as LeadStatus,
+        source: (fromDbSource[l.source] ?? "Website") as LeadSource,
+        industry: (fromDbIndustry[l.industry] ?? "Technology") as Industry,
+        value: Number(l.value) || 0,
+        probability: Number(l.probability) || 0,
+        aiScore: Number(l.aiscore) || 50,
+        owner: l.owner || "",
+        ownerId: l.owner_id || null,
+        notes: l.notes || "",
+        createdAt: l.created_at
+          ? l.created_at.split("T")[0]
+          : new Date().toISOString().split("T")[0],
+        tags: l.tags || [],
+        converted_to_deal: !!l.converted_to_deal,
+        deal_id: l.deal_id || null,
+      }));
+
+      console.log("RAW API DATA:", data);
+      console.log("FORMATTED LEADS:", formatted);
+
+      setLeads(formatted);
+
+      return {
+        imported: formatted.length,
+      };
+
+    } catch (err) {
+      console.error("Import Leads Error:", err);
+      throw err;
     }
-
-    const formatted = data.map((l) => ({
-      lastContact: l.last_contact ?? new Date().toISOString(),
-      id: l.id,
-      name: l.name || "",
-      email: l.email || "",
-      phone: l.phone || "",
-      company: l.company || "",
-      status: (fromDbStatus[l.status] ?? "New") as LeadStatus,
-      source: (fromDbSource[l.source] ?? "Website") as LeadSource,
-      industry: (fromDbIndustry[l.industry] ?? "Technology") as Industry,
-      value: Number(l.value) || 0,
-      probability: Number(l.probability) || 0,
-      aiScore: Number(l.aiscore) || 50,
-      owner: l.owner || "",
-      ownerId: l.owner_id || null,
-      notes: l.notes || "",
-      createdAt: l.created_at
-        ? l.created_at.split("T")[0]
-        : new Date().toISOString().split("T")[0],
-      tags: l.tags || [],
-      converted_to_deal: !!l.converted_to_deal,
-      deal_id: l.deal_id || null,
-    }));
-
-    console.log("RAW API DATA:", data);
-    console.log("FORMATTED LEADS:", formatted);
-
-    setLeads(formatted);
-
-    return {
-      imported: formatted.length,
-    };
-
-  } catch (err) {
-    console.error("Import Leads Error:", err);
-    throw err;
-  }
-};
+  };
   // const importLeads = async (newLeads: Partial<Lead>[]): Promise<{ imported: number }> => {
   //   console.log("Function is called");
   //   const {data, error} = await supabase.from('leads').select('*');
@@ -1129,16 +1159,16 @@ owner_id: validUUID(lead.ownerId) ? lead.ownerId : null,
   // };
 
   // ── Deal CRUD ──────────────────────────────────────────────────────────────
-    // ── Deal Helper Maps ────────────────────────────────────────────────────────
+  // ── Deal Helper Maps ────────────────────────────────────────────────────────
   const toDbDealStage: Record<string, string> = {
-  New: "New",
-  Contacted: "Contacted",
-  Qualified: "Qualified",
-  Proposal: "Proposal",
-  Negotiation: "Negotiation",
-  Won: "Won",
-  Lost: "Lost",
-};
+    New: "New",
+    Contacted: "Contacted",
+    Qualified: "Qualified",
+    Proposal: "Proposal",
+    Negotiation: "Negotiation",
+    Won: "Won",
+    Lost: "Lost",
+  };
 
   const fromDbDealStage = Object.fromEntries(
     Object.entries(toDbDealStage).map(([k, v]) => [v, k])
@@ -1146,140 +1176,141 @@ owner_id: validUUID(lead.ownerId) ? lead.ownerId : null,
 
   // ── Deal CRUD ──────────────────────────────────────────────────────────────
   const addDeal = async (data: Partial<Deal>): Promise<Deal | null> => {
-  try {
-    console.log("=== addDeal called with data:", data);
-    
-    const newDeal: Deal = {
-      id: uid("d"),
-      daysInStage: 0,
-      probability: 50,
-      expectedClose: "",
-      title: "",
-      company: "",
-      value: 0,
-      stage: "New" as LeadStatus,
-      owner: currentUser.name,
-      ownerId: currentUser.employeeId,
-      ...data,
-    };
+    try {
+      console.log("=== addDeal called with data:", data);
 
-    const dbStage = toDbDealStage[newDeal.stage] || "New";
-    
-    // Create payload - REMOVE owner_id or set to null
-    const insertPayload = {
-      title: newDeal.title || "Untitled Deal",
-      company: newDeal.company || "",
-      value: Number(newDeal.value) || 0,
-      stage: dbStage,
-      owner: newDeal.owner || currentUser.name,
-      probability: Number(newDeal.probability) || 50,
-      expectedclose: newDeal.expectedClose || null,
-      daysinstage: Number(newDeal.daysInStage) || 0,
-    };
+      const newDeal: Deal = {
+        id: uid("d"),
+        daysInStage: 0,
+        probability: 50,
+        expectedClose: "",
+        title: "",
+        company: "",
+        value: 0,
+        stage: "New" as LeadStatus,
+        owner: currentUser.name,
+        ownerId: currentUser.employeeId,
+        ...data,
+      };
 
-    console.log("Insert payload being sent:", insertPayload);
-    
-    const token = getToken();
-    const dealResponse = await fetch(`${import.meta.env.VITE_API_URL}/deals`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: token ? `Bearer ${token}` : ""
-      },
-      body: JSON.stringify(insertPayload)
-    });
-    //const insertedDeal = [await dealResponse.json()];
-    const insertedDeal = await dealResponse.json();
-    console.log(" Deal inserted successfully:", insertedDeal);
-    
-    //const finalDeal = { ...newDeal, id: insertedDeal[0]?.id };
-    const finalDeal = { ...newDeal, id: insertedDeal?.id };
-    setDeals(prev => [finalDeal, ...prev]);
-    toast.success(`Deal "${newDeal.title}" created!`);
-    
-    await importDeals();
-    
-    return finalDeal;
-    
-  } catch (error: any) {
-    console.error("🔥 Error in addDeal:", error);
-    toast.error(`Something went wrong: ${error?.message || "Unknown error"}`);
-    return null;
-  }
-};  
-const updateDeal = async (id: string, data: Partial<Deal>): Promise<boolean> => {
-  try {
-    const payload: any = {};
+      const dbStage = toDbDealStage[newDeal.stage] || "New";
 
-    if (data.title !== undefined) payload.title = data.title;
-    if (data.company !== undefined) payload.company = data.company;
-    if (data.value !== undefined) payload.value = data.value;
-    if (data.stage !== undefined) payload.stage = toDbDealStage[data.stage];
-    if (data.owner !== undefined) payload.owner = data.owner;
-if (validUUID(data.ownerId)) {
-  payload.owner_id = data.ownerId;
-} else {
-  payload.owner_id = null;
-}
-    if (data.probability !== undefined) payload.probability = data.probability;
-    if (data.expectedClose !== undefined) payload.expectedclose = data.expectedClose;
-    if (data.daysInStage !== undefined) payload.daysinstage = data.daysInStage;
+      // Create payload - REMOVE owner_id or set to null
+      const insertPayload = {
+        title: newDeal.title || "Untitled Deal",
+        company: newDeal.company || "",
+        value: Number(newDeal.value) || 0,
+        stage: dbStage,
+        owner: newDeal.owner || currentUser.name,
+        probability: Number(newDeal.probability) || 50,
+        expectedclose: newDeal.expectedClose || null,
+        daysinstage: Number(newDeal.daysInStage) || 0,
+        lead_id: (newDeal as any).lead_id || null,
+      };
 
-    const token = getToken();
-    const response = await fetch(`${import.meta.env.VITE_API_URL}/deals/${id}`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: token ? `Bearer ${token}` : ""
-      },
-      body: JSON.stringify(payload),
-    });
+      console.log("Insert payload being sent:", insertPayload);
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      toast.error(`Update failed: ${errorText}`);
-      return false;
+      const token = getToken();
+      const dealResponse = await fetch(`${import.meta.env.VITE_API_URL}/deals`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: token ? `Bearer ${token}` : ""
+        },
+        body: JSON.stringify(insertPayload)
+      });
+      //const insertedDeal = [await dealResponse.json()];
+      const insertedDeal = await dealResponse.json();
+      console.log(" Deal inserted successfully:", insertedDeal);
+
+      //const finalDeal = { ...newDeal, id: insertedDeal[0]?.id };
+      const finalDeal = { ...newDeal, id: insertedDeal?.id };
+      setDeals(prev => [finalDeal, ...prev]);
+      toast.success(`Deal "${newDeal.title}" created!`);
+
+      await importDeals();
+
+      return finalDeal;
+
+    } catch (error: any) {
+      console.error("🔥 Error in addDeal:", error);
+      toast.error(`Something went wrong: ${error?.message || "Unknown error"}`);
+      return null;
     }
+  };
+  const updateDeal = async (id: string, data: Partial<Deal>): Promise<boolean> => {
+    try {
+      const payload: any = {};
 
-    // ✅ Fresh data from backend
-    await importDeals();
-    toast.success("Deal updated successfully!");
-    return true;
-  } catch (error) {
-    console.error("Update error:", error);
-    toast.error("Cannot Update Deal");
-    return false;
-  }
-};
-   
-      
-
-const deleteDeal = async (id: string): Promise<boolean> => {
-  try {
-    const token = getToken();
-    const response = await fetch(`${import.meta.env.VITE_API_URL}/deals/${id}`, {
-      method: "DELETE",
-      headers: {
-        Authorization: token ? `Bearer ${token}` : ""
+      if (data.title !== undefined) payload.title = data.title;
+      if (data.company !== undefined) payload.company = data.company;
+      if (data.value !== undefined) payload.value = data.value;
+      if (data.stage !== undefined) payload.stage = toDbDealStage[data.stage];
+      if (data.owner !== undefined) payload.owner = data.owner;
+      if (validUUID(data.ownerId)) {
+        payload.owner_id = data.ownerId;
+      } else {
+        payload.owner_id = null;
       }
-    });
+      if (data.probability !== undefined) payload.probability = data.probability;
+      if (data.expectedClose !== undefined) payload.expectedclose = data.expectedClose;
+      if (data.daysInStage !== undefined) payload.daysinstage = data.daysInStage;
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      toast.error(`Delete failed: ${errorText}`);
+      const token = getToken();
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/deals/${id}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: token ? `Bearer ${token}` : ""
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        toast.error(`Update failed: ${errorText}`);
+        return false;
+      }
+
+      // ✅ Fresh data from backend
+      await importDeals();
+      toast.success("Deal updated successfully!");
+      return true;
+    } catch (error) {
+      console.error("Update error:", error);
+      toast.error("Cannot Update Deal");
       return false;
     }
+  };
 
-    // ✅ Fresh data from backend
-    await importDeals();
-    toast.success("Deal deleted successfully!");
-    return true;
-  } catch (error) {
-    console.error("Delete error:", error);
-    toast.error("Cannot Delete Deal");
-    return false;
-  }
-};
+
+
+  const deleteDeal = async (id: string): Promise<boolean> => {
+    try {
+      const token = getToken();
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/deals/${id}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: token ? `Bearer ${token}` : ""
+        }
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        toast.error(`Delete failed: ${errorText}`);
+        return false;
+      }
+
+      // ✅ Fresh data from backend
+      await importDeals();
+      toast.success("Deal deleted successfully!");
+      return true;
+    } catch (error) {
+      console.error("Delete error:", error);
+      toast.error("Cannot Delete Deal");
+      return false;
+    }
+  };
 
   // ── Convert Lead to Deal ──
   const convertLeadToDeal = async (lead: any, dealData: any): Promise<Deal | null> => {
@@ -1314,10 +1345,10 @@ const deleteDeal = async (id: string): Promise<boolean> => {
 
       // Refresh data
       await refreshData();
-      
+
       toast.success('Lead converted to Deal successfully!');
       return newDeal;
-      
+
     } catch (error) {
       console.error('Convert lead to deal error:', error);
       toast.error('Failed to convert lead to deal');
@@ -1325,164 +1356,164 @@ const deleteDeal = async (id: string): Promise<boolean> => {
     }
   };
 
- const importDeals = async () => {
-  try {
-    console.log("=== Fetching deals from RDS...");
-    
-    const token = getToken();
-    const response = await fetch(`${import.meta.env.VITE_API_URL}/deals`, {
-      headers: {
-        Authorization: token ? `Bearer ${token}` : ""
+  const importDeals = async () => {
+    try {
+      console.log("=== Fetching deals from RDS...");
+
+      const token = getToken();
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/deals`, {
+        headers: {
+          Authorization: token ? `Bearer ${token}` : ""
+        }
+      });
+      const allDeal = await response.json();
+
+      console.log("✅ Raw deals from DB:", allDeal);
+
+      if (!Array.isArray(allDeal)) {
+        console.warn("importDeals received non-array data:", allDeal);
+        setDeals([]);
+        return;
       }
-    });
-    const allDeal = await response.json();      
 
-    console.log("✅ Raw deals from DB:", allDeal);
-
-    if (!Array.isArray(allDeal)) {
-      console.warn("importDeals received non-array data:", allDeal);
-      setDeals([]);
-      return;
-    }
-
-    const dealData: Deal[] = allDeal.map((l: any) => ({
-      id: l.id,
-      title: l.title || "",
-      company: l.company || "",
-      value: l.value || 0,
-      stage: (fromDbDealStage[l.stage] || "New") as LeadStatus,
-      owner: l.owner || "",
-      ownerId: l.owner_id || null,
-      probability: l.probability || 50,
-      expectedClose: l.expectedclose || "",  // Note: 'expectedclose' from DB
-      daysInStage: l.daysinstage || 0,       // Note: 'daysinstage' from DB
-      createdAt: l.created_at ? l.created_at.split("T")[0] : "",
-      lead_id: l.lead_id || null,
-    }));
-
-    console.log("✅ Formatted deals:", dealData.length);
-    setDeals(dealData);
-    
-  } catch (error) {
-    console.error("🔥 Error in importDeals:", error);
-    toast.error("Server Issue Loading Deals");
-  }
-}
-
-const importTickets = async () => {
-  try {
-    const token = getToken();
-    if (!token) return;
-    const data = await api.tickets.list(token);
-    if (Array.isArray(data)) {
-      const formatted = data.map((t: any) => ({
-        id: t.id,
-        title: t.title || "",
-        status: t.status || "Open",
-        priority: t.priority || "Medium",
-        createdAt: t.created_at ? t.created_at.split("T")[0] : new Date().toISOString().split("T")[0],
-        category: t.category || "General",
-        description: t.description || "",
-        ownerId: t.owner_id || null,
-        ownerName: t.owner_name || "",
-        assignedTo: t.assigned_to || null,
-        assignedToName: t.assigned_to_name || "",
+      const dealData: Deal[] = allDeal.map((l: any) => ({
+        id: l.id,
+        title: l.title || "",
+        company: l.company || "",
+        value: l.value || 0,
+        stage: (fromDbDealStage[l.stage] || "New") as LeadStatus,
+        owner: l.owner || "",
+        ownerId: l.owner_id || null,
+        probability: l.probability || 50,
+        expectedClose: l.expectedclose || "",  // Note: 'expectedclose' from DB
+        daysInStage: l.daysinstage || 0,       // Note: 'daysinstage' from DB
+        createdAt: l.created_at ? l.created_at.split("T")[0] : "",
+        lead_id: l.lead_id || null,
       }));
-      setTickets(formatted);
-    }
-  } catch (error) {
-    console.error("Failed to load tickets from backend:", error);
-  }
-};
 
-const importIntegrations = async () => {
-  try {
+      console.log("✅ Formatted deals:", dealData.length);
+      setDeals(dealData);
+
+    } catch (error) {
+      console.error("🔥 Error in importDeals:", error);
+      toast.error("Server Issue Loading Deals");
+    }
+  }
+
+  const importTickets = async () => {
+    try {
+      const token = getToken();
+      if (!token) return;
+      const data = await api.tickets.list(token);
+      if (Array.isArray(data)) {
+        const formatted = data.map((t: any) => ({
+          id: t.id,
+          title: t.title || "",
+          status: t.status || "Open",
+          priority: t.priority || "Medium",
+          createdAt: t.created_at ? t.created_at.split("T")[0] : new Date().toISOString().split("T")[0],
+          category: t.category || "General",
+          description: t.description || "",
+          ownerId: t.owner_id || null,
+          ownerName: t.owner_name || "",
+          assignedTo: t.assigned_to || null,
+          assignedToName: t.assigned_to_name || "",
+        }));
+        setTickets(formatted);
+      }
+    } catch (error) {
+      console.error("Failed to load tickets from backend:", error);
+    }
+  };
+
+  const importIntegrations = async () => {
+    try {
+      const token = getToken();
+      if (!token) return;
+      const data = await api.integrations.list(token);
+      if (Array.isArray(data)) {
+        setIntegrations(data);
+      }
+    } catch (error) {
+      console.error("Failed to load integrations from backend:", error);
+    }
+  };
+
+  const importActivities = async () => {
+    try {
+      const token = getToken();
+      if (!token) return;
+      const data = await api.activities.list(token);
+      if (Array.isArray(data)) {
+        setActivities(data);
+      }
+    } catch (error) {
+      console.error("Failed to load activities from backend:", error);
+    }
+  };
+
+  const fetchNotifications = useCallback(async () => {
     const token = getToken();
     if (!token) return;
-    const data = await api.integrations.list(token);
-    if (Array.isArray(data)) {
-      setIntegrations(data);
+    try {
+      const data = await api.notifications.list(token);
+      setNotificationItems(Array.isArray(data) ? data : []);
+      const countRes = await api.notifications.getUnreadCount(token);
+      setUnreadCount(countRes?.count || 0);
+    } catch (error) {
+      console.error("Failed to fetch notifications:", error);
     }
-  } catch (error) {
-    console.error("Failed to load integrations from backend:", error);
-  }
-};
+  }, [session]);
 
-const importActivities = async () => {
-  try {
+  const markNotificationRead = async (id: string) => {
     const token = getToken();
     if (!token) return;
-    const data = await api.activities.list(token);
-    if (Array.isArray(data)) {
-      setActivities(data);
+    try {
+      await api.notifications.markRead(id, token);
+      setNotificationItems(prev =>
+        prev.map(n => n.id === id ? { ...n, is_read: true, read_at: new Date().toISOString() } : n)
+      );
+      setUnreadCount(prev => Math.max(0, prev - 1));
+    } catch (error) {
+      console.error("Failed to mark notification as read:", error);
     }
-  } catch (error) {
-    console.error("Failed to load activities from backend:", error);
-  }
-};
+  };
 
-const fetchNotifications = useCallback(async () => {
-  const token = getToken();
-  if (!token) return;
-  try {
-    const data = await api.notifications.list(token);
-    setNotificationItems(Array.isArray(data) ? data : []);
-    const countRes = await api.notifications.getUnreadCount(token);
-    setUnreadCount(countRes?.count || 0);
-  } catch (error) {
-    console.error("Failed to fetch notifications:", error);
-  }
-}, [session]);
+  const markAllNotificationsRead = async () => {
+    const token = getToken();
+    if (!token) return;
+    try {
+      await api.notifications.markAllRead(token);
+      setNotificationItems(prev =>
+        prev.map(n => ({ ...n, is_read: true, read_at: new Date().toISOString() }))
+      );
+      setUnreadCount(0);
+    } catch (error) {
+      console.error("Failed to mark all as read:", error);
+    }
+  };
 
-const markNotificationRead = async (id: string) => {
-  const token = getToken();
-  if (!token) return;
-  try {
-    await api.notifications.markRead(id, token);
-    setNotificationItems(prev =>
-      prev.map(n => n.id === id ? { ...n, is_read: true, read_at: new Date().toISOString() } : n)
-    );
-    setUnreadCount(prev => Math.max(0, prev - 1));
-  } catch (error) {
-    console.error("Failed to mark notification as read:", error);
-  }
-};
-
-const markAllNotificationsRead = async () => {
-  const token = getToken();
-  if (!token) return;
-  try {
-    await api.notifications.markAllRead(token);
-    setNotificationItems(prev =>
-      prev.map(n => ({ ...n, is_read: true, read_at: new Date().toISOString() }))
-    );
-    setUnreadCount(0);
-  } catch (error) {
-    console.error("Failed to mark all as read:", error);
-  }
-};
-
-const deleteNotification = async (id: string) => {
-  const token = getToken();
-  if (!token) return;
-  try {
-    await api.notifications.delete(id, token);
-    setNotificationItems(prev => prev.filter(n => n.id !== id));
-  } catch (error) {
-    console.error("Failed to delete notification:", error);
-  }
-};
+  const deleteNotification = async (id: string) => {
+    const token = getToken();
+    if (!token) return;
+    try {
+      await api.notifications.delete(id, token);
+      setNotificationItems(prev => prev.filter(n => n.id !== id));
+    } catch (error) {
+      console.error("Failed to delete notification:", error);
+    }
+  };
   // Revenue Forecast Functions
-const refreshRevenueForecast = useCallback(async () => {
-  try {
-    console.log("Fetching revenue forecast...");
-    const forecast = await fetchRevenueForecast();
-    setRevenueForecast(forecast);
-    console.log("Revenue forecast updated:", forecast);
-  } catch (error) {
-    console.error("Failed to fetch revenue forecast:", error);
-  }
-}, []);
+  const refreshRevenueForecast = useCallback(async () => {
+    try {
+      console.log("Fetching revenue forecast...");
+      const forecast = await fetchRevenueForecast();
+      setRevenueForecast(forecast);
+      console.log("Revenue forecast updated:", forecast);
+    } catch (error) {
+      console.error("Failed to fetch revenue forecast:", error);
+    }
+  }, []);
   // ── Employee CRUD ──────────────────────────────────────────────────────────
   const addEmployee = async (data: Partial<Employee>): Promise<Employee | null> => {
     const newEmp: Employee = {
@@ -1671,68 +1702,68 @@ const refreshRevenueForecast = useCallback(async () => {
   };
 
   // ── Settings ───────────────────────────────────────────────────────────────
-const saveSettings = async (data: UserSettings): Promise<boolean> => {
-  console.log("Saving settings to backend:", data);
+  const saveSettings = async (data: UserSettings): Promise<boolean> => {
+    console.log("Saving settings to backend:", data);
 
-  const updated = { ...userSettings, ...data };
-  setUserSettings(updated);
+    const updated = { ...userSettings, ...data };
+    setUserSettings(updated);
 
-  if (userProfile?.id) {
-    const profileUpdate: any = {};
+    if (userProfile?.id) {
+      const profileUpdate: any = {};
 
-    // Map settings fields to profile columns
-    if (data.name !== undefined) profileUpdate.name = data.name;
-    if (data.email !== undefined) profileUpdate.email = data.email;
-    if (data.phone !== undefined) profileUpdate.phone = data.phone;
-    if (data.company !== undefined) profileUpdate.company = data.company;
-    if (data.role !== undefined) profileUpdate.department = data.role;
-    if (data.timezone !== undefined) profileUpdate.timezone = data.timezone;
-    if (data.language !== undefined) profileUpdate.language = data.language;
+      // Map settings fields to profile columns
+      if (data.name !== undefined) profileUpdate.name = data.name;
+      if (data.email !== undefined) profileUpdate.email = data.email;
+      if (data.phone !== undefined) profileUpdate.phone = data.phone;
+      if (data.company !== undefined) profileUpdate.company = data.company;
+      if (data.role !== undefined) profileUpdate.department = data.role;
+      if (data.timezone !== undefined) profileUpdate.timezone = data.timezone;
+      if (data.language !== undefined) profileUpdate.language = data.language;
 
-    if (Object.keys(profileUpdate).length > 0) {
-      try {
-        const token = localStorage.getItem("token") || session?.access_token;
-        const response = await fetch(
-          `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/users/${userProfile.id}`,
-          {
-            method: "PUT",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify(profileUpdate),
+      if (Object.keys(profileUpdate).length > 0) {
+        try {
+          const token = localStorage.getItem("token") || session?.access_token;
+          const response = await fetch(
+            `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/users/${userProfile.id}`,
+            {
+              method: "PUT",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify(profileUpdate),
+            }
+          );
+
+          if (!response.ok) {
+            const err = await response.json();
+            console.error("Error saving profile:", err);
+            toast.error("Failed to save settings: " + (err.error || response.status));
+            return false;
           }
-        );
 
-        if (!response.ok) {
-          const err = await response.json();
-          console.error("Error saving profile:", err);
-          toast.error("Failed to save settings: " + (err.error || response.status));
+          const updatedData = await response.json();
+          setUserProfile(prev => prev ? { ...prev, ...profileUpdate } : prev);
+          toast.success("Settings saved successfully!");
+        } catch (error: any) {
+          console.error("Save settings error:", error);
+          toast.error("Failed to save settings");
           return false;
         }
-
-        const updatedData = await response.json();
-        setUserProfile(prev => prev ? { ...prev, ...profileUpdate } : prev);
+      } else {
         toast.success("Settings saved successfully!");
-      } catch (error: any) {
-        console.error("Save settings error:", error);
-        toast.error("Failed to save settings");
-        return false;
       }
     } else {
-      toast.success("Settings saved successfully!");
+      toast.success("Settings saved locally!");
     }
-  } else {
-    toast.success("Settings saved locally!");
-  }
 
-  // Save to localStorage as backup
-  localStorage.setItem("userSettings", JSON.stringify(updated));
+    // Save to localStorage as backup
+    localStorage.setItem("userSettings", JSON.stringify(updated));
 
-  return true;
-};
+    return true;
+  };
   // ── Activity ───────────────────────────────────────────────────────────────
-const addActivity = async (data: Partial<Activity>): Promise<void> => {
+  const addActivity = async (data: Partial<Activity>): Promise<void> => {
     const newAct: Activity = {
       id: uid("a"), type: "note", user: currentUser.name,
       action: "", target: "", value: null, time: "Just now",
@@ -1741,38 +1772,38 @@ const addActivity = async (data: Partial<Activity>): Promise<void> => {
     setActivities(prev => [newAct, ...prev].slice(0, 50));
   };
 
-const resetDatabase = async (): Promise<void> => {
-  try {
-    toast.info("Resetting database...");
-    
-    // Yeh fetch backend se DELETE request bhejega
-    const token = getToken();
-    const response = await fetch(`${import.meta.env.VITE_API_URL}/admin/reset-database`, {
-      method: "DELETE",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: token ? `Bearer ${token}` : ""
-      },
-    });
+  const resetDatabase = async (): Promise<void> => {
+    try {
+      toast.info("Resetting database...");
 
-    if (!response.ok) {
-      throw new Error("Reset failed from server");
+      // Yeh fetch backend se DELETE request bhejega
+      const token = getToken();
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/admin/reset-database`, {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: token ? `Bearer ${token}` : ""
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error("Reset failed from server");
+      }
+
+      // Data refresh karo
+      await importLeads();
+      await importDeals();
+      await loadUsers();
+
+      toast.success("Database reset complete!");
+      setTimeout(() => window.location.reload(), 1500);
+    } catch (error: any) {
+      console.error("Reset error:", error);
+      toast.error("Failed to reset database: " + error.message);
     }
+  };
 
-    // Data refresh karo
-    await importLeads();
-    await importDeals();
-    await loadUsers();
 
-    toast.success("Database reset complete!");
-    setTimeout(() => window.location.reload(), 1500);
-  } catch (error: any) {
-    console.error("Reset error:", error);
-    toast.error("Failed to reset database: " + error.message);
-  }
-};
-
-  
   return (
     <AppContext.Provider value={{
       // Auth
@@ -1802,8 +1833,8 @@ const resetDatabase = async (): Promise<void> => {
       addEmployee, updateEmployee, deleteEmployee,
       // Integration
       toggleIntegration, syncIntegration,
-      addIntegration,      
-    updateIntegration,   
+      addIntegration,
+      updateIntegration,
       // Ticket
       addTicket, updateTicket, deleteTicket,
       // Settings

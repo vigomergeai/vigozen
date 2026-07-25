@@ -36,20 +36,31 @@ async function request<T = any>(
   }
 
   const BASE = getApiBaseUrl();
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
 
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`API ${method} ${path} failed (${res.status}): ${errText}`);
+  try {
+    const res = await fetch(`${BASE}${path}`, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: controller.signal
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`API ${method} ${path} failed (${res.status}): ${errText}`);
+    }
+
+    const ct = res.headers.get("content-type") || "";
+    if (ct.includes("application/json")) return res.json();
+    return res.text() as any;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    throw error;
   }
-
-  const ct = res.headers.get("content-type") || "";
-  if (ct.includes("application/json")) return res.json();
-  return res.text() as any;
 }
 
 export const api = {
@@ -113,6 +124,42 @@ export const api = {
       request("PUT", `/users/${userId}/change-password`, data, token),
     updateAvatar: (userId: string, avatarUrl: string | null, token: string) =>
       request("PUT", `/users/${userId}/avatar`, { avatar_url: avatarUrl }, token),
+    // ✅ ADD THIS NEW METHOD
+    uploadAvatar: async (userId: string, formData: FormData, token: string) => {
+      const BASE = getApiBaseUrl();
+      const response = await fetch(`${BASE}/users/${userId}/avatar/upload`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+          // DO NOT set Content-Type - browser sets it with boundary for FormData
+        },
+        body: formData
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Avatar upload failed: ${response.status} - ${errorText}`);
+      }
+
+      return response.json();
+
+    },
+    deleteAvatar: async (userId: string, token: string) => {
+      const BASE = getApiBaseUrl();
+      const response = await fetch(`${BASE}/users/${userId}/avatar`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Avatar deletion failed: ${response.status} - ${errorText}`);
+      }
+
+      return response.json();
+    },
     updateSubscription: (userId: string, status: string, token: string) =>
       request("PUT", `/users/${userId}/subscription`, { subscription_status: status }, token),
     updatePaymentMethod: (userId: string, data: { payment_method_id: string; card_last4: string; card_brand: string; payment_method_type: string }, token: string) =>
@@ -204,13 +251,13 @@ export const api = {
 
   // ── Reports API ──
   reports: {
-    getSummary: (token?: string, start?: string, end?: string) => 
+    getSummary: (token?: string, start?: string, end?: string) =>
       request("GET", `/api/reports/summary${start && end ? `?startDate=${start}&endDate=${end}` : ''}`, undefined, token),
-    getEmployeeWise: (token?: string, start?: string, end?: string) => 
+    getEmployeeWise: (token?: string, start?: string, end?: string) =>
       request("GET", `/api/reports/employee-wise${start && end ? `?startDate=${start}&endDate=${end}` : ''}`, undefined, token),
-    getStatusWise: (token?: string, start?: string, end?: string) => 
+    getStatusWise: (token?: string, start?: string, end?: string) =>
       request("GET", `/api/reports/status-wise${start && end ? `?startDate=${start}&endDate=${end}` : ''}`, undefined, token),
-    getSalesWise: (token?: string, start?: string, end?: string) => 
+    getSalesWise: (token?: string, start?: string, end?: string) =>
       request("GET", `/api/reports/sales-wise${start && end ? `?startDate=${start}&endDate=${end}` : ''}`, undefined, token),
     exportCSV: (token?: string) => request("GET", "/api/reports/export/csv", undefined, token),
     exportPDF: (token?: string) => request("GET", "/api/reports/export/pdf", undefined, token),

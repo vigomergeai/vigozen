@@ -50,7 +50,7 @@ export default function SettingsPage() {
   const [userCount, setUserCount] = useState(10);
   const [bundlePrice, setBundlePrice] = useState(1000);
   const [payPeriod, setPayPeriod] = useState<'monthly' | 'yearly'>('monthly');
-const PRICE_PER_USER = 1300;
+  const PRICE_PER_USER = 1300;
   const [notifications, setNotifications] = useState({
     emailLeads: true, emailDeals: true, emailReports: false,
     pushLeads: true, pushDeals: false, pushTeam: true,
@@ -95,6 +95,7 @@ const PRICE_PER_USER = 1300;
     }
   };
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
   const [verifying2FA, setVerifying2FA] = useState(false);
   const [qrCode, setQrCode] = useState("");
   const [secretKey, setSecretKey] = useState("");
@@ -146,22 +147,22 @@ const PRICE_PER_USER = 1300;
 
   // ── ADD THIS HANDLER ──
   //const handleUserCountChange = (count: number) => {
-    //setUserCount(count);
-    //setBundlePrice(calculatePrice(count));
+  //setUserCount(count);
+  //setBundlePrice(calculatePrice(count));
   //};
 
   const handleUserCountChange = (count: number) => {
-  setUserCount(count);
-  setBundlePrice(calculatePrice(count, payPeriod));
-};
+    setUserCount(count);
+    setBundlePrice(calculatePrice(count, payPeriod));
+  };
 
   //const calculatePrice = (count: number): number => {
-    //return count * 100; // ₹100 per user
- // };
- const calculatePrice = (count: number, period: 'monthly' | 'yearly' = payPeriod): number => {
-  const monthly = count * PRICE_PER_USER;
-  return period === 'yearly' ? Math.round(monthly * 12 * 0.665) : monthly;
-};
+  //return count * 100; // ₹100 per user
+  // };
+  const calculatePrice = (count: number, period: 'monthly' | 'yearly' = payPeriod): number => {
+    const monthly = count * PRICE_PER_USER;
+    return period === 'yearly' ? Math.round(monthly * 12 * 0.665) : monthly;
+  };
 
   const submitToPayU = (payuUrl: string, payuData: Record<string, any>) => {
     const form = document.createElement('form');
@@ -234,7 +235,7 @@ const PRICE_PER_USER = 1300;
       // Create order for saving card (minimal amount ₹1)
       const response = await api.payments.createOrder(1, "INR", "save_card", token);
 
-     if (response?.success && response?.payuData && response?.payuUrl) {
+      if (response?.success && response?.payuData && response?.payuUrl) {
         submitToPayU(response.payuUrl, { ...response.payuData, udf2: 'save_card' });
       } else {
         toast.error("Could not create payment order. Please try again.");
@@ -264,7 +265,7 @@ const PRICE_PER_USER = 1300;
     setPasswords({ current: "", newPass: "", confirm: "" });
     //setTwoFACode("");
     setSaving(false);
-}, [currentUser]);
+  }, [currentUser]);
 
   // Load settings from userSettings
   useEffect(() => {
@@ -296,7 +297,7 @@ const PRICE_PER_USER = 1300;
       setTwoFAEnabled(true);
     }
   }, [userProfile]);
- 
+
   useEffect(() => {
     if (session?.user?.id) {
       fetchActiveSessions();
@@ -358,7 +359,7 @@ const PRICE_PER_USER = 1300;
         setBillingHistory(data || []);
       } catch (error) {
         console.error("Error fetching billing history:", error);
-         toast.error("Failed to refresh billing history");
+        toast.error("Failed to refresh billing history");
       }
     };
     fetchBillingHistory();
@@ -462,69 +463,109 @@ const PRICE_PER_USER = 1300;
     });
   };
 
-  //const handleAvatarUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-
   const handleAvatarUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 2 * 1024 * 1024) {
-      toast.error("Please select an image smaller than 2MB");
+    // Validate size (5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      setUploadStatus({ type: 'error', message: 'Image must be less than 5MB.' });
+      event.target.value = '';
+      return;
+    }
+
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      setUploadStatus({ type: 'error', message: 'Please select an image file.' });
+      event.target.value = '';
       return;
     }
 
     setUploadingAvatar(true);
-    toast.info("Compressing and uploading...");
+    setUploadStatus(null);
 
     try {
+      // Compress image
       const compressedFile = await compressImage(file);
 
-      // ── ACTUAL UPLOAD ──
+      // Get token and userId
       const token = localStorage.getItem('token') || session?.access_token;
       const userId = userProfile?.id || session?.user?.id;
 
-      if (!userId || !token) throw new Error("Not logged in");
+      if (!userId || !token) {
+        throw new Error("Not logged in");
+      }
 
+      // Create FormData
       const formData = new FormData();
       formData.append('avatar', compressedFile);
-      const response = await fetch(`${getApiBaseUrl()}/users/${userId}/avatar`, {
-        method: 'PUT',
+
+      // Upload
+      const baseUrl = getApiBaseUrl();
+      const response = await fetch(`${baseUrl}/users/${userId}/avatar/upload`, {
+        method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
         },
         body: formData,
       });
 
-      if (!response.ok) throw new Error('Upload failed');
-
-      const data = await response.json();
-      toast.success('Avatar updated successfully');
-
-      // Update local state
-      if (userProfile) {
-        userProfile.avatar_url = data.avatar_url;
+      // Parse response
+      let data;
+      try {
+        data = await response.json();
+      } catch {
+        throw new Error('Invalid server response');
       }
 
-      // Update localStorage
-      const storedUser = JSON.parse(localStorage.getItem('user') || '{}');
-      localStorage.setItem('user', JSON.stringify({
-        ...storedUser,
-        avatar_url: data.avatar_url
-      }));
+      // Check success
+      if (response.ok && data.success) {
+        // Update local state with new avatar URL
+        const avatarUrl = data.avatar_url || data.avatarUrl;
 
-      setTimeout(() => window.location.reload(), 500);
-    } catch (error) {
-      console.error(error);
-      toast.error("Failed to upload image");
+        // Update userProfile
+        if (userProfile) {
+          userProfile.avatar_url = avatarUrl;
+        }
+
+        // Update localStorage
+        const storedUser = JSON.parse(localStorage.getItem('user') || '{}');
+        localStorage.setItem('user', JSON.stringify({
+          ...storedUser,
+          avatar_url: avatarUrl
+        }));
+
+        // Force re-render by updating profile state
+        setProfile(prev => ({
+          ...prev,
+          // This will trigger re-render of avatar
+        }));
+
+        toast.success('Photo updated successfully!');
+        setUploadStatus({ type: 'success', message: 'Photo updated successfully.' });
+
+        // Auto-hide success message after 3 seconds
+        setTimeout(() => setUploadStatus(null), 3000);
+      } else {
+        throw new Error(data.error || data.message || 'Upload failed');
+      }
+    } catch (error: any) {
+      console.error('Upload error:', error);
+      setUploadStatus({
+        type: 'error',
+        message: error.message || 'Unable to upload image.'
+      });
     } finally {
       setUploadingAvatar(false);
+      event.target.value = '';
     }
   };
+
   const handleDeleteAvatar = async () => {
-    const confirmed = window.confirm("Are you sure you want to delete your profile picture?");
-    if (!confirmed) return;
+    if (!window.confirm("Are you sure you want to delete your profile picture?")) return;
 
     setUploadingAvatar(true);
+    setUploadStatus(null);
 
     try {
       const userId = userProfile?.id || session?.user?.id;
@@ -532,14 +573,54 @@ const PRICE_PER_USER = 1300;
 
       const token = localStorage.getItem("token") || session?.access_token;
       if (!token) throw new Error("Token missing");
-      await api.users.updateAvatar(userId, null, token);
 
-      toast.success("Profile picture deleted!");
-      setTimeout(() => window.location.reload(), 500);
+      const response = await fetch(`${getApiBaseUrl()}/users/${userId}/avatar`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
 
-    } catch (error) {
+      // Check if response is OK
+      if (!response.ok) {
+        let errorMsg = 'Failed to delete avatar';
+        try {
+          const errData = await response.json();
+          errorMsg = errData.error || errorMsg;
+        } catch { }
+        throw new Error(errorMsg);
+      }
+
+      let result;
+      try {
+        result = await response.json();
+      } catch {
+        // If response is empty or invalid, still consider it success
+        result = { success: true };
+      }
+
+      // Update local state
+      if (userProfile) {
+        userProfile.avatar_url = null;
+      }
+
+      // Update localStorage
+      const storedUser = JSON.parse(localStorage.getItem('user') || '{}');
+      localStorage.setItem('user', JSON.stringify({
+        ...storedUser,
+        avatar_url: null
+      }));
+
+      // Force re-render
+      setProfile(prev => ({ ...prev }));
+
+      toast.success("Profile picture removed!");
+      setUploadStatus({ type: 'success', message: 'Photo removed successfully.' });
+      setTimeout(() => setUploadStatus(null), 3000);
+
+    } catch (error: any) {
       console.error("Delete error:", error);
-      toast.error("Failed to delete profile picture");
+      setUploadStatus({ type: 'error', message: error.message || 'Unable to remove photo.' });
     } finally {
       setUploadingAvatar(false);
     }
@@ -738,59 +819,70 @@ const PRICE_PER_USER = 1300;
             <div className="space-y-5">
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
                 <h3 className="text-slate-800 mb-6">Personal Information</h3>
-                <div className="flex items-center gap-4 mb-6 pb-6 border-b border-slate-100">
+                {/* ===== PROFILE PICTURE SECTION ===== */}
+                <div className="flex items-start gap-6 mb-6 pb-6 border-b border-slate-100">
+                  {/* Avatar - LARGER (96px) */}
                   <div className="relative">
-                    <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-2xl font-semibold">
+                    <div className="w-24 h-24 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-3xl font-bold overflow-hidden">
                       {userProfile?.avatar_url ? (
                         <img
-                          src={userProfile.avatar_url}
-                          alt="Profile"
-                          className="w-20 h-20 rounded-2xl object-cover"
+                          src={userProfile?.avatar_url ? (
+                            userProfile.avatar_url.startsWith('http') ?
+                              userProfile.avatar_url :
+                              `${getApiBaseUrl()}${userProfile.avatar_url}`
+                          ) : ''}
+                          alt={profile?.name || 'User'}
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none';
+                            const parent = e.currentTarget.parentElement;
+                            if (parent) {
+                              parent.innerHTML = profile?.name?.[0] || 'V';
+                            }
+                          }}
                         />
                       ) : (
-                        currentUser.avatar
+                        profile?.name?.[0] || 'V'
+                      )}
+                    </div>
+                  </div>
+
+                  {/* User Info + Actions */}
+                  <div className="flex-1">
+                    <h3 className="text-lg font-semibold text-gray-900">{profile?.name || 'User'}</h3>
+                    <p className="text-sm text-gray-500 mb-3">{profile?.email || 'user@example.com'}</p>
+
+                    <div className="flex items-center gap-3">
+                      {/* Upload Button - Outlined style */}
+                      <label className="px-4 py-1.5 text-sm font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 hover:border-indigo-300 cursor-pointer transition-colors">
+                        {uploadingAvatar ? 'Uploading...' : 'Change Photo'}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={handleAvatarUpload}
+                          disabled={uploadingAvatar}
+                        />
+                      </label>
+
+                      {/* Remove Button - Only if avatar exists */}
+                      {userProfile?.avatar_url && (
+                        <button
+                          onClick={handleDeleteAvatar}
+                          disabled={uploadingAvatar}
+                          className="text-sm text-gray-400 hover:text-red-500 transition-colors bg-transparent border-0 cursor-pointer"
+                        >
+                          Remove
+                        </button>
                       )}
                     </div>
 
-                    {/* Upload Button */}
-                    <label className="absolute bottom-0 right-0 w-7 h-7 bg-white border border-slate-200 rounded-lg flex items-center justify-center shadow-sm hover:bg-slate-50 transition-colors cursor-pointer">
-                      <Camera size={13} className="text-slate-500" />
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={handleAvatarUpload}
-                        disabled={uploadingAvatar}
-                      />
-                    </label>
-
-                    {/* Delete Button - Only show if avatar exists */}
-                    {userProfile?.avatar_url && (
-                      <button
-                        onClick={handleDeleteAvatar}
-                        disabled={uploadingAvatar}
-                        className="absolute -bottom-2 left-0 w-6 h-6 bg-red-500 border border-white rounded-full flex items-center justify-center shadow-sm hover:bg-red-600 transition-colors cursor-pointer"
-                        title="Delete picture"
-                      >
-                        <Trash2 size={10} className="text-white" />
-                      </button>
+                    {/* Status Messages */}
+                    {uploadStatus && (
+                      <p className={`mt-2 text-sm ${uploadStatus.type === 'success' ? 'text-green-600' : 'text-red-600'}`}>
+                        {uploadStatus.message}
+                      </p>
                     )}
-                  </div>
-                  <div>
-                    <div className="text-sm font-semibold text-slate-800">{profile.name}</div>
-                    <div className="text-xs text-slate-500">{profile.email}</div>
-                    {/* THIS IS THE CHANGE PHOTO TEXT BUTTON - ADD onClick HERE */}
-                    <label className="mt-2 text-xs text-indigo-600 hover:text-indigo-700 flex items-center gap-1 cursor-pointer">
-                      <Camera size={11} />
-                      {uploadingAvatar ? "Uploading..." : "Change photo"}
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={handleAvatarUpload}
-                        disabled={uploadingAvatar}
-                      />
-                    </label>
                   </div>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -825,13 +917,12 @@ const PRICE_PER_USER = 1300;
                   <div className="flex items-center gap-2 mb-4">
                     <CreditCard size={16} className="text-indigo-600" />
                     <h3 className="text-slate-800">Subscription</h3>
-                    <span className={`ml-auto text-[10px] px-2 py-0.5 rounded-full font-medium ${
-                      subscription.is_subscription_active ? 'bg-emerald-100 text-emerald-700' :
+                    <span className={`ml-auto text-[10px] px-2 py-0.5 rounded-full font-medium ${subscription.is_subscription_active ? 'bg-emerald-100 text-emerald-700' :
                       subscription.is_trial_active ? 'bg-indigo-100 text-indigo-700' :
-                      'bg-red-100 text-red-700'
-                    }`}>
+                        'bg-red-100 text-red-700'
+                      }`}>
                       {subscription.is_subscription_active ? 'Active' :
-                       subscription.is_trial_active ? 'Trial' : 'Expired'}
+                        subscription.is_trial_active ? 'Trial' : 'Expired'}
                     </span>
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -1036,8 +1127,8 @@ const PRICE_PER_USER = 1300;
                     <div className="text-xs text-indigo-600 mb-3">Use our REST API to build custom integrations with any platform.</div>
                     <div className="flex items-center gap-2">
                       <code className="flex-1 text-xs bg-white border border-indigo-200 rounded-lg px-3 py-2 text-slate-600 font-mono">
-                        {showApiKey 
-                          ? (apiKey || "No API key") 
+                        {showApiKey
+                          ? (apiKey || "No API key")
                           : (apiKey ? apiKey.slice(0, 10) + "••••••••••••••••••••••••••••••" : "Loading...")}
                       </code>
                       <button onClick={() => setShowApiKey(!showApiKey)} className="px-3 py-2 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors">{showApiKey ? "Hide" : "Reveal"}</button>
@@ -1082,7 +1173,7 @@ const PRICE_PER_USER = 1300;
                               if (!token || !session?.user) throw new Error("Not logged in");
 
                               const subscriptionId = (userProfile as any)?.subscription_id;
-                              
+
                               // Cancel in Razorpay first
                               if (subscriptionId) {
                                 await api.payments.cancelSubscription(subscriptionId, token);
@@ -1286,7 +1377,7 @@ const PRICE_PER_USER = 1300;
                     <h4 className="font-bold text-indigo-800">Bundle Plan</h4>
                   </div>
                   <div className="p-5">
-                  <div className="flex flex-wrap items-end justify-between gap-4">
+                    <div className="flex flex-wrap items-end justify-between gap-4">
                       {/* Left side - Plan info */}
                       <div>
                         <div className="text-sm font-semibold text-slate-800">CRM</div>
@@ -1299,24 +1390,22 @@ const PRICE_PER_USER = 1300;
                         <div className="flex gap-2">
                           <button
                             onClick={() => { setPayPeriod('monthly'); setBundlePrice(calculatePrice(userCount, 'monthly')); }}
-                            className={`px-4 py-1.5 text-xs rounded-lg transition-colors ${
-                              payPeriod === 'monthly' ? 'bg-indigo-600 text-white shadow-sm' : 'border border-slate-200 hover:bg-slate-50'
-                            }`}
+                            className={`px-4 py-1.5 text-xs rounded-lg transition-colors ${payPeriod === 'monthly' ? 'bg-indigo-600 text-white shadow-sm' : 'border border-slate-200 hover:bg-slate-50'
+                              }`}
                           >
                             Monthly
                           </button>
                           <button
                             onClick={() => { setPayPeriod('yearly'); setBundlePrice(calculatePrice(userCount, 'yearly')); }}
-                            className={`px-4 py-1.5 text-xs rounded-lg transition-colors ${
-                              payPeriod === 'yearly' ? 'bg-indigo-600 text-white shadow-sm' : 'border border-slate-200 hover:bg-slate-50'
-                            }`}
+                            className={`px-4 py-1.5 text-xs rounded-lg transition-colors ${payPeriod === 'yearly' ? 'bg-indigo-600 text-white shadow-sm' : 'border border-slate-200 hover:bg-slate-50'
+                              }`}
                           >
                             Yearly
                           </button>
                         </div>
                       </div>
 
-                     
+
 
                       {/* Middle - Users counter - DYNAMIC */}
                       <div>
@@ -1378,7 +1467,7 @@ const PRICE_PER_USER = 1300;
                   <p className="text-sm text-slate-500 mb-4">
                     Click below to complete your payment securely via PayU
                   </p>
-                  
+
                   <a
                     href="https://u.payu.in/PrZ2PnY224hC"
                     target="_blank"
@@ -1399,7 +1488,7 @@ const PRICE_PER_USER = 1300;
                   >
                     Pay Now
                   </a>
-                  
+
                   <p className="text-xs text-slate-400 mt-3">
                     🔒 Secure payment via PayU Payment Gateway
                   </p>
@@ -1460,7 +1549,7 @@ const PRICE_PER_USER = 1300;
                         // Create PayU order
                         const response = await api.payments.createOrder(planAmount, "INR", pendingPlan.name, token);
 
-                       if (response?.success && response?.payuData && response?.payuUrl) {
+                        if (response?.success && response?.payuData && response?.payuUrl) {
                           submitToPayU(response.payuUrl, { ...response.payuData, plan: planName });
                         } else {
                           toast.error("Failed to process plan change");

@@ -245,8 +245,7 @@ export default function DashboardPage() {
     deals.forEach(deal => {
       if (deal.stage !== "Won") return;
       const dateStr = deal.expectedClose || deal.createdAt;
-      if (!dateStr) return;
-      const date = new Date(dateStr);
+      const date = new Date(dateStr || Date.now());
       const targetMonth = last6Months.find(m => m.monthIndex === date.getMonth() && m.year === date.getFullYear());
       if (targetMonth) {
         targetMonth.revenue += Number(deal.value) || 0;

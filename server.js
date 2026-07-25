@@ -15,6 +15,41 @@ const path = require("path");
 
 require("dotenv").config();
 
+// Create uploads folder if it doesn't exist
+const uploadDir = path.join(__dirname, 'uploads/avatars');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+// Configure storage
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, 'avatar-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+// File filter - only images
+const fileFilter = (req, file, cb) => {
+  const allowed = /jpeg|jpg|png|gif|webp/;
+  const ext = allowed.test(path.extname(file.originalname).toLowerCase());
+  const mime = allowed.test(file.mimetype);
+  if (ext && mime) {
+    return cb(null, true);
+  }
+  cb(new Error('Only image files are allowed'));
+};
+
+// Multer middleware
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: fileFilter
+});
+
 // Auto-migrate tables
 (async () => {
   try {
@@ -249,32 +284,11 @@ app.options('{*splat}', (req, res) => {
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-const upload = multer({
-  dest: "uploads/"
-});
-
-// Configure custom storage for user avatar uploads
-const avatarUploadDir = path.join(__dirname, 'uploads/avatars');
-if (!fs.existsSync(avatarUploadDir)) {
-  fs.mkdirSync(avatarUploadDir, { recursive: true });
-}
-const avatarStorage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, avatarUploadDir),
-  filename: (req, file, cb) => {
-    const unique = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, unique + path.extname(file.originalname));
-  }
-});
-const avatarUpload = multer({ 
-  storage: avatarStorage, 
-  limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
-});
-
 // Conditional upload helper: applies multer only if the request has multipart/form-data
 const conditionalUpload = (req, res, next) => {
   const contentType = req.headers['content-type'] || '';
   if (contentType.includes('multipart/form-data')) {
-    return avatarUpload.single('avatar')(req, res, next);
+    return upload.single('avatar')(req, res, next);
   }
   next();
 };
@@ -802,7 +816,7 @@ app.post("/leads", authenticateToken, async (req, res) => {
       `INSERT INTO leads (id, name, email, phone, company, value, status, source, industry, notes, owner_id, company_id, probability, aiscore, created_at, updated_at)
        VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
        RETURNING *`,
-      [name, email, phone, company, value, status, source, industry, notes, ownerId, companyId, probability || 50, aiscore || 0]
+      [name, email, phone, company, value, status, source, industry, notes, ownerId, companyId, probability || 50, aiscore || 50]
     );
 
     const lead = result.rows[0];
@@ -1680,7 +1694,7 @@ app.get("/trial/:userId", async (req, res) => {
     const user = result.rows[0];
     const now = new Date();
     const trialEnd = user.trial_end ? new Date(user.trial_end) : null;
-    
+
     const active = trialEnd ? now < trialEnd : false;
     const daysLeft = trialEnd ? Math.max(0, Math.floor((trialEnd - now) / (1000 * 60 * 60 * 24))) : 0;
 
@@ -2280,24 +2294,16 @@ app.put("/users/:id/change-password", authenticateToken, async (req, res) => {
 });
 
 // ── Delete Avatar ──────────────────────────────────────────
-app.put("/users/:id/avatar", authenticateToken, conditionalUpload, async (req, res) => {
+app.put("/users/:id/avatar", authenticateToken, async (req, res) => {
   try {
-    let avatarUrl = null;
-    if (req.file) {
-      avatarUrl = `/uploads/avatars/${req.file.filename}`;
-    } else {
-      avatarUrl = req.body.avatar_url || null;
-    }
-
+    const { avatar_url } = req.body;
     const result = await pool.query(
       "UPDATE users SET avatar_url = $1 WHERE id = $2 RETURNING id, avatar_url",
-      [avatarUrl, req.params.id]
+      [avatar_url, req.params.id]
     );
-
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "User not found" });
     }
-
     res.json(result.rows[0]);
   } catch (err) {
     console.error("AVATAR UPDATE ERROR:", err);
@@ -2305,30 +2311,159 @@ app.put("/users/:id/avatar", authenticateToken, conditionalUpload, async (req, r
   }
 });
 
-// Upload profile picture (POST version)
-app.post("/users/:id/avatar/upload", authenticateToken, avatarUpload.single("avatar"), async (req, res) => {
+// ── UPLOAD AVATAR FILE ────────────────────────────────────
+app.post("/users/:id/avatar/upload", authenticateToken, upload.single('avatar'), async (req, res) => {
   try {
+    // Check if file was uploaded
     if (!req.file) {
-      return res.status(400).json({ error: "No file uploaded" });
+      return res.status(400).json({
+        success: false,
+        error: "No file uploaded. Please select an image file."
+      });
     }
-    
+
     const userId = req.params.id;
     const avatarUrl = `/uploads/avatars/${req.file.filename}`;
-    
-    // Update user's avatar URL
-    await pool.query(
-      "UPDATE users SET avatar_url = $1 WHERE id = $2",
+
+    // Verify user exists and belongs to the same company
+    const userCheck = await pool.query(
+      "SELECT id, company_id FROM users WHERE id = $1",
+      [userId]
+    );
+
+    if (userCheck.rows.length === 0) {
+      // Delete uploaded file if user not found
+      fs.unlinkSync(req.file.path);
+      return res.status(404).json({
+        success: false,
+        error: "User not found"
+      });
+    }
+
+    // Verify user has permission (own profile or admin)
+    if (userId !== req.user.id && req.user.role !== 'admin') {
+      // Delete uploaded file if unauthorized
+      fs.unlinkSync(req.file.path);
+      return res.status(403).json({
+        success: false,
+        error: "Unauthorized to update this user's avatar"
+      });
+    }
+
+    // Update user's avatar_url in database
+    const result = await pool.query(
+      "UPDATE users SET avatar_url = $1 WHERE id = $2 RETURNING id, avatar_url",
       [avatarUrl, userId]
     );
-    
-    res.json({ 
-      success: true, 
+
+    if (result.rows.length === 0) {
+      // Delete uploaded file if update failed
+      fs.unlinkSync(req.file.path);
+      return res.status(404).json({
+        success: false,
+        error: "Failed to update avatar"
+      });
+    }
+
+    // Log the action
+    await logAudit(
+      req.user.id,
+      req.user.name || 'System',
+      'avatar_upload',
+      'user',
+      userId,
+      { avatar_url: avatarUrl },
+      req.ip
+    );
+
+    res.json({
+      success: true,
       avatar_url: avatarUrl,
-      message: "Avatar uploaded successfully" 
+      message: "Avatar uploaded successfully"
     });
+
   } catch (error) {
-    console.error("Avatar upload failed:", error);
-    res.status(500).json({ error: "Failed to upload avatar" });
+    console.error("Avatar upload error:", error);
+
+    // Clean up uploaded file if error occurred
+    if (req.file && req.file.path) {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (unlinkError) {
+        console.error("Failed to delete uploaded file:", unlinkError);
+      }
+    }
+
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to upload avatar"
+    });
+  }
+});
+
+// ── DELETE AVATAR ──────────────────────────────────────────
+app.delete("/users/:id/avatar", authenticateToken, async (req, res) => {
+  try {
+    const userId = req.params.id;
+
+    // Verify user exists
+    const userCheck = await pool.query(
+      "SELECT avatar_url FROM users WHERE id = $1",
+      [userId]
+    );
+
+    if (userCheck.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "User not found"
+      });
+    }
+
+    // Verify user has permission
+    if (userId !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        error: "Unauthorized to remove this user's avatar"
+      });
+    }
+
+    // Delete the file from disk if it exists
+    const avatarUrl = userCheck.rows[0].avatar_url;
+    if (avatarUrl) {
+      const filePath = path.join(__dirname, avatarUrl);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    }
+
+    // Update user record
+    await pool.query(
+      "UPDATE users SET avatar_url = NULL WHERE id = $1",
+      [userId]
+    );
+
+    // Log the action
+    await logAudit(
+      req.user.id,
+      req.user.name || 'System',
+      'avatar_removed',
+      'user',
+      userId,
+      null,
+      req.ip
+    );
+
+    res.json({
+      success: true,
+      message: "Avatar removed successfully"
+    });
+
+  } catch (error) {
+    console.error("Avatar delete error:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to remove avatar"
+    });
   }
 });
 
@@ -2523,8 +2658,8 @@ app.post("/payments/verify", authenticateToken, async (req, res) => {
       );
     }
 
-    res.json({ 
-      success: payment.status === "success", 
+    res.json({
+      success: payment.status === "success",
       status: payment.status,
       subscription_activated: payment.status === "success" || status === "success"
     });
@@ -3074,7 +3209,7 @@ app.post("/subscription/create", authenticateToken, async (req, res) => {
   try {
     const { plan_type, payment_method } = req.body;
     const userId = req.user.id;
-    
+
     let subscription = null;
     try {
       const result = await pool.query(
@@ -3087,12 +3222,12 @@ app.post("/subscription/create", authenticateToken, async (req, res) => {
     } catch (e) {
       console.warn("subscriptions table might not exist, skipping insert:", e.message);
     }
-    
+
     await pool.query(
       `UPDATE users SET plan_type = $1, subscription_status = 'active' WHERE id = $2`,
       [plan_type, userId]
     );
-    
+
     res.json({ success: true, subscription });
   } catch (error) {
     console.error("Subscription creation failed:", error);
@@ -3107,14 +3242,14 @@ app.post("/subscription/trial/start", authenticateToken, async (req, res) => {
     const trialStart = new Date();
     const trialEnd = new Date();
     trialEnd.setDate(trialEnd.getDate() + 3);
-    
+
     await pool.query(
       `UPDATE users 
        SET trial_start = $1, trial_end = $2, subscription_status = 'trialing' 
        WHERE id = $3`,
       [trialStart, trialEnd, userId]
     );
-    
+
     res.json({
       success: true,
       trial_start: trialStart,
@@ -3131,12 +3266,12 @@ app.post("/subscription/trial/start", authenticateToken, async (req, res) => {
 app.post("/subscription/cancel", authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
-    
+
     await pool.query(
       `UPDATE users SET subscription_status = 'cancelled', plan_type = NULL WHERE id = $1`,
       [userId]
     );
-    
+
     res.json({ success: true, message: "Subscription cancelled" });
   } catch (error) {
     console.error("Subscription cancellation failed:", error);
@@ -3149,14 +3284,14 @@ app.post("/subscription/payment-success", authenticateToken, async (req, res) =>
   try {
     const { plan_type } = req.body;
     const userId = req.user.id;
-    
+
     await pool.query(
       `UPDATE users 
        SET subscription_status = 'active', payment_status = 'paid', plan_type = $1 
        WHERE id = $2`,
       [plan_type, userId]
     );
-    
+
     try {
       await pool.query(
         `INSERT INTO payment_logs (user_id, status, plan_type, created_at)
@@ -3166,7 +3301,7 @@ app.post("/subscription/payment-success", authenticateToken, async (req, res) =>
     } catch (e) {
       console.warn("payment_logs table might not exist, skipping log insert:", e.message);
     }
-    
+
     res.json({ success: true, message: "Payment successful, subscription activated" });
   } catch (error) {
     console.error("Payment success update failed:", error);
@@ -3178,21 +3313,21 @@ app.post("/subscription/payment-success", authenticateToken, async (req, res) =>
 app.get("/subscription/trial/check", authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
-    
+
     const result = await pool.query(
       `SELECT trial_start, trial_end, subscription_status, plan_type 
        FROM users 
        WHERE id = $1`,
       [userId]
     );
-    
+
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "User not found" });
     }
-    
+
     const user = result.rows[0];
     const now = new Date();
-    
+
     let trialEnd;
     if (user.trial_end) {
       trialEnd = new Date(user.trial_end);
@@ -3203,10 +3338,10 @@ app.get("/subscription/trial/check", authenticateToken, async (req, res) => {
       trialEnd = new Date();
       trialEnd.setDate(trialEnd.getDate() + 3);
     }
-    
+
     const daysRemaining = Math.max(0, Math.ceil((trialEnd.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
     const isExpired = daysRemaining === 0 && now > trialEnd;
-    
+
     res.json({
       is_trialing: user.subscription_status === 'trialing',
       days_remaining: daysRemaining,

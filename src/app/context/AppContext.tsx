@@ -814,10 +814,28 @@ useEffect(() => {
           "Content-Type": "application/json",
           Authorization: token ? `Bearer ${token}` : ""
         },
-        body: JSON.stringify({ name: dbPayload.name, email: dbPayload.email, phone: dbPayload.phone, company: dbPayload.company, source: dbPayload.source, status: dbPayload.status, industry: dbPayload.industry, value: dbPayload.value, notes: dbPayload.notes })
+        body: JSON.stringify({ 
+          name: dbPayload.name, 
+          email: dbPayload.email, 
+          phone: dbPayload.phone, 
+          company: dbPayload.company, 
+          source: dbPayload.source, 
+          status: dbPayload.status, 
+          industry: dbPayload.industry, 
+          value: dbPayload.value, 
+          notes: dbPayload.notes,
+          probability: dbPayload.probability,
+          aiscore: dbPayload.aiScore,
+          owner_id: dbPayload.ownerId
+        })
       });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Failed to create lead: ${response.status} - ${errorText}`);
+      }
+
       const inserted = await response.json();
-    
       console.log("Saved:", inserted);
 
 

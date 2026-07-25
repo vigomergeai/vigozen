@@ -204,10 +204,14 @@ export const api = {
 
   // ── Reports API ──
   reports: {
-    getSummary: (token?: string) => request("GET", "/api/reports/summary", undefined, token),
-    getEmployeeWise: (token?: string) => request("GET", "/api/reports/employee-wise", undefined, token),
-    getStatusWise: (token?: string) => request("GET", "/api/reports/status-wise", undefined, token),
-    getSalesWise: (token?: string) => request("GET", "/api/reports/sales-wise", undefined, token),
+    getSummary: (token?: string, start?: string, end?: string) => 
+      request("GET", `/api/reports/summary${start && end ? `?startDate=${start}&endDate=${end}` : ''}`, undefined, token),
+    getEmployeeWise: (token?: string, start?: string, end?: string) => 
+      request("GET", `/api/reports/employee-wise${start && end ? `?startDate=${start}&endDate=${end}` : ''}`, undefined, token),
+    getStatusWise: (token?: string, start?: string, end?: string) => 
+      request("GET", `/api/reports/status-wise${start && end ? `?startDate=${start}&endDate=${end}` : ''}`, undefined, token),
+    getSalesWise: (token?: string, start?: string, end?: string) => 
+      request("GET", `/api/reports/sales-wise${start && end ? `?startDate=${start}&endDate=${end}` : ''}`, undefined, token),
     exportCSV: (token?: string) => request("GET", "/api/reports/export/csv", undefined, token),
     exportPDF: (token?: string) => request("GET", "/api/reports/export/pdf", undefined, token),
   },

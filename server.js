@@ -623,7 +623,7 @@ app.delete("/integrations/:id", authenticateToken, async (req, res) => {
 app.put("/users/:id", authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, email, phone, company, department, timezone, language } = req.body;
+    const { name, email, phone, company, department, timezone, language, role, employee_id } = req.body;
 
     // Fetch existing user before update for audit trail
     const existingUserRes = await pool.query("SELECT * FROM users WHERE id = $1", [id]);
@@ -638,10 +638,12 @@ app.put("/users/:id", authenticateToken, async (req, res) => {
          company = COALESCE($4, company),
          department = COALESCE($5, department),
          timezone = COALESCE($6, timezone),
-         language = COALESCE($7, language)
-       WHERE id = $8
-       RETURNING id, name, email, phone, company, department, timezone, language, role`,
-      [name, email, phone, company, department, timezone, language, id]
+         language = COALESCE($7, language),
+         role = COALESCE($8, role),
+         employee_id = COALESCE($9, employee_id)
+       WHERE id = $10
+       RETURNING id, name, email, phone, company, department, timezone, language, role, employee_id`,
+      [name, email, phone, company, department, timezone, language, role, employee_id, id]
     );
 
     if (result.rows.length === 0) {
@@ -712,25 +714,83 @@ app.post("/users", authenticateToken, async (req, res) => {
 });
 
 // Delete (deactivate) user
+// Delete user - Hard delete (permanently remove)
 app.delete("/users/:id", authenticateToken, async (req, res) => {
   try {
-    console.log("===== DELETE USER =====");
+    console.log("===== DELETE USER (HARD DELETE) =====");
     console.log("Role:", req.user.role);
     console.log("User:", req.user);
+
+    // Only admins can delete users
     if (req.user.role !== "admin") {
       return res.status(403).json({ error: "Admin access required" });
     }
 
+    const userId = req.params.id;
+    const companyId = req.user.company_id;
+
+    // Check if user exists and belongs to the same company
+    let userCheck;
+    if (companyId) {
+      userCheck = await pool.query(
+        "SELECT id, name, email FROM users WHERE id = $1 AND company_id = $2",
+        [userId, companyId]
+      );
+    } else {
+      userCheck = await pool.query(
+        "SELECT id, name, email FROM users WHERE id = $1 AND company_id IS NULL",
+        [userId]
+      );
+    }
+
+    if (userCheck.rows.length === 0) {
+      return res.status(404).json({ error: "User not found or unauthorized" });
+    }
+
+    const userToDelete = userCheck.rows[0];
+
+    // Prevent admin from deleting themselves
+    if (userId === req.user.id) {
+      return res.status(400).json({ error: "Cannot delete your own account" });
+    }
+
+    // ✅ HARD DELETE - Actually remove the record
     const result = await pool.query(
-      "UPDATE users SET is_active = false WHERE id = $1 RETURNING id",
-      [req.params.id]
+      "DELETE FROM users WHERE id = $1 RETURNING id, name, email",
+      [userId]
     );
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    res.json({ success: true });
+    // Log the action in audit_logs
+    await logAudit(
+      req.user.id,
+      req.user.name || 'System',
+      'DELETE',
+      'user',
+      userId,
+      { deleted_user: userToDelete },
+      req.ip
+    );
+
+    // Log audit for company notification
+    try {
+      await pool.query(
+        `INSERT INTO audit_logs (id, user_id, user_name, action, entity_type, entity_id, changes, created_at)
+         VALUES (gen_random_uuid(), $1, $2, 'DELETE', 'user', $3, $4, NOW())`,
+        [req.user.id, req.user.name || 'System', userId, JSON.stringify({ deleted_user: userToDelete })]
+      );
+    } catch (auditErr) {
+      console.error("Audit log error:", auditErr);
+    }
+
+    res.json({
+      success: true,
+      message: `User "${userToDelete.name}" permanently deleted`,
+      deleted: result.rows[0]
+    });
   } catch (err) {
     console.error("DELETE USER ERROR:", err);
     res.status(500).json({ error: err.message });

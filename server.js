@@ -504,10 +504,12 @@ app.get("/users", authenticateToken, async (req, res) => {
     if (companyId) {
       query += " WHERE company_id = $1";
       params.push(companyId);
+      // Only filter active users for non-admin users
       if (req.user.role !== 'admin') {
         query += " AND is_active = true";
       }
     } else {
+      // Only filter active users for non-admin users
       if (req.user.role !== 'admin') {
         query += " WHERE is_active = true";
       }
@@ -2570,10 +2572,21 @@ app.delete("/user-sessions/:id", authenticateToken, async (req, res) => {
 app.put("/users/:id/subscription", authenticateToken, async (req, res) => {
   try {
     const { subscription_status } = req.body;
+
+    // Update subscription_status and sync is_active field
+    // User is active if subscription is 'active' or 'trialing'
+    const isActive = subscription_status === 'active' || subscription_status === 'trialing';
+
     const result = await pool.query(
-      "UPDATE users SET subscription_status = $1 WHERE id = $2 RETURNING id, subscription_status",
-      [subscription_status, req.params.id]
+      `UPDATE users 
+       SET subscription_status = $1, 
+           is_active = $2,
+           updated_at = NOW()
+       WHERE id = $3 
+       RETURNING id, subscription_status, is_active`,
+      [subscription_status, isActive, req.params.id]
     );
+
     res.json(result.rows[0]);
   } catch (err) {
     console.error("SUBSCRIPTION UPDATE ERROR:", err);

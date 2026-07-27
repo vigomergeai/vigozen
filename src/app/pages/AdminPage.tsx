@@ -125,6 +125,7 @@ export default function AdminPage() {
 
   const [search, setSearch] = useState("");
   const [filterRole, setFilterRole] = useState<"all" | "admin" | "user">("all");
+  const [filterStatus, setFilterStatus] = useState<"all" | "active" | "inactive">("all");
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
 
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -156,8 +157,13 @@ export default function AdminPage() {
     // Role filter
     if (filterRole !== "all") data = data.filter(u => u.role === filterRole);
 
+    // Status filter
+    if (filterStatus !== "all") data = data.filter(u =>
+      filterStatus === "active" ? u.isActive : !u.isActive
+    );
+
     return data;
-  }, [users, search, filterRole]);
+  }, [users, search, filterRole, filterStatus]);
 
   const fetchAuditLogs = async () => {
     const token = localStorage.getItem('token');
@@ -462,6 +468,16 @@ export default function AdminPage() {
               <option value="user">User</option>
             </select>
 
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value as any)}
+              className="px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none text-slate-600"
+            >
+              <option value="all">All Status</option>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+            </select>
+
             <span className="text-xs text-slate-400 ml-auto">
               {filtered.length} users
             </span>
@@ -565,9 +581,6 @@ export default function AdminPage() {
                         Role
                       </th>
                       <th className="text-left py-3 px-3 text-xs text-slate-500 font-medium">
-                        Department
-                      </th>
-                      <th className="text-left py-3 px-3 text-xs text-slate-500 font-medium">
                         Employee
                       </th>
                       <th className="text-left py-3 px-3 text-xs text-slate-500 font-medium">
@@ -619,9 +632,6 @@ export default function AdminPage() {
                           >
                             {user.role === "admin" ? "Admin" : "User"}
                           </span>
-                        </td>
-                        <td className="py-3 px-3 text-xs text-slate-600">
-                          {user.department}
                         </td>
                         <td className="py-3 px-3 text-xs text-slate-500">
                           {user.employeeId ? (

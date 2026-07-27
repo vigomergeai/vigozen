@@ -871,7 +871,16 @@ export default function AdminPage() {
                                 }
 
                                 toast.success(`Subscription updated to ${newStatus}`);
-                                await fetchSubscriptions(); // Refresh to get latest data
+
+                                // Sync with user management - update user's active status
+                                const isActive = newStatus === 'active';
+                                await updateUser(user.id, { isActive });
+
+                                // Refresh both subscriptions and users list
+                                await Promise.all([
+                                  fetchSubscriptions(),
+                                  loadUsers()
+                                ]);
                               } catch (error) {
                                 // Revert on error
                                 setSubscriptions(prev => prev.map(u => u.id === user.id ? { ...user, subscription_status: originalStatus } : u));

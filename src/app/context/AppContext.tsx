@@ -668,7 +668,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       console.log("🔍 USER ROLES:", data?.map((u: any) => ({ name: u.name, role: u.role, is_active: u.is_active })));
 
       const mapped = (data || [])
-        .filter((row: any) => row.is_active !== false && row.status !== 'inactive')
         .map((row: any) => ({
           id: row.id,
           email: row.email,
@@ -676,7 +675,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           role: row.role,
           employeeId: row.employee_id || row.emp_link || null,
           department: row.department,
-          isActive: row.is_active !== false && row.status !== 'inactive',
+          isActive: row.is_active !== false,
           createdAt: row.created_at ?? "",
           lastLogin: row.last_login ?? null,
         }));

@@ -661,17 +661,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
       );
       if (!res.ok) throw new Error("Failed to load users");
       const data = await res.json();
-      const mapped = (data || []).map((row: any) => ({
-        id: row.id,
-        email: row.email,
-        name: row.name,
-        role: row.role,
-        employeeId: row.employee_id || row.emp_link || null,
-        department: row.department,
-        isActive: row.is_active !== false && row.status !== 'inactive',
-        createdAt: row.created_at ?? "",
-        lastLogin: row.last_login ?? null,
-      }));
+
+      // ✅ ADD THESE LOGS
+      console.log("🔍 BACKEND USERS RESPONSE:", data);
+      console.log("🔍 NUMBER OF USERS:", data?.length || 0);
+      console.log("🔍 USER ROLES:", data?.map((u: any) => ({ name: u.name, role: u.role, is_active: u.is_active })));
+
+      const mapped = (data || [])
+        .filter((row: any) => row.is_active !== false && row.status !== 'inactive')
+        .map((row: any) => ({
+          id: row.id,
+          email: row.email,
+          name: row.name,
+          role: row.role,
+          employeeId: row.employee_id || row.emp_link || null,
+          department: row.department,
+          isActive: row.is_active !== false && row.status !== 'inactive',
+          createdAt: row.created_at ?? "",
+          lastLogin: row.last_login ?? null,
+        }));
+
+      console.log("🔍 MAPPED USERS:", mapped);
+      console.log("🔍 MAPPED USERS COUNT:", mapped.length);
+
       setUsers(mapped);
     } catch (e) {
       console.log("loadUsers error:", e);

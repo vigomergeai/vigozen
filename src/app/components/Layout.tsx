@@ -103,7 +103,7 @@ export default function Layout() {
         `}
       >
         {/* Logo */}
-        <div className="flex items-center gap-3 px-4 py-5 border-b border-white/10">
+        <div className={`flex items-center px-4 py-5 border-b border-white/10 ${sidebarCollapsed ? 'justify-center' : 'justify-between'}`}>
           <div className="flex-shrink-0 w-9 h-9 rounded-xl overflow-hidden shadow-lg border border-white/10 bg-indigo-600 flex items-center justify-center">
             <img
               src="/logo.png"
@@ -111,19 +111,23 @@ export default function Layout() {
               className="w-full h-full object-cover"
             />
           </div>
+
           {!sidebarCollapsed && (
-            <div className="overflow-hidden">
+            <div className="overflow-hidden flex-1 ml-3">
               <div className="text-sm font-semibold text-white leading-tight">VIGOZEN CRM</div>
               <div className="text-[10px] text-indigo-300">AI-Powered CRM</div>
             </div>
           )}
+
+          {/* Always show the toggle button */}
           <button
             onClick={() => { setSidebarCollapsed(!sidebarCollapsed); setMobileOpen(false); }}
-            className="ml-auto p-1 rounded-lg hover:bg-white/10 transition-colors lg:flex hidden"
+            className={`p-1 rounded-lg hover:bg-white/10 transition-colors ${sidebarCollapsed ? '' : 'ml-auto'}`}
           >
             {sidebarCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
           </button>
-          <button className="ml-auto lg:hidden" onClick={() => setMobileOpen(false)}>
+
+          <button className="lg:hidden" onClick={() => setMobileOpen(false)}>
             <X size={16} />
           </button>
         </div>
@@ -264,8 +268,8 @@ export default function Layout() {
                   {subscription && (
                     <div className="mt-1">
                       <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${subscription.is_subscription_active ? 'bg-emerald-500/20 text-emerald-300' :
-                          subscription.is_trial_active ? 'bg-indigo-500/20 text-indigo-300' :
-                            'bg-red-500/20 text-red-300'
+                        subscription.is_trial_active ? 'bg-indigo-500/20 text-indigo-300' :
+                          'bg-red-500/20 text-red-300'
                         }`}>
                         {subscription.is_subscription_active ? (subscription.plan_type || 'Pro') :
                           subscription.is_trial_active ? 'Free Trial' : 'Expired'}

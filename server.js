@@ -9,6 +9,8 @@ const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const pool = require("./db");
 const { getPriorityLeads } = require("./leadScoring");
+const { generateInsight } = require("./geminiInsight");
+const { getTeamStats } = require("./teamStats");
 const notificationQueue = require("./server/notificationQueue");
 const notificationService = require("./server/notificationService");
 const { startNotificationWorker } = require("./server/notificationWorker");
@@ -3428,6 +3430,23 @@ app.get("/ai-insights", authenticateToken, async (req, res) => {
   } catch (err) {
     console.error("AI insights error:", err);
     res.status(500).json({ error: "Failed to fetch AI insights" });
+  }
+});
+app.post("/ai-insights/generate", authenticateToken, async (req, res) => {
+  try {
+    const stats = await getTeamStats();
+    const insightText = await generateInsight(stats);
+
+    await pool.query(
+      `INSERT INTO ai_insights_cache (company_id, insight_text, priority_leads)
+       VALUES ($1, $2, $3)`,
+      [req.user.company_id || null, insightText, JSON.stringify(stats.top_employees)]
+    );
+
+    res.json({ insight_text: insightText, stats });
+  } catch (err) {
+    console.error("Generate insight error:", err);
+    res.status(500).json({ error: "Failed to generate insight" });
   }
 });
 app.listen(5000, "0.0.0.0", () => {

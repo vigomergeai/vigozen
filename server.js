@@ -8,6 +8,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const pool = require("./db");
+const { getPriorityLeads } = require("./leadScoring");
 const notificationQueue = require("./server/notificationQueue");
 const notificationService = require("./server/notificationService");
 const { startNotificationWorker } = require("./server/notificationWorker");
@@ -3414,7 +3415,21 @@ app.get("/subscription/trial/check", authenticateToken, async (req, res) => {
     res.status(500).json({ error: "Failed to check trial" });
   }
 });
-
+app.get("/ai-insights", authenticateToken, async (req, res) => {
+  try {
+    const priorityLeads = await getPriorityLeads(5);
+    const cacheResult = await pool.query(
+      `SELECT insight_text, generated_at FROM ai_insights_cache ORDER BY generated_at DESC LIMIT 1`
+    );
+    res.json({
+      insight_text: cacheResult.rows[0]?.insight_text ?? null,
+      priority_leads: priorityLeads,
+    });
+  } catch (err) {
+    console.error("AI insights error:", err);
+    res.status(500).json({ error: "Failed to fetch AI insights" });
+  }
+});
 app.listen(5000, "0.0.0.0", () => {
   console.log("Server running on port 5000");
   startNotificationWorker();

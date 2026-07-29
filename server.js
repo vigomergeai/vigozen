@@ -144,7 +144,7 @@ const upload = multer({
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(user_id)
       );
-    `).catch(() => {});
+    `).catch(() => { });
     await pool.query(`ALTER TABLE integrations ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`).catch(() => { });
     await pool.query(`ALTER TABLE integrations ADD COLUMN IF NOT EXISTS config JSONB;`).catch(() => { });
     await pool.query(`ALTER TABLE guides ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;`).catch(() => { });
@@ -168,6 +168,76 @@ const upload = multer({
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_status VARCHAR(50) DEFAULT 'trialing';`).catch(() => { });
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS plan_type VARCHAR(100) DEFAULT 'trial';`).catch(() => { });
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS payment_status VARCHAR(50) DEFAULT 'unpaid';`).catch(() => { });
+
+    // ── Company subscription columns ──
+    await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS plan_type VARCHAR(100) DEFAULT 'professional';`).catch(() => { });
+    await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS billing_period VARCHAR(50) DEFAULT 'monthly';`).catch(() => { });
+    await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS subscription_status VARCHAR(50) DEFAULT 'trial';`).catch(() => { });
+    await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS subscription_start TIMESTAMP;`).catch(() => { });
+    await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS subscription_end TIMESTAMP;`).catch(() => { });
+    await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS auto_renew BOOLEAN DEFAULT true;`).catch(() => { });
+    await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS active_users_count INTEGER DEFAULT 0;`).catch(() => { });
+    await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS max_users INTEGER DEFAULT 50;`).catch(() => { });
+    await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`).catch(() => { });
+
+    // ── Payment methods table ──
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS payment_methods (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
+        last4 VARCHAR(10) NOT NULL,
+        brand VARCHAR(50) NOT NULL,
+        expiry VARCHAR(10) NOT NULL,
+        is_default BOOLEAN DEFAULT false,
+        payment_gateway_id VARCHAR(255),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `).catch(() => { });
+
+    // ── Invoices table (with user_id for backward compatibility) ──
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS invoices (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID,
+        company_id UUID,
+        subscription_id UUID,
+        invoice_number VARCHAR(100) UNIQUE NOT NULL,
+        amount DECIMAL(15,2) NOT NULL,
+        gst_amount DECIMAL(15,2) NOT NULL,
+        cgst DECIMAL(15,2) DEFAULT 0,
+        sgst DECIMAL(15,2) DEFAULT 0,
+        total_amount DECIMAL(15,2) NOT NULL,
+        currency VARCHAR(10) DEFAULT 'INR',
+        status VARCHAR(50) DEFAULT 'pending',
+        invoice_url VARCHAR(500),
+        paid_at TIMESTAMP,
+        due_date TIMESTAMP,
+        billing_period_start TIMESTAMP,
+        billing_period_end TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `).catch(() => { });
+
+    // ── Add missing columns to invoices table if it already existed ──
+    await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS user_id UUID;`).catch(() => { });
+    await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS company_id UUID;`).catch(() => { });
+    await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS subscription_id UUID;`).catch(() => { });
+    await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS invoice_number VARCHAR(100);`).catch(() => { });
+    await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS amount DECIMAL(15,2);`).catch(() => { });
+    await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS gst_amount DECIMAL(15,2);`).catch(() => { });
+    await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS cgst DECIMAL(15,2) DEFAULT 0;`).catch(() => { });
+    await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS sgst DECIMAL(15,2) DEFAULT 0;`).catch(() => { });
+    await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS total_amount DECIMAL(15,2);`).catch(() => { });
+    await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS currency VARCHAR(10) DEFAULT 'INR';`).catch(() => { });
+    await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'pending';`).catch(() => { });
+    await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS invoice_url VARCHAR(500);`).catch(() => { });
+    await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP;`).catch(() => { });
+    await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS due_date TIMESTAMP;`).catch(() => { });
+    await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS billing_period_start TIMESTAMP;`).catch(() => { });
+    await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS billing_period_end TIMESTAMP;`).catch(() => { });
+    await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`).catch(() => { });
 
     // ── Set trial for existing users ──
     await pool.query(`
@@ -249,6 +319,24 @@ const authenticateToken = (req, res, next) => {
 
     next();
   });
+};
+
+// ── ROLE-BASED ACCESS CONTROL ──
+const requireRole = (allowedRoles) => {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+    const userRole = req.user.role || 'sales';
+    if (!allowedRoles.includes(userRole)) {
+      return res.status(403).json({
+        error: "Insufficient permissions",
+        required_roles: allowedRoles,
+        current_role: userRole
+      });
+    }
+    next();
+  };
 };
 // ── CORS CONFIGURATION ──
 // Allow requests from frontend origins. Supports crm.vigomerge.com, admin.vigomerge.com, localhost dev servers.
@@ -519,15 +607,6 @@ app.get("/users", authenticateToken, async (req, res) => {
     if (companyId) {
       query += " WHERE company_id = $1";
       params.push(companyId);
-      // Only filter active users for non-admin users
-      if (req.user.role !== 'admin') {
-        query += " AND is_active = true";
-      }
-    } else {
-      // Only filter active users for non-admin users
-      if (req.user.role !== 'admin') {
-        query += " WHERE is_active = true";
-      }
     }
     query += " ORDER BY name ASC;";
     const result = await pool.query(query, params);
@@ -720,8 +799,8 @@ app.post("/users", authenticateToken, async (req, res) => {
 
     const result = await pool.query(
       `INSERT INTO users (name, email, password, role, employee_id, department, is_active, company_id, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, true, $7, NOW())
-       RETURNING id, name, email, role, employee_id AS "employeeId", department, is_active AS "isActive", company_id AS "companyId", created_at AS "createdAt"`,
+      VALUES ($1, $2, $3, $4, $5, $6, false, $7, NOW())   -- ← is_active = false (inactive by default)
+      RETURNING id, name, email, role, employee_id AS "employeeId", department, is_active AS "isActive", company_id AS "companyId", created_at AS "createdAt"`,
       [name, email, hashedPassword, role || "user", employeeId || null, department || "sales", companyId]
     );
 
@@ -886,7 +965,100 @@ app.put("/users/:id/password", authenticateToken, async (req, res) => {
   }
 });
 
+// ── USER ACTIVATION/DEACTIVATION ──
 
+// Activate user
+app.put("/users/:id/activate", authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== "admin") {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    const userId = req.params.id;
+    const companyId = req.user.company_id;
+
+    // Check if user belongs to company
+    const userCheck = await pool.query(
+      "SELECT id, is_active FROM users WHERE id = $1 AND company_id = $2",
+      [userId, companyId]
+    );
+
+    if (userCheck.rows.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    if (userCheck.rows[0].is_active) {
+      return res.status(400).json({ error: "User is already active" });
+    }
+
+    // Activate user
+    const result = await pool.query(
+      `UPDATE users 
+       SET is_active = true, 
+           activated_at = NOW(),
+           deactivated_at = NULL,
+           updated_at = NOW()
+       WHERE id = $1 
+       RETURNING id, is_active, activated_at`,
+      [userId]
+    );
+
+    res.json({
+      success: true,
+      message: "User activated successfully",
+      user: result.rows[0]
+    });
+  } catch (err) {
+    console.error("Activate user error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Deactivate user
+app.put("/users/:id/deactivate", authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== "admin") {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    const userId = req.params.id;
+    const companyId = req.user.company_id;
+
+    // Check if user belongs to company
+    const userCheck = await pool.query(
+      "SELECT id, is_active FROM users WHERE id = $1 AND company_id = $2",
+      [userId, companyId]
+    );
+
+    if (userCheck.rows.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    if (!userCheck.rows[0].is_active) {
+      return res.status(400).json({ error: "User is already inactive" });
+    }
+
+    // Deactivate user
+    const result = await pool.query(
+      `UPDATE users 
+       SET is_active = false, 
+           deactivated_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $1 
+       RETURNING id, is_active, deactivated_at`,
+      [userId]
+    );
+
+    res.json({
+      success: true,
+      message: "User deactivated successfully",
+      user: result.rows[0]
+    });
+  } catch (err) {
+    console.error("Deactivate user error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 
 // Settings
@@ -2974,7 +3146,7 @@ app.post("/users/bulk/action", authenticateToken, async (req, res) => {
         break;
 
       case 'assign_role':
-        if (!value || !['admin', 'user', 'sales'].includes(value)) {
+        if (!value || !['super_admin', 'admin', 'manager', 'sales', 'viewer'].includes(value)) {
           return res.status(400).json({ error: "Invalid role" });
         }
         result = await pool.query(
@@ -3567,6 +3739,255 @@ app.post("/ai-insights/generate", authenticateToken, async (req, res) => {
     res.status(500).json({ error: "Failed to generate insight" });
   }
 });
+
+// ── COMPANY SUBSCRIPTION MANAGEMENT ──
+
+// GET company subscription details
+app.get("/api/company/subscription", authenticateToken, async (req, res) => {
+  try {
+    const companyId = req.user.company_id;
+
+    // Get company details
+    const companyRes = await pool.query(
+      "SELECT id, name, plan_type, billing_period, subscription_status, subscription_start, subscription_end, auto_renew FROM companies WHERE id = $1",
+      [companyId]
+    );
+
+    if (companyRes.rows.length === 0) {
+      return res.status(404).json({ error: "Company not found" });
+    }
+
+    const company = companyRes.rows[0];
+
+    // Get active users count
+    const usersRes = await pool.query(
+      "SELECT COUNT(*) as active_count FROM users WHERE company_id = $1 AND is_active = true",
+      [companyId]
+    );
+
+    const activeUsers = parseInt(usersRes.rows[0].active_count);
+
+    // Pricing calculation
+    const planPrices = {
+      'starter': 499,
+      'professional': 1299,
+      'enterprise': 2499
+    };
+
+    const basePrice = planPrices[company.plan_type] || 1299;
+    const subtotal = basePrice * activeUsers;
+
+    // Discount based on billing period
+    const discounts = {
+      'monthly': 0,
+      'quarterly': 5,
+      'half_yearly': 10,
+      'yearly': 15
+    };
+    const discount = discounts[company.billing_period] || 0;
+    const discountedSubtotal = subtotal * (1 - discount / 100);
+    const gst = discountedSubtotal * 0.18;
+    const total = discountedSubtotal + gst;
+
+    res.json({
+      company: {
+        plan_type: company.plan_type,
+        billing_period: company.billing_period,
+        subscription_status: company.subscription_status,
+        subscription_start: company.subscription_start,
+        subscription_end: company.subscription_end,
+        auto_renew: company.auto_renew
+      },
+      active_users: activeUsers,
+      pricing: {
+        base_price: basePrice,
+        subtotal: subtotal,
+        discount: discount,
+        discounted_subtotal: discountedSubtotal,
+        gst: gst,
+        total: total,
+        currency: 'INR'
+      }
+    });
+  } catch (error) {
+    console.error("Company subscription error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT update company subscription
+app.put("/api/company/subscription", authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    const companyId = req.user.company_id;
+    const { plan_type, billing_period, auto_renew } = req.body;
+
+    // Calculate new price
+    const planPrices = {
+      'starter': 499,
+      'professional': 1299,
+      'enterprise': 2499
+    };
+
+    const usersRes = await pool.query(
+      "SELECT COUNT(*) as active_count FROM users WHERE company_id = $1 AND is_active = true",
+      [companyId]
+    );
+    const activeUsers = parseInt(usersRes.rows[0].active_count);
+    const basePrice = planPrices[plan_type] || 1299;
+    const amount = basePrice * activeUsers;
+
+    const result = await pool.query(
+      `UPDATE companies 
+       SET plan_type = COALESCE($1, plan_type),
+           billing_period = COALESCE($2, billing_period),
+           auto_renew = COALESCE($3, auto_renew),
+           subscription_start = CASE WHEN $1 IS NOT NULL OR $2 IS NOT NULL THEN NOW() ELSE subscription_start END,
+           subscription_end = CASE 
+             WHEN $2 = 'monthly' THEN NOW() + INTERVAL '1 month'
+             WHEN $2 = 'quarterly' THEN NOW() + INTERVAL '3 months'
+             WHEN $2 = 'half_yearly' THEN NOW() + INTERVAL '6 months'
+             WHEN $2 = 'yearly' THEN NOW() + INTERVAL '1 year'
+             ELSE subscription_end
+           END,
+           updated_at = NOW()
+       WHERE id = $4
+       RETURNING *`,
+      [plan_type, billing_period, auto_renew, companyId]
+    );
+
+    res.json({
+      success: true,
+      message: "Subscription updated successfully",
+      company: result.rows[0]
+    });
+  } catch (error) {
+    console.error("Update subscription error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
+// ── PAYMENT METHODS API ──
+
+// GET /api/payment-methods - Get all payment methods for company
+app.get("/api/payment-methods", authenticateToken, async (req, res) => {
+  try {
+    const companyId = req.user.company_id;
+    const result = await pool.query(
+      "SELECT * FROM payment_methods WHERE company_id = $1 ORDER BY is_default DESC, created_at DESC",
+      [companyId]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Get payment methods error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/payment-methods - Add a new payment method
+app.post("/api/payment-methods", authenticateToken, async (req, res) => {
+  try {
+    const companyId = req.user.company_id;
+    const { last4, brand, expiry, is_default, payment_gateway_id } = req.body;
+
+    if (!last4 || !brand || !expiry) {
+      return res.status(400).json({ error: "last4, brand, and expiry are required" });
+    }
+
+    // If this is default, unset other defaults
+    if (is_default) {
+      await pool.query(
+        "UPDATE payment_methods SET is_default = false WHERE company_id = $1",
+        [companyId]
+      );
+    }
+
+    const result = await pool.query(
+      `INSERT INTO payment_methods (company_id, last4, brand, expiry, is_default, payment_gateway_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+       RETURNING *`,
+      [companyId, last4, brand, expiry, is_default || false, payment_gateway_id || null]
+    );
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("Add payment method error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/payment-methods/:id - Delete a payment method
+app.delete("/api/payment-methods/:id", authenticateToken, async (req, res) => {
+  try {
+    const companyId = req.user.company_id;
+    const result = await pool.query(
+      "DELETE FROM payment_methods WHERE id = $1 AND company_id = $2 RETURNING *",
+      [req.params.id, companyId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Payment method not found" });
+    }
+
+    res.json({ success: true, deleted: result.rows[0] });
+  } catch (err) {
+    console.error("Delete payment method error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/payment-methods/:id/default - Set default payment method
+app.put("/api/payment-methods/:id/default", authenticateToken, async (req, res) => {
+  try {
+    const companyId = req.user.company_id;
+
+    // Unset all other defaults
+    await pool.query(
+      "UPDATE payment_methods SET is_default = false WHERE company_id = $1",
+      [companyId]
+    );
+
+    // Set the selected one as default
+    const result = await pool.query(
+      `UPDATE payment_methods 
+       SET is_default = true, updated_at = NOW()
+       WHERE id = $1 AND company_id = $2
+       RETURNING *`,
+      [req.params.id, companyId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Payment method not found" });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("Set default payment method error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── INVOICES API ──
+
+// GET /api/invoices - Get all invoices for company
+app.get("/api/invoices", authenticateToken, async (req, res) => {
+  try {
+    const companyId = req.user.company_id;
+    const result = await pool.query(
+      "SELECT * FROM invoices WHERE company_id = $1 ORDER BY created_at DESC",
+      [companyId]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Get invoices error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.listen(5000, "0.0.0.0", () => {
   console.log("Server running on port 5000");
   startNotificationWorker();

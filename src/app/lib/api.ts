@@ -336,7 +336,22 @@ export const api = {
     }),
   },
   sales: {
-    getPerformanceData: () => Promise.resolve(salesWiseData),
+    /**
+     * Get sales performance data from backend
+     * @param token - Optional auth token
+     * @param startDate - Optional start date filter
+     * @param endDate - Optional end date filter
+     */
+    getPerformanceData: (token?: string, startDate?: string, endDate?: string) => {
+      let url = "/api/reports/sales-wise";
+      const params = new URLSearchParams();
+      if (startDate) params.append("startDate", startDate);
+      if (endDate) params.append("endDate", endDate);
+      if (params.toString()) {
+        url += `?${params.toString()}`;
+      }
+      return request("GET", url, undefined, token);
+    },
   },
   reset: (token?: string) => request("POST", "/reset", undefined, token),
 };

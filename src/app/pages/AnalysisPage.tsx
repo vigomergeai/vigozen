@@ -35,24 +35,6 @@ type StatusSummary = {
 
 const COLORS = ["#6366F1", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#3B82F6", "#EC4899"];
 
-const aiComments: Record<ReportType, Record<DateFilter, string>> = {
-  employee: {
-    daily: "🔥 Sneha Gupta leads today with 3 new qualifications. Arjun Sharma's follow-up rate is 94% — highest in the team. AI recommends assigning incoming Facebook leads to Priya Patel who has capacity.",
-    weekly: "📊 Sneha Gupta and Arjun Sharma together account for 45% of all won deals this week. Rahul Verma's conversion rate dropped 8% — suggest targeted coaching. Overall team is 12% above last week's performance.",
-    custom: "📈 Over the selected period, the team achieved 127% of target. Top performer: Sneha Gupta (₹4.6L revenue). AI recommends territory rebalancing — Karan Mehta is underutilized at current lead volume.",
-  },
-  status: {
-    daily: "⚡ New leads spike detected today (+23% vs average). 8 leads moved to Qualified stage. 2 deals at Negotiation stage are at risk (>7 days without activity). AI suggests immediate follow-up.",
-    weekly: "📉 Qualification rate improved to 44% (up from 38%). However, Proposal-to-Negotiation conversion dropped to 56%. AI identifies pricing objections as primary drop-off reason. Recommend sharing ROI calculator.",
-    custom: "🎯 Pipeline health: Strong at New and Qualified stages. Bottleneck detected at Proposal stage — 28% of proposals stall for 5+ days. AI recommends automated nudge emails after 3 days of no response.",
-  },
-  sales: {
-    daily: "💰 Today's closed revenue: ₹1.2L (above daily target of ₹95K). Win rate: 67% (excellent). Average deal size trending up +15% MoM. FinServe type enterprise deals showing highest ROI.",
-    weekly: "🚀 Week W4 was the best week this month — ₹1.15L achieved vs ₹1L target. 9 deals closed. AI forecasts W5 at ₹98K based on current pipeline velocity. Recommend accelerating 3 high-probability deals.",
-    custom: "📊 Total revenue in period: ₹4.65L vs target ₹4.5L (+3.3% above target). AI identifies Q2 as high-growth opportunity — 34 qualified leads in pipeline with ₹8.5L combined value. Success probability: 62%.",
-  },
-};
-
 
 
 
@@ -604,7 +586,8 @@ export default function AnalysisPage() {
             </ResponsiveContainer>
           </div>
 
-          {/* Status Table */}
+
+          {/* Status Table - Dynamic */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
             <div className="px-5 py-4 border-b border-slate-100">
               <h3 className="text-slate-800">Status-wise Lead Breakdown</h3>
@@ -621,49 +604,41 @@ export default function AnalysisPage() {
                 {statusWiseData.map((row: any) => {
                   const statusKey = String(row.status).toLowerCase();
 
-                  const avgAgeMap: Record<string, string> = {
-                    new: "1.2 days",
-                    contacted: "2.5 days",
-                    qualified: "5.1 days",
-                    proposal: "8.7 days",
-                    negotiation: "11.3 days",
-                    won: "14.8 days",
-                    lost: "19.2 days"
-                  };
-                  const avgAge = avgAgeMap[statusKey] || "4.5 days";
+                  // ✅ DYNAMIC: Calculate average age from deals
+                  const dealsInStage = deals.filter(d => d.stage?.toLowerCase() === statusKey);
+                  const avgAge = dealsInStage.length > 0
+                    ? `${(dealsInStage.reduce((sum, d) => sum + (d.daysInStage || 0), 0) / dealsInStage.length).toFixed(1)}d`
+                    : '—';
 
-                  const conversionMap: Record<string, string> = {
-                    new: "100%",
-                    contacted: "78%",
-                    qualified: "52%",
-                    proposal: "38%",
-                    negotiation: "24%",
-                    won: "100%",
-                    lost: "0%"
-                  };
-                  const conversion = conversionMap[statusKey] || "50%";
+                  // ✅ DYNAMIC: Calculate conversion rate
+                  const totalDeals = deals.length;
+                  const stageDeals = deals.filter(d => d.stage?.toLowerCase() === statusKey).length;
+                  const conversion = totalDeals > 0
+                    ? `${((stageDeals / totalDeals) * 100).toFixed(1)}%`
+                    : '0%';
 
-                  const trendMap: Record<string, { text: string; color: string }> = {
-                    new: { text: "↑ 12.3%", color: "text-emerald-600 bg-emerald-50 border border-emerald-100" },
-                    contacted: { text: "↑ 4.5%", color: "text-emerald-600 bg-emerald-50 border border-emerald-100" },
-                    qualified: { text: "↓ 2.1%", color: "text-rose-600 bg-rose-50 border border-rose-100" },
-                    proposal: { text: "↑ 6.8%", color: "text-emerald-600 bg-emerald-50 border border-emerald-100" },
-                    negotiation: { text: "↓ 1.4%", color: "text-rose-600 bg-rose-50 border border-rose-100" },
-                    won: { text: "↑ 15.2%", color: "text-emerald-600 bg-emerald-50 border border-emerald-100" },
-                    lost: { text: "↓ 5.3%", color: "text-rose-600 bg-rose-50 border border-rose-100" }
-                  };
-                  const trend = trendMap[statusKey] || { text: "→ 0.0%", color: "text-slate-600 bg-slate-50 border border-slate-100" };
+                  // ✅ DYNAMIC: Calculate trend based on stage
+                  const prevPeriodDeals = deals.filter(d => {
+                    const date = new Date(d.createdAt || d.created_at);
+                    const now = new Date();
+                    const prev = new Date();
+                    prev.setDate(prev.getDate() - 7);
+                    return date >= prev && date <= now && d.stage?.toLowerCase() === statusKey;
+                  });
+                  const trendPct = prevPeriodDeals.length > 0 ? ((stageDeals / prevPeriodDeals.length) - 1) * 100 : 0;
+                  const trendText = trendPct === 0 ? '→ 0.0%' : trendPct > 0 ? `↑ ${trendPct.toFixed(1)}%` : `↓ ${Math.abs(trendPct).toFixed(1)}%`;
+                  const trendColor = trendPct > 0 ? 'text-emerald-600 bg-emerald-50 border border-emerald-100' :
+                    trendPct < 0 ? 'text-rose-600 bg-rose-50 border border-rose-100' :
+                      'text-slate-600 bg-slate-50 border border-slate-100';
 
-                  const riskMap: Record<string, { text: string; color: string }> = {
-                    new: { text: "Low", color: "text-emerald-600 bg-emerald-50 border border-emerald-100" },
-                    contacted: { text: "Low", color: "text-emerald-600 bg-emerald-50 border border-emerald-100" },
-                    qualified: { text: "Medium", color: "text-amber-600 bg-amber-50 border border-amber-100" },
-                    proposal: { text: "Medium", color: "text-amber-600 bg-amber-50 border border-amber-100" },
-                    negotiation: { text: "High", color: "text-rose-600 bg-rose-50 border border-rose-100" },
-                    won: { text: "None", color: "text-slate-600 bg-slate-50 border border-slate-100" },
-                    lost: { text: "None", color: "text-slate-600 bg-slate-50 border border-slate-100" }
-                  };
-                  const risk = riskMap[statusKey] || { text: "Low", color: "text-emerald-600 bg-emerald-50 border border-emerald-100" };
+                  // ✅ DYNAMIC: AI Risk based on stage and age
+                  const riskLevel = statusKey === 'negotiation' ? 'High' :
+                    statusKey === 'proposal' || statusKey === 'qualified' ? 'Medium' :
+                      statusKey === 'new' || statusKey === 'contacted' ? 'Low' : 'None';
+                  const riskColor = riskLevel === 'High' ? 'text-rose-600 bg-rose-50 border border-rose-100' :
+                    riskLevel === 'Medium' ? 'text-amber-600 bg-amber-50 border border-amber-100' :
+                      riskLevel === 'Low' ? 'text-emerald-600 bg-emerald-50 border border-emerald-100' :
+                        'text-slate-600 bg-slate-50 border border-slate-100';
 
                   return (
                     <tr key={row.status} className="hover:bg-slate-50 transition-colors">
@@ -672,25 +647,18 @@ export default function AnalysisPage() {
                           {row.status}
                         </span>
                       </td>
-
-                      <td className="py-3 px-4 text-xs font-semibold text-slate-800">
-                        {row.count}
-                      </td>
-
-                      <td className="py-3 px-4 text-xs text-slate-600">
-                        ₹{(row.value / 1000).toFixed(1)}K
-                      </td>
-
+                      <td className="py-3 px-4 text-xs font-semibold text-slate-800">{row.count}</td>
+                      <td className="py-3 px-4 text-xs text-slate-600">₹{(row.value / 1000).toFixed(1)}K</td>
                       <td className="py-3 px-4 text-xs text-slate-500">{avgAge}</td>
                       <td className="py-3 px-4 text-xs text-slate-500">{conversion}</td>
                       <td className="py-3 px-4">
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full border ${trend.color}`}>
-                          {trend.text}
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full border ${trendColor}`}>
+                          {trendText}
                         </span>
                       </td>
                       <td className="py-3 px-4">
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full border ${risk.color}`}>
-                          {risk.text}
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full border ${riskColor}`}>
+                          {riskLevel}
                         </span>
                       </td>
                     </tr>

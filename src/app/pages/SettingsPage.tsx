@@ -11,19 +11,49 @@ import { useApp } from "../context/AppContext";
 import { toast } from "sonner";
 import QRCode from "qrcode";
 import { api, getApiBaseUrl } from "../lib/api";
+import { useAdConnections, AdConnection } from "../../hooks/useAdConnections";
 
 type SettingsTab = "profile" | "integrations" | "pricing" | "notifications" | "security" | "system";
 
-const integrationIconColors: Record<string, { bg: string; text: string; icon: string }> = {
-  FB: { bg: "bg-blue-100", text: "text-blue-700", icon: "f" },
-  LI: { bg: "bg-sky-100", text: "text-sky-700", icon: "in" },
-  SF: { bg: "bg-cyan-100", text: "text-cyan-700", icon: "☁" },
-  HS: { bg: "bg-orange-100", text: "text-orange-700", icon: "H" },
-  WF: { bg: "bg-emerald-100", text: "text-emerald-700", icon: "W" },
-  GA: { bg: "bg-red-100", text: "text-red-700", icon: "G" },
-  WA: { bg: "bg-green-100", text: "text-green-700", icon: "W" },
-  ZP: { bg: "bg-amber-100", text: "text-amber-700", icon: "Z" },
-};
+// ── Ad Platform Configuration ──
+const AD_PLATFORMS = [
+  {
+    platform: "facebook",
+    name: "Facebook Ads",
+    icon: "📘",
+    desc: "Import leads from Facebook Lead Ad campaigns",
+    color: "bg-blue-100 text-blue-700",
+    border: "border-blue-200",
+    bg: "bg-blue-50"
+  },
+  {
+    platform: "google",
+    name: "Google Ads",
+    icon: "📊",
+    desc: "Track leads from Google Ads campaigns",
+    color: "bg-red-100 text-red-700",
+    border: "border-red-200",
+    bg: "bg-red-50"
+  },
+  {
+    platform: "linkedin",
+    name: "LinkedIn Ads",
+    icon: "🔗",
+    desc: "Import B2B leads from LinkedIn",
+    color: "bg-sky-100 text-sky-700",
+    border: "border-sky-200",
+    bg: "bg-sky-50"
+  },
+  {
+    platform: "instagram",
+    name: "Instagram Ads",
+    icon: "📸",
+    desc: "Import Instagram lead form submissions",
+    color: "bg-pink-100 text-pink-700",
+    border: "border-pink-200",
+    bg: "bg-pink-50"
+  },
+];
 
 export default function SettingsPage() {
   const {
@@ -79,6 +109,16 @@ export default function SettingsPage() {
   //  ADD THIS
   const [twoFAEnabled, setTwoFAEnabled] = useState(false);
   const [sessions, setSessions] = useState<any[]>([]);
+  // ── Ad Connections State ──
+  const [showConnectModal, setShowConnectModal] = useState(false);
+  const [selectedPlatform, setSelectedPlatform] = useState<string | null>(null);
+  const [connectForm, setConnectForm] = useState({ accountId: "", accountName: "" });
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState(false);
+  const [autoCreateLeads, setAutoCreateLeads] = useState(true);
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [adConnections, setAdConnections] = useState<AdConnection[]>([]);
+  const [adLoading, setAdLoading] = useState(false);
+  const [syncing, setSyncing] = useState<string | null>(null);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const fetchActiveSessions = async () => {
     if (!session?.user?.id) return;
@@ -131,6 +171,122 @@ export default function SettingsPage() {
       'business': 1499,
     };
     return planMap[plan] || 999;
+  };
+  // ── Fetch Ad Connections ──
+  const fetchAdConnections = async () => {
+    const token = localStorage.getItem('token');
+    if (!token) return;
+    setAdLoading(true);
+    try {
+      const data = await api.adConnections.list(token);
+      setAdConnections(data || []);
+      // Load settings from userSettings
+      if (userSettings?.ad_auto_sync !== undefined) {
+        setAutoSyncEnabled(userSettings.ad_auto_sync);
+      }
+      if (userSettings?.ad_auto_create !== undefined) {
+        setAutoCreateLeads(userSettings.ad_auto_create);
+      }
+    } catch (error) {
+      console.error("Failed to fetch ad connections:", error);
+      toast.error("Failed to load ad connections");
+    } finally {
+      setAdLoading(false);
+    }
+  };
+
+  // ── Connect Ad Platform ──
+  const handleConnectPlatform = async () => {
+    if (!selectedPlatform) return;
+    if (!connectForm.accountId || !connectForm.accountName) {
+      toast.error("Please enter Account ID and Name");
+      return;
+    }
+
+    const platform = AD_PLATFORMS.find(p => p.platform === selectedPlatform);
+    if (!platform) return;
+
+    const token = localStorage.getItem('token');
+    if (!token) {
+      toast.error("Please log in again");
+      return;
+    }
+
+    try {
+      await api.adConnections.create({
+        platform: selectedPlatform,
+        platform_name: platform.name,
+        account_id: connectForm.accountId,
+        account_name: connectForm.accountName,
+      }, token);
+
+      toast.success(`${platform.name} connected successfully!`);
+      await fetchAdConnections();
+      setShowConnectModal(false);
+      setConnectForm({ accountId: "", accountName: "" });
+      setSelectedPlatform(null);
+    } catch (error: any) {
+      console.error("Connection failed:", error);
+      toast.error(error.message || "Failed to connect platform");
+    }
+  };
+
+  // ── Disconnect Ad Platform ──
+  const handleDisconnect = async (id: string, platformName: string) => {
+    if (!confirm(`Are you sure you want to disconnect ${platformName}?`)) return;
+
+    const token = localStorage.getItem('token');
+    if (!token) {
+      toast.error("Please log in again");
+      return;
+    }
+
+    try {
+      await api.adConnections.delete(id, token);
+      toast.success(`${platformName} disconnected`);
+      await fetchAdConnections();
+    } catch (error: any) {
+      console.error("Disconnect failed:", error);
+      toast.error(error.message || "Failed to disconnect");
+    }
+  };
+
+  // ── Sync Ad Platform ──
+  const handleSyncPlatform = async (id: string, platformName: string) => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      toast.error("Please log in again");
+      return;
+    }
+
+    setSyncing(id);
+    try {
+      const result = await api.adConnections.sync(id, token);
+      toast.success(`${platformName} synced! ${result.leads_imported || 0} new leads imported`);
+      await fetchAdConnections();
+    } catch (error: any) {
+      console.error("Sync failed:", error);
+      toast.error(error.message || "Failed to sync");
+    } finally {
+      setSyncing(null);
+    }
+  };
+
+  // ── Save Auto-Import Settings ──
+  const handleSaveAutoSettings = async () => {
+    setSavingSettings(true);
+    try {
+      await saveSettings({
+        ad_auto_sync: autoSyncEnabled,
+        ad_auto_create: autoCreateLeads,
+      });
+      toast.success("Auto-import settings saved");
+    } catch (error) {
+      console.error("Save settings failed:", error);
+      toast.error("Failed to save settings");
+    } finally {
+      setSavingSettings(false);
+    }
   };
 
   const getPlanId = (plan: string): string => {
@@ -1048,92 +1204,136 @@ export default function SettingsPage() {
 
           {/* ===== INTEGRATIONS ===== */}
           {activeTab === "integrations" && (
-            <div className="space-y-5">
+            <div className="space-y-6">
+              {/* Header */}
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-slate-800 dark:text-white">Lead Integrations</h3>
-                  <p className="text-xs text-slate-400 mt-0.5">Connect your lead sources and sync data automatically</p>
+                  <h3 className="text-slate-800 dark:text-white">Ad Platform Connections</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">Connect your advertising accounts to auto-import leads</p>
                 </div>
-                <button
-                  onClick={openAddIntegrationModal}
-                  className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl flex items-center gap-2 transition-colors"
-                >
-                  <Plus size={14} />Add Integration
-                </button>
               </div>
-              <div className="grid grid-cols-3 gap-4">
+
+              {/* Stats Summary */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 {[
-                  { label: "Active Connections", value: integrations.filter(i => i.status === "Connected").length, color: "text-emerald-600" },
-                  { label: "Total Leads Imported", value: integrations.reduce((s, i) => s + i.leads, 0), color: "text-indigo-600" },
-                  { label: "Last Sync", value: loading ? "..." : "1 min ago", color: "text-amber-600" },
+                  { label: "Connected Platforms", value: adConnections.filter(c => c.connected !== false).length, color: "text-emerald-600" },
+                  { label: "Total Leads Imported", value: adConnections.reduce((s, c) => s + (c.leads_imported || 0), 0), color: "text-indigo-600" },
+                  { label: "Total Ad Spend", value: `₹${adConnections.reduce((s, c) => s + (c.cost_spent || 0), 0).toLocaleString()}`, color: "text-amber-600" },
+                  { label: "Auto-Sync", value: autoSyncEnabled ? "ON" : "OFF", color: autoSyncEnabled ? "text-emerald-600" : "text-slate-400" },
                 ].map(stat => (
-                  <div key={stat.label} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm text-center">
-                    <div className={`text-2xl font-bold ${stat.color}`}>{stat.value}</div>
-                    <div className="text-xs text-slate-400 mt-0.5">{stat.label}</div>
+                  <div key={stat.label} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
+                    <div className={`text-lg font-bold ${stat.color}`}>{stat.value}</div>
+                    <div className="text-xs text-slate-400">{stat.label}</div>
                   </div>
                 ))}
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {integrations.map(integ => {
-                  const ic = integrationIconColors[integ.icon] || { bg: "bg-slate-100", text: "text-slate-600", icon: integ.icon };
+
+              {/* Platform Cards */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {AD_PLATFORMS.map(platform => {
+                  const connection = adConnections.find(c => c.platform === platform.platform);
+                  const isConnected = connection && connection.connected !== false;
+
                   return (
-                    <div key={integ.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 hover:shadow-md transition-all">
-                      <div className="flex items-start justify-between mb-4">
+                    <div key={platform.platform} className={`bg-white rounded-2xl border p-5 shadow-sm hover:shadow-md transition-all ${isConnected ? 'border-emerald-200' : 'border-slate-200'}`}>
+                      <div className="flex items-start justify-between">
                         <div className="flex items-center gap-3">
-                          <div className={`w-11 h-11 rounded-xl flex items-center justify-center font-bold text-sm ${ic.bg} ${ic.text}`}>{ic.icon}</div>
+                          <div className={`w-11 h-11 rounded-xl flex items-center justify-center text-2xl ${platform.bg} ${platform.color}`}>
+                            {platform.icon}
+                          </div>
                           <div>
-                            <div className="text-sm font-semibold text-slate-800">{integ.name}</div>
-                            <div className="text-xs text-slate-400">{integ.type}</div>
+                            <div className="text-sm font-semibold text-slate-800">{platform.name}</div>
+                            <div className="text-xs text-slate-400">{platform.desc}</div>
                           </div>
                         </div>
-                        <span className={`text-xs px-2 py-0.5 rounded-full border font-medium flex items-center gap-1 ${integ.status === "Connected" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : integ.status === "Pending" ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-slate-50 text-slate-500 border-slate-200"}`}>
-                          <div className={`w-1.5 h-1.5 rounded-full ${integ.status === "Connected" ? "bg-emerald-500 animate-pulse" : integ.status === "Pending" ? "bg-amber-500" : "bg-slate-400"}`} />
-                          {integ.status}
+                        <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${isConnected ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
+                          {isConnected ? '✅ Connected' : '❌ Not Connected'}
                         </span>
                       </div>
-                      <p className="text-xs text-slate-500 mb-3">{integ.description}</p>
-                      {integ.status === "Connected" && (
-                        <div className="flex items-center gap-3 mb-3 text-xs text-slate-500">
-                          <span className="bg-slate-50 px-2 py-1 rounded-lg border border-slate-200">{integ.leads} leads imported</span>
-                          <span className="bg-slate-50 px-2 py-1 rounded-lg border border-slate-200 flex items-center gap-1"><RefreshCw size={9} />Synced {integ.lastSync}</span>
+
+                      {isConnected && (
+                        <div className="mt-3 pt-3 border-t border-slate-100">
+                          <div className="flex items-center justify-between text-xs text-slate-500">
+                            <span>Account: {connection.account_name || connection.account_id || '—'}</span>
+                            <span>{connection.leads_imported || 0} leads imported</span>
+                            <span>Last sync: {connection.last_sync ? new Date(connection.last_sync).toLocaleDateString() : 'Never'}</span>
+                          </div>
+                          <div className="flex items-center gap-2 mt-2">
+                            <button
+                              onClick={() => handleSyncPlatform(connection.id, platform.name)}
+                              disabled={syncing === connection.id}
+                              className="flex-1 py-1.5 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-1"
+                            >
+                              {syncing === connection.id ? (
+                                <><RefreshCw size={11} className="animate-spin" /> Syncing...</>
+                              ) : (
+                                <><RefreshCw size={11} /> Sync Now</>
+                              )}
+                            </button>
+                            <button
+                              onClick={() => handleDisconnect(connection.id, platform.name)}
+                              className="px-3 py-1.5 text-xs text-red-600 border border-red-200 rounded-lg hover:bg-red-50"
+                            >
+                              Disconnect
+                            </button>
+                          </div>
                         </div>
                       )}
-                      <div className="flex items-center gap-2">
-                        <button onClick={() => toggleIntegration(integ.id)} className={`flex-1 py-2 text-xs rounded-xl font-medium transition-colors ${integ.status === "Connected" ? "bg-red-50 text-red-600 hover:bg-red-100 border border-red-200" : "bg-indigo-600 text-white hover:bg-indigo-700"}`}>
-                          {integ.status === "Connected" ? "Disconnect" : integ.status === "Pending" ? "Configure" : "Connect"}
+
+                      {!isConnected && (
+                        <button
+                          onClick={() => {
+                            setSelectedPlatform(platform.platform);
+                            setConnectForm({ accountId: "", accountName: "" });
+                            setShowConnectModal(true);
+                          }}
+                          className="mt-3 w-full py-2 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+                        >
+                          Connect {platform.name} →
                         </button>
-                        {integ.status === "Connected" && (
-                          <>
-                            <button onClick={() => syncIntegration(integ.id)} className="px-3 py-2 text-xs border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition-colors flex items-center gap-1"><RefreshCw size={11} />Sync</button>
-                            <button
-                              onClick={() => openEditIntegrationModal(integ)}
-                              className="px-3 py-2 text-xs border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition-colors"
-                            >
-                              <Edit size={11} />
-                            </button>
-                          </>
-                        )}
-                      </div>
+                      )}
                     </div>
                   );
                 })}
               </div>
-              {/* API Info */}
-              <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200 rounded-2xl p-5">
-                <div className="flex items-start gap-3">
-                  <div className="w-9 h-9 rounded-xl bg-indigo-100 flex items-center justify-center"><Key size={16} className="text-indigo-600" /></div>
-                  <div className="flex-1">
-                    <div className="text-sm font-semibold text-indigo-800 mb-1">API Access</div>
-                    <div className="text-xs text-indigo-600 mb-3">Use our REST API to build custom integrations with any platform.</div>
-                    <div className="flex items-center gap-2">
-                      <code className="flex-1 text-xs bg-white border border-indigo-200 rounded-lg px-3 py-2 text-slate-600 font-mono">
-                        {showApiKey
-                          ? (apiKey || "No API key")
-                          : (apiKey ? apiKey.slice(0, 10) + "••••••••••••••••••••••••••••••" : "Loading...")}
-                      </code>
-                      <button onClick={() => setShowApiKey(!showApiKey)} className="px-3 py-2 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors">{showApiKey ? "Hide" : "Reveal"}</button>
+
+              {/* Auto-Import Settings */}
+              <div className="bg-white rounded-2xl border border-slate-200 p-5">
+                <h4 className="text-slate-800 font-semibold mb-4">Auto-Import Settings</h4>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between py-3 border-b border-slate-50">
+                    <div>
+                      <div className="text-sm font-medium text-slate-800">Auto-sync leads from ads</div>
+                      <div className="text-xs text-slate-400">Automatically fetch new leads from connected ad platforms every 15 minutes</div>
                     </div>
+                    <button
+                      onClick={() => setAutoSyncEnabled(!autoSyncEnabled)}
+                      className={`w-11 h-6 rounded-full flex items-center transition-all ${autoSyncEnabled ? "bg-indigo-600 justify-end" : "bg-slate-200 justify-start"}`}
+                    >
+                      <div className="w-5 h-5 bg-white rounded-full shadow-sm mx-0.5" />
+                    </button>
                   </div>
+
+                  <div className="flex items-center justify-between py-3 border-b border-slate-50">
+                    <div>
+                      <div className="text-sm font-medium text-slate-800">Create leads automatically</div>
+                      <div className="text-xs text-slate-400">Automatically add imported leads to your Leads table</div>
+                    </div>
+                    <button
+                      onClick={() => setAutoCreateLeads(!autoCreateLeads)}
+                      className={`w-11 h-6 rounded-full flex items-center transition-all ${autoCreateLeads ? "bg-indigo-600 justify-end" : "bg-slate-200 justify-start"}`}
+                    >
+                      <div className="w-5 h-5 bg-white rounded-full shadow-sm mx-0.5" />
+                    </button>
+                  </div>
+
+                  <button
+                    onClick={handleSaveAutoSettings}
+                    disabled={savingSettings}
+                    className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {savingSettings ? (<><RefreshCw size={13} className="animate-spin" /> Saving...</>) : (<><Save size={13} /> Save Settings</>)}
+                  </button>
                 </div>
               </div>
             </div>
@@ -1171,24 +1371,15 @@ export default function SettingsPage() {
                             try {
                               const token = localStorage.getItem('token') || session?.access_token;
                               if (!token || !session?.user) throw new Error("Not logged in");
-
                               const subscriptionId = (userProfile as any)?.subscription_id;
-
-                              // Cancel in Razorpay first
                               if (subscriptionId) {
                                 await api.payments.cancelSubscription(subscriptionId, token);
                               }
-
-                              // Then update database
                               await api.users.updateSubscription(session.user.id, "cancelled", token);
-
                               toast.success("Subscription cancelled successfully");
-
-                              // Update local state
                               if (userProfile) {
                                 userProfile.subscription_status = 'cancelled';
                               }
-
                               setTimeout(() => window.location.reload(), 500);
                             } catch (err: any) {
                               toast.error(err.message || "Failed to cancel subscription");
@@ -1324,16 +1515,12 @@ export default function SettingsPage() {
                         try {
                           const token = localStorage.getItem('token') || session?.access_token;
                           if (!session?.user?.id || !token) throw new Error("Not logged in");
-
                           await api.users.removePaymentMethod(session.user.id, token);
                           toast.success("Payment method removed successfully");
-
-                          // Update local state
                           if (userProfile) {
                             userProfile.payment_last4 = undefined;
                             userProfile.payment_brand = undefined;
                           }
-
                           setTimeout(() => window.location.reload(), 500);
                         } catch (err: any) {
                           toast.error(err.message || "Failed to remove payment method");
@@ -1404,8 +1591,6 @@ export default function SettingsPage() {
                           </button>
                         </div>
                       </div>
-
-
 
                       {/* Middle - Users counter - DYNAMIC */}
                       <div>
@@ -1542,13 +1727,9 @@ export default function SettingsPage() {
                       try {
                         const token = localStorage.getItem('token') || session?.access_token;
                         if (!token) throw new Error("Not logged in");
-
                         const planName = pendingPlan.id;
                         const planAmount = getPlanAmount(planName);
-
-                        // Create PayU order
                         const response = await api.payments.createOrder(planAmount, "INR", pendingPlan.name, token);
-
                         if (response?.success && response?.payuData && response?.payuUrl) {
                           submitToPayU(response.payuUrl, { ...response.payuData, plan: planName });
                         } else {
@@ -1897,56 +2078,74 @@ export default function SettingsPage() {
           </div>
         </div>
       )}
-      {showResetConfirm && (
+      {/* ── Connect Platform Modal (Same style as Add Lead) ── */}
+      {showConnectModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/60" onClick={() => setShowResetConfirm(false)} />
-          <div className="relative bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
-            <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
-              <AlertTriangle size={28} className="text-red-600" />
-            </div>
-            <h3 className="text-xl font-bold text-slate-800 text-center mb-2">⚠️ DANGER: Database Reset</h3>
-
-            <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
-              <p className="text-sm text-red-700 font-medium mb-2">This action will permanently delete:</p>
-              <ul className="text-xs text-red-600 space-y-1">
-                <li>• ALL leads and deals</li>
-                <li>• ALL tickets and activities</li>
-                <li>• ALL users (except you, the Admin)</li>
-                <li>• ALL integrations data</li>
-              </ul>
-            </div>
-
-            <p className="text-sm text-slate-600 mb-3">
-              Type <span className="font-bold text-red-600">"DELETE ALL"</span> to confirm:
-            </p>
-
-            <input
-              type="text"
-              id="confirmResetInput"
-              placeholder='Type "DELETE ALL" here'
-              className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-500/20 focus:border-red-400 mb-4"
-            />
-
-            <div className="flex gap-3">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setShowConnectModal(false)} />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-xl overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
+              <h2 className="text-slate-800">
+                Connect {AD_PLATFORMS.find(p => p.platform === selectedPlatform)?.name || 'Platform'}
+              </h2>
               <button
-                onClick={() => setShowResetConfirm(false)}
-                className="flex-1 py-2.5 border border-slate-200 text-slate-700 rounded-xl text-sm hover:bg-slate-50 transition-colors"
+                onClick={() => setShowConnectModal(false)}
+                className="p-2 hover:bg-slate-100 rounded-xl"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="p-6 grid grid-cols-2 gap-4 max-h-[72vh] overflow-y-auto">
+              <div className="col-span-2">
+                <label className="block text-xs text-slate-500 mb-1.5">Platform</label>
+                <div className="flex items-center gap-3 px-3 py-2.5 border border-slate-200 rounded-xl bg-slate-50">
+                  <span className="text-lg">{AD_PLATFORMS.find(p => p.platform === selectedPlatform)?.icon}</span>
+                  <span className="text-sm font-medium text-slate-700">{AD_PLATFORMS.find(p => p.platform === selectedPlatform)?.name}</span>
+                </div>
+              </div>
+
+              <div className="col-span-2">
+                <label className="block text-xs text-slate-500 mb-1.5">Account ID *</label>
+                <input
+                  type="text"
+                  value={connectForm.accountId}
+                  onChange={(e) => setConnectForm(f => ({ ...f, accountId: e.target.value }))}
+                  placeholder="e.g., act_123456789"
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-slate-50"
+                />
+              </div>
+
+              <div className="col-span-2">
+                <label className="block text-xs text-slate-500 mb-1.5">Account Name *</label>
+                <input
+                  type="text"
+                  value={connectForm.accountName}
+                  onChange={(e) => setConnectForm(f => ({ ...f, accountName: e.target.value }))}
+                  placeholder="e.g., My Business Account"
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-slate-50"
+                />
+              </div>
+
+              <div className="col-span-2 bg-blue-50 border border-blue-200 rounded-lg p-3">
+                <p className="text-xs text-blue-700 flex items-start gap-2">
+                  <span className="mt-0.5">🔗</span>
+                  After connecting, you'll be able to sync leads from this platform. The CRM will store the access token securely and import new leads automatically.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex gap-3 px-6 py-4 border-t border-slate-200">
+              <button
+                onClick={() => setShowConnectModal(false)}
+                className="flex-1 py-2.5 text-sm border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition-colors"
               >
                 Cancel
               </button>
               <button
-                onClick={() => {
-                  const inputValue = (document.getElementById('confirmResetInput') as HTMLInputElement)?.value;
-                  if (inputValue === "DELETE ALL") {
-                    handleReset();
-                  } else {
-                    toast.error('Please type "DELETE ALL" to confirm');
-                  }
-                }}
-                className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm hover:bg-red-700 transition-colors flex items-center justify-center gap-2"
+                onClick={handleConnectPlatform}
+                className="flex-1 py-2.5 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors"
               >
-                <RotateCcw size={14} />
-                Reset Database
+                Connect {AD_PLATFORMS.find(p => p.platform === selectedPlatform)?.name || 'Platform'} →
               </button>
             </div>
           </div>

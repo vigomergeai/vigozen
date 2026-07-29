@@ -396,6 +396,12 @@ export default function SettingsPage() {
     return period === 'yearly' ? Math.round(monthly * 12 * 0.665) : monthly;
   };
 
+  // Capitalize plan type for display
+  const formatPlanType = (planType: string | undefined): string => {
+    if (!planType) return 'Professional';
+    return planType.charAt(0).toUpperCase() + planType.slice(1);
+  };
+
   // Calculate total monthly cost based on company subscription or user count
   const calculateTotal = (): number => {
     // If company subscription data is available, use it
@@ -1450,7 +1456,7 @@ export default function SettingsPage() {
                     <div className="flex items-start justify-between mt-2">
                       <div>
                         <h3 className="text-xl font-bold text-slate-900">
-                          {companySubscription?.company?.plan_type || 'Professional'}
+                          {formatPlanType(companySubscription?.company?.plan_type)}
                         </h3>
                         <p className="text-sm text-slate-500">
                           Renews on: {companySubscription?.company?.subscription_end
@@ -1702,7 +1708,7 @@ export default function SettingsPage() {
                     {/* Savings Note */}
                     {selectedPeriod.discount > 0 && (
                       <p className="text-xs text-emerald-600 text-center mt-2">
-                        💰 Save {selectedPeriod.discount}% with {selectedPeriod.label} plan
+                        Save {selectedPeriod.discount}% with {selectedPeriod.label} plan
                       </p>
                     )}
                   </div>
@@ -1721,7 +1727,7 @@ export default function SettingsPage() {
                         Pay Now
                       </button>
                     </div>
-                    <p className="text-[10px] text-slate-400 mt-3">🔒 Secure payment via PayU Payment Gateway</p>
+                    <p className="text-[10px] text-slate-400 mt-3"> Secure payment via PayU Payment Gateway</p>
                   </div>
                 </div>
               </div>
@@ -1972,7 +1978,7 @@ export default function SettingsPage() {
                     <div className="bg-slate-50 rounded-xl p-4">
                       <div className="text-xs text-slate-400">Current Plan</div>
                       <div className="text-lg font-bold text-slate-800 mt-1 capitalize">
-                        {companySubscription.company?.plan_type || "Professional"}
+                        {formatPlanType(companySubscription.company?.plan_type)}
                       </div>
                       <div className="text-sm text-slate-500">
                         {companySubscription.company?.billing_period || "Monthly"} ·
@@ -2079,7 +2085,7 @@ export default function SettingsPage() {
               <SubscriptionModal
                 isOpen={showSubscriptionModal}
                 onClose={() => setShowSubscriptionModal(false)}
-                currentPlan={companySubscription?.company?.plan_type || "professional"}
+                currentPlan={formatPlanType(companySubscription?.company?.plan_type)}
                 currentPeriod={companySubscription?.company?.billing_period || "monthly"}
                 activeUsers={companySubscription?.active_users || 0}
                 autoRenew={companySubscription?.company?.auto_renew ?? true}

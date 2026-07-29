@@ -168,6 +168,19 @@ export const api = {
       request("PUT", `/users/${userId}/payment-method`, { payment_method_id: null }, token),
     toggleAccess: (userId: string, isActive: boolean, token: string) =>
       request("PUT", `/users/${userId}/toggle-access`, { isActive }, token),
+    // ✅ ADD THESE NEW METHODS
+    /**
+     * Activate a user (makes them active and counted in billing)
+     */
+    activate: (userId: string, token: string) =>
+      request("PUT", `/users/${userId}/activate`, undefined, token),
+
+    /**
+     * Deactivate a user (removes them from active billing)
+     */
+    deactivate: (userId: string, token: string) =>
+      request("PUT", `/users/${userId}/deactivate`, undefined, token),
+
     // ── Bulk User Actions ──
     bulkAction: (data: { userIds: string[]; action: string; value?: any }, token: string) =>
       request("POST", "/users/bulk/action", data, token),
@@ -325,6 +338,59 @@ export const api = {
       request("POST", "/subscription/payment-success", data, token),
     cancel: (subscriptionId: string, token?: string) => request("POST", "/subscription/cancel", { subscriptionId }, token),
   },
+
+  // ── Company Subscription Management ──
+  company: {
+    /**
+     * Get company subscription details with pricing
+     */
+    getSubscription: (token: string) =>
+      request("GET", "/api/company/subscription", undefined, token),
+
+    /**
+     * Update company subscription (plan, billing period, auto-renew)
+     */
+    updateSubscription: (data: { plan_type?: string; billing_period?: string; auto_renew?: boolean }, token: string) =>
+      request("PUT", "/api/company/subscription", data, token),
+
+    /**
+     * Get all invoices for company
+     */
+    getInvoices: (token: string) =>
+      request("GET", "/api/invoices", undefined, token),
+
+    /**
+     * Generate a new invoice
+     */
+    generateInvoice: (data: { subscription_id: string; billing_period_start: string; billing_period_end: string }, token: string) =>
+      request("POST", "/api/invoices/generate", data, token),
+
+    /**
+     * Get all payment methods
+     */
+    getPaymentMethods: (token: string) =>
+      request("GET", "/api/payment-methods", undefined, token),
+
+    /**
+     * Add a new payment method
+     */
+    addPaymentMethod: (data: { last4: string; brand: string; expiry: string; is_default?: boolean }, token: string) =>
+      request("POST", "/api/payment-methods", data, token),
+
+    /**
+     * Delete a payment method
+     */
+    deletePaymentMethod: (id: string, token: string) =>
+      request("DELETE", `/api/payment-methods/${id}`, undefined, token),
+
+    /**
+     * Set default payment method
+     */
+    setDefaultPaymentMethod: (id: string, token: string) =>
+      request("PUT", `/api/payment-methods/${id}/default`, undefined, token),
+  },
+
+
 
   admin: {
     resetDatabase: (token?: string) => request("DELETE", "/admin/reset-database", undefined, token),

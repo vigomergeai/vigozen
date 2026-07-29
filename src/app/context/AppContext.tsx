@@ -23,13 +23,13 @@ export interface UserProfile {
   id: string;
   email: string;
   name: string;
-  role: "admin" | "user";
+  role: "super_admin" | "admin" | "manager" | "sales" | "viewer";
   employeeId: string | null;
   department: string;
   isActive: boolean;
   createdAt: string;
   lastLogin: string | null;
-  avatar_url?: string | null;  // ← Make sure this is included
+  avatar_url?: string | null;
   phone?: string;
   company?: string;
   timezone?: string;
@@ -47,6 +47,9 @@ export interface UserProfile {
   trial_end?: string;
   plan_type?: string;
   payment_status?: string;
+  activated_at?: string;
+  deactivated_at?: string;
+  company_id?: string;
 }
 
 interface Activity {
@@ -89,6 +92,46 @@ export interface SubscriptionStatus {
   is_trial_active: boolean;
   is_subscription_active: boolean;
   is_trialing?: boolean;  // ← ADD THIS for compatibility
+}
+export interface CompanySubscription {
+  company: {
+    plan_type: string;
+    billing_period: string;
+    subscription_status: string;
+    subscription_start: string;
+    subscription_end: string;
+    auto_renew: boolean;
+  };
+  active_users: number;
+  pricing: {
+    base_price: number;
+    subtotal: number;
+    discount: number;
+    discounted_subtotal: number;
+    gst: number;
+    total: number;
+    currency: string;
+  };
+}
+
+export interface Invoice {
+  id: string;
+  invoice_number: string;
+  amount: number;
+  gst_amount: number;
+  total_amount: number;
+  status: 'pending' | 'paid' | 'failed';
+  due_date: string;
+  created_at: string;
+  invoice_url?: string;
+}
+
+export interface PaymentMethod {
+  id: string;
+  last4: string;
+  brand: string;
+  expiry: string;
+  is_default: boolean;
 }
 interface AppContextType {
   // Auth
@@ -210,6 +253,21 @@ interface AppContextType {
   refreshRevenueForecast: () => Promise<void>;  // ← ADD THIS
   subscription: SubscriptionStatus | null;
   subscriptionLoading: boolean;
+  companySubscription: CompanySubscription | null;
+  companySubscriptionLoading: boolean;
+  fetchCompanySubscription: () => Promise<void>;
+  updateCompanySubscription: (data: { plan_type?: string; billing_period?: string; auto_renew?: boolean }) => Promise<void>;
+
+  paymentMethods: PaymentMethod[];
+  fetchPaymentMethods: () => Promise<void>;
+  addPaymentMethod: (data: { last4: string; brand: string; expiry: string; is_default?: boolean }) => Promise<void>;
+  deletePaymentMethod: (id: string) => Promise<void>;
+
+  invoices: Invoice[];
+  fetchInvoices: () => Promise<void>;
+
+  activateUser: (userId: string) => Promise<void>;
+  deactivateUser: (userId: string) => Promise<void>;
 }
 
 export interface LeadComment {
@@ -264,6 +322,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [dataReady, setDataReady] = useState(true);
   const [backendOnline, setBackendOnline] = useState(false);
   const [revenueForecast, setRevenueForecast] = useState<RevenueForecast | null>(null);
+  // ── Company Subscription State ──
+  const [companySubscription, setCompanySubscription] = useState<CompanySubscription | null>(null);
+  const [companySubscriptionLoading, setCompanySubscriptionLoading] = useState(false);
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
 
 
 
@@ -315,6 +378,87 @@ export function AppProvider({ children }: { children: ReactNode }) {
       console.error("Failed to fetch subscription:", error);
     } finally {
       setSubscriptionLoading(false);
+    }
+  };
+  // ── Company Subscription ──
+  const fetchCompanySubscription = async () => {
+    const token = getToken();
+    if (!token) return;
+    setCompanySubscriptionLoading(true);
+    try {
+      const data = await api.company.getSubscription(token);
+      setCompanySubscription(data);
+      console.log("✅ Company subscription loaded:", data);
+    } catch (error) {
+      console.error("Failed to fetch company subscription:", error);
+      toast.error("Failed to load subscription details");
+    } finally {
+      setCompanySubscriptionLoading(false);
+    }
+  };
+
+  const updateCompanySubscription = async (data: { plan_type?: string; billing_period?: string; auto_renew?: boolean }) => {
+    const token = getToken();
+    if (!token) throw new Error("Not authenticated");
+    try {
+      const result = await api.company.updateSubscription(data, token);
+      toast.success("Subscription updated successfully");
+      await fetchCompanySubscription();
+      return result;
+    } catch (error: any) {
+      toast.error(error.message || "Failed to update subscription");
+      throw error;
+    }
+  };
+
+  // ── Payment Methods ──
+  const fetchPaymentMethods = async () => {
+    const token = getToken();
+    if (!token) return;
+    try {
+      const data = await api.company.getPaymentMethods(token);
+      setPaymentMethods(data || []);
+    } catch (error) {
+      console.error("Failed to fetch payment methods:", error);
+    }
+  };
+
+  const addPaymentMethod = async (data: { last4: string; brand: string; expiry: string; is_default?: boolean }) => {
+    const token = getToken();
+    if (!token) throw new Error("Not authenticated");
+    try {
+      const result = await api.company.addPaymentMethod(data, token);
+      setPaymentMethods(prev => [...prev, result]);
+      toast.success("Payment method added successfully");
+      return result;
+    } catch (error: any) {
+      toast.error(error.message || "Failed to add payment method");
+      throw error;
+    }
+  };
+
+  const deletePaymentMethod = async (id: string) => {
+    const token = getToken();
+    if (!token) throw new Error("Not authenticated");
+    try {
+      await api.company.deletePaymentMethod(id, token);
+      setPaymentMethods(prev => prev.filter(pm => pm.id !== id));
+      toast.success("Payment method removed");
+    } catch (error: any) {
+      toast.error(error.message || "Failed to remove payment method");
+      throw error;
+    }
+  };
+
+  // ── Invoices ──
+  const fetchInvoices = async () => {
+    const token = getToken();
+    if (!token) return;
+    try {
+      const data = await api.company.getInvoices(token);
+      setInvoices(data || []);
+    } catch (error) {
+      console.error("Failed to fetch invoices:", error);
     }
   };
 
@@ -769,6 +913,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch (e: any) {
       toast.error(`Failed to update access: ${e.message}`);
       return false;
+    }
+  };
+
+  // ── User Activation/Deactivation ──
+  const activateUser = async (userId: string) => {
+    const token = getToken();
+    if (!token) throw new Error("Not authenticated");
+    try {
+      await api.users.activate(userId, token);
+      toast.success("User activated successfully");
+      await loadUsers();
+      await fetchCompanySubscription(); // Refresh active users count
+    } catch (error: any) {
+      toast.error(error.message || "Failed to activate user");
+      throw error;
+    }
+  };
+
+  const deactivateUser = async (userId: string) => {
+    const token = getToken();
+    if (!token) throw new Error("Not authenticated");
+    try {
+      await api.users.deactivate(userId, token);
+      toast.success("User deactivated successfully");
+      await loadUsers();
+      await fetchCompanySubscription(); // Refresh active users count
+    } catch (error: any) {
+      toast.error(error.message || "Failed to deactivate user");
+      throw error;
     }
   };
 
@@ -1836,6 +2009,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // Users
       users, usersLoading, createUser, updateUser, deleteUser,
       toggleUserAccess, resetUserPassword, loadUsers,
+      // ✅ ADD NEW USER FUNCTIONS
+      activateUser,
+      deactivateUser,
       // Lead
       addLead, updateLead, deleteLead, bulkDeleteLeads, importLeads,
       // Deal
@@ -1843,9 +2019,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // Employee
       addEmployee, updateEmployee, deleteEmployee,
       // Integration
-      toggleIntegration, syncIntegration,
-      addIntegration,
-      updateIntegration,
+      toggleIntegration, syncIntegration, addIntegration, updateIntegration,
       // Ticket
       addTicket, updateTicket, deleteTicket,
       // Settings
@@ -1854,23 +2028,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addActivity,
       // Utilities
       refreshData, resetDatabase,
-
-      leadComments,
-      loadingComments,
-      fetchLeadComments,
-      addLeadComment,
-      updateLeadComment,
-      deleteLeadComment,
-      revenueForecast,
-      refreshRevenueForecast,
-      subscription,
-      subscriptionLoading,
+      // Comments
+      leadComments, loadingComments, fetchLeadComments, addLeadComment,
+      updateLeadComment, deleteLeadComment,
+      // Revenue
+      revenueForecast, refreshRevenueForecast,
+      // Subscription
+      subscription, subscriptionLoading,
+      // ✅ ADD NEW COMPANY SUBSCRIPTION VALUES
+      companySubscription,
+      companySubscriptionLoading,
+      fetchCompanySubscription,
+      updateCompanySubscription,
+      paymentMethods,
+      fetchPaymentMethods,
+      addPaymentMethod,
+      deletePaymentMethod,
+      invoices,
+      fetchInvoices,
     }}>
       {children}
     </AppContext.Provider>
   );
 }
 
+// Custom hook for using the app context
 export function useApp() {
   const ctx = useContext(AppContext);
   if (!ctx) throw new Error("useApp must be used within AppProvider");

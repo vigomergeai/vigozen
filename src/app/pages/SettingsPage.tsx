@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from "react";
+
 import {
   User, Shield, Bell, Link, CreditCard, Save, Camera,
   Check, X, Eye, EyeOff, Plug, RefreshCw, Key, Bot, Zap,
   Plus, Minus, Trash2, Edit, ChevronRight, Star, Crown, CheckCircle,
-  Mail, Phone, Building, Globe, AlertTriangle, Database, RotateCcw, UserCog, ExternalLink, Lock
+  Mail, Phone, Building, Globe, AlertTriangle, Database, RotateCcw, UserCog, ExternalLink, Lock,
+  UserCheck, UserX, Calendar, TrendingUp, CreditCard as CreditCardIcon, Users, Download
 } from "lucide-react";
 import { useNavigate } from "react-router";
 import { priceList as mockPriceList, PriceItem } from "../data/mockData";
@@ -12,9 +14,10 @@ import { toast } from "sonner";
 import QRCode from "qrcode";
 import { api, getApiBaseUrl } from "../lib/api";
 import { useAdConnections, AdConnection } from "../../hooks/useAdConnections";
-
-type SettingsTab = "profile" | "integrations" | "pricing" | "notifications" | "security" | "system";
-
+import SubscriptionModal from "../components/SubscriptionModal";
+import InvoiceHistory from "../components/InvoiceHistory";
+// Note: CreditCard is already imported, but you may want to alias it
+type SettingsTab = "profile" | "integrations" | "pricing" | "notifications" | "security" | "subscription" | "system";
 // ── Ad Platform Configuration ──
 const AD_PLATFORMS = [
   {
@@ -60,7 +63,22 @@ export default function SettingsPage() {
     role, currentUser, integrations, toggleIntegration, syncIntegration,
     saveSettings, resetDatabase, userSettings, loading, session, userProfile,
     addIntegration, updateIntegration, subscription,
-    employees
+    employees,
+    // ✅ ADD THESE
+    companySubscription,
+    companySubscriptionLoading,
+    fetchCompanySubscription,
+    updateCompanySubscription,
+    paymentMethods,
+    fetchPaymentMethods,
+    addPaymentMethod,
+    deletePaymentMethod,
+    invoices,
+    fetchInvoices,
+    activateUser,
+    deactivateUser,
+    users,
+    loadUsers,
   } = useApp();
   const navigate = useNavigate();  // ← ADD THIS
   const [plans, setPlans] = useState<PriceItem[]>(mockPriceList);
@@ -120,6 +138,64 @@ export default function SettingsPage() {
   const [adLoading, setAdLoading] = useState(false);
   const [syncing, setSyncing] = useState<string | null>(null);
   const [loadingSessions, setLoadingSessions] = useState(false);
+  const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
+
+  // ── Billing Calculator State ──
+  const [activeUsers, setActiveUsers] = useState(users?.filter(u => u.isActive).length || 10);
+  const [billingPeriod, setBillingPeriod] = useState('monthly');
+  const [purchaseLoading, setPurchaseLoading] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+
+  // Selected plan data
+  const selectedPlanData = ({
+    starter: { id: 'starter', name: 'Starter', price: 599 },
+    professional: { id: 'professional', name: 'Professional', price: 999 },
+    enterprise: { id: 'enterprise', name: 'Enterprise', price: 2499 },
+    p1: { id: 'starter', name: 'Starter', price: 599 },
+    p2: { id: 'professional', name: 'Professional', price: 999 },
+    p3: { id: 'enterprise', name: 'Enterprise', price: 2499 },
+  } as any)[selectedPlan] || { id: 'professional', name: 'Professional', price: 999 };
+
+  // Selected period
+  const selectedPeriod = ({
+    monthly: { id: 'monthly', label: 'Monthly', discount: 0 },
+    quarterly: { id: 'quarterly', label: 'Quarterly', discount: 5 },
+    half_yearly: { id: 'half_yearly', label: 'Half Yearly', discount: 10 },
+    yearly: { id: 'yearly', label: 'Yearly', discount: 15 },
+  } as any)[billingPeriod] || { id: 'monthly', label: 'Monthly', discount: 0 };
+
+  // Pricing calculation
+  const pricing = (() => {
+    const basePrice = selectedPlanData.price * activeUsers;
+    const discountAmount = basePrice * (selectedPeriod.discount / 100);
+    const discountedPrice = basePrice - discountAmount;
+    const gst = discountedPrice * 0.18;
+    const total = discountedPrice + gst;
+    const perMonth = total / (billingPeriod === 'yearly' ? 12 : billingPeriod === 'half_yearly' ? 6 : billingPeriod === 'quarterly' ? 3 : 1);
+    return { basePrice, discountAmount, gst, total, perMonth };
+  })();
+
+  // Handle purchase
+  const handlePurchase = async () => {
+    setPurchaseLoading(true);
+    try {
+      const token = localStorage.getItem('token') || session?.access_token;
+      if (!token) throw new Error("Not logged in");
+      const response = await api.payments.createOrder(pricing.total, "INR", `bundle_${activeUsers}`, token);
+      if (!response?.success || !response?.payuData || !response?.payuUrl) {
+        toast.error("Could not create payment order. Please try again.");
+        return;
+      }
+      toast.success(`Order ${response.txnid} created!`);
+      submitToPayU(response.payuUrl, response.payuData);
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to create payment');
+      console.error(error);
+    } finally {
+      setPurchaseLoading(false);
+    }
+  };
+
   const fetchActiveSessions = async () => {
     if (!session?.user?.id) return;
 
@@ -320,6 +396,16 @@ export default function SettingsPage() {
     return period === 'yearly' ? Math.round(monthly * 12 * 0.665) : monthly;
   };
 
+  // Calculate total monthly cost based on company subscription or user count
+  const calculateTotal = (): number => {
+    // If company subscription data is available, use it
+    if (companySubscription?.pricing?.total) {
+      return companySubscription.pricing.total;
+    }
+    // Otherwise calculate based on user count and price per user
+    return userCount * PRICE_PER_USER;
+  };
+
   const submitToPayU = (payuUrl: string, payuData: Record<string, any>) => {
     const form = document.createElement('form');
     form.method = 'POST';
@@ -505,6 +591,16 @@ export default function SettingsPage() {
       verifyPayment();
     }
   }, []);
+
+  // ── Load subscription data ──
+  useEffect(() => {
+    if (userProfile?.id && role === "admin") {
+      fetchCompanySubscription();
+      fetchPaymentMethods();
+      fetchInvoices();
+      loadUsers();
+    }
+  }, [userProfile?.id, role]);
 
   // Fetch billing history from backend
   useEffect(() => {
@@ -927,7 +1023,6 @@ export default function SettingsPage() {
     { id: "security", label: "Security", icon: Shield },
     { id: "system", label: "System", icon: Database, adminOnly: true },
   ];
-
   const billingGroups = ["CRM Plans",];
 
   return (
@@ -1339,414 +1434,366 @@ export default function SettingsPage() {
             </div>
           )}
 
-          {/* ===== PRICING ===== */}
+          {/* ===== PRICING & SUBSCRIPTION ===== */}
           {activeTab === "pricing" && (
             <div className="space-y-6">
-              {/* Add-ons Section */}
-              <div className="bg-white rounded-2xl border border-slate-200 p-5">
-                <h3 className="font-semibold text-slate-800 mb-3">Add-ons</h3>
-                <div className="flex flex-wrap gap-2">
-                  {["Workflows & assignment rules", "Cadences", "Reports & Dashboards",
-                    "Sales forecasting", "Self service kiosks", "WhatsApp Business"].map(addon => (
-                      <span key={addon} className="text-xs bg-slate-100 text-slate-600 px-3 py-1.5 rounded-full">
-                        {addon}
-                      </span>
-                    ))}
-                </div>
-              </div>
 
-              {/* Current Plan Banner */}
-              <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 flex items-center justify-between">
-                <div className="flex items-center space-x-3">
-                  <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
-                  <div>
-                    <p className="text-sm font-medium text-blue-900 dark:text-blue-100">
-                      Current Plan: <span className="font-bold">{priceList.find(p => p.id === selectedPlan)?.name || "Professional"}</span>
-                    </p>
-                    <p className="text-xs text-blue-700 dark:text-blue-300">
-                      Renews on {userProfile?.subscription_renewal_date ? new Date(userProfile.subscription_renewal_date).toLocaleDateString() : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString()} •
-                      <button
-                        onClick={async () => {
-                          if (confirm("Are you sure you want to cancel your subscription? This action cannot be undone.")) {
-                            try {
-                              const token = localStorage.getItem('token') || session?.access_token;
-                              if (!token || !session?.user) throw new Error("Not logged in");
-                              const subscriptionId = (userProfile as any)?.subscription_id;
-                              if (subscriptionId) {
-                                await api.payments.cancelSubscription(subscriptionId, token);
-                              }
-                              await api.users.updateSubscription(session.user.id, "cancelled", token);
-                              toast.success("Subscription cancelled successfully");
-                              if (userProfile) {
-                                userProfile.subscription_status = 'cancelled';
-                              }
-                              setTimeout(() => window.location.reload(), 500);
-                            } catch (err: any) {
-                              toast.error(err.message || "Failed to cancel subscription");
-                            }
-                          }
-                        }}
-                        className="ml-1 underline hover:no-underline text-red-600"
-                      >
-                        Cancel subscription
-                      </button>
-                    </p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <span className="text-2xl font-bold text-blue-900 dark:text-blue-100">
-                    ₹{priceList.find(p => p.id === selectedPlan)?.price?.toLocaleString() || "999"}
-                  </span>
-                  <span className="text-sm text-blue-700 dark:text-blue-300">/mo</span>
-                </div>
-              </div>
+              {/* ── TWO-COLUMN LAYOUT ── */}
+              <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
 
-              {/* CRM Plans Section */}
-              <div>
-                <h4 className="text-sm font-semibold text-slate-700 dark:text-white mb-3 flex items-center gap-2">
-                  <span className="w-1 h-4 bg-indigo-600 rounded-full inline-block" />CRM Plans
-                </h4>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {priceList.filter(p => p.category === "CRM Plans").map(plan => {
-                    const isCurrentPlan = selectedPlan === plan.id;
-                    return (
-                      <div
-                        key={plan.id}
-                        onClick={() => {
-                          if (!isCurrentPlan) {
-                            setSelectedPlanBeforeChange(selectedPlan);
-                            setPendingPlan(plan);
-                            setShowConfirmBar(true);
-                          }
-                        }}
-                        className={`relative bg-white dark:bg-slate-800 rounded-2xl border-2 p-5 cursor-pointer transition-all hover:shadow-md ${isCurrentPlan
-                          ? "border-indigo-500 shadow-md shadow-indigo-100"
-                          : plan.isPopular
-                            ? "border-purple-300"
-                            : "border-slate-200"
-                          }`}
-                      >
-                        {plan.isPopular && (
-                          <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white text-[10px] font-semibold px-3 py-0.5 rounded-full flex items-center gap-1 whitespace-nowrap">
-                            <Star size={9} className="fill-white" />Most Popular
-                          </div>
-                        )}
-                        {isCurrentPlan && (
-                          <div className="absolute top-3 right-3 w-5 h-5 bg-indigo-600 rounded-full flex items-center justify-center">
-                            <Check size={11} className="text-white" />
-                          </div>
-                        )}
+                {/* ===== LEFT COLUMN (40% = 2/5) ===== */}
+                <div className="lg:col-span-2 space-y-4">
 
-                        <div className="text-lg font-bold text-slate-800 dark:text-white">{plan.name}</div>
-                        <div className="mt-2 flex items-baseline gap-0">
-                          <span className="text-xs text-slate-400">₹</span>
-                          <span className="text-3xl font-bold text-slate-900 dark:text-white">
-                            {plan.price ? plan.price.toLocaleString() : "Custom"}
-                          </span>
-                          <span className="text-xs text-slate-400 ml-1">/{plan.billing === "Monthly" ? "mo" : plan.billing === "Annual" ? "yr" : "once"}</span>
-                        </div>
-                        <div className="text-[10px] text-slate-400 capitalize mb-4">{plan.billing} billing</div>
-
-                        <div className="space-y-2 mb-4">
-                          {plan.features.map(f => (
-                            <div key={f} className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
-                              <CheckCircle size={12} className="text-emerald-500 flex-shrink-0" />
-                              {f}
-                            </div>
-                          ))}
-                        </div>
-
-                        <button className={`w-full py-2.5 text-xs rounded-xl font-medium transition-colors ${isCurrentPlan
-                          ? "bg-indigo-600 text-white cursor-default"
-                          : "border border-slate-200 text-slate-600 hover:border-indigo-300 hover:text-indigo-600"
-                          }`}>
-                          {isCurrentPlan ? "✓ Current Plan" : `Switch to ${plan.name}`}
+                  {/* Current Plan Summary */}
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+                    <p className="text-xs text-slate-400 uppercase tracking-wider">Current Plan</p>
+                    <div className="flex items-start justify-between mt-2">
+                      <div>
+                        <h3 className="text-xl font-bold text-slate-900">
+                          {companySubscription?.company?.plan_type || 'Professional'}
+                        </h3>
+                        <p className="text-sm text-slate-500">
+                          Renews on: {companySubscription?.company?.subscription_end
+                            ? new Date(companySubscription.company.subscription_end).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+                            : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                        </p>
+                        <button
+                          onClick={() => toast.info('Cancel subscription feature coming soon')}
+                          className="text-xs text-red-500 hover:text-red-600 mt-1"
+                        >
+                          Cancel subscription
                         </button>
                       </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Usage Metrics */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="bg-white rounded-2xl border border-slate-200 p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <h4 className="text-sm font-medium text-slate-500">Contacts</h4>
-                    <span className="text-xs text-slate-400">{userProfile?.total_contacts || 0} / 50,000</span>
-                  </div>
-                  <div className="w-full bg-slate-200 rounded-full h-2">
-                    <div className="bg-indigo-600 rounded-full h-2" style={{ width: '0%' }}></div>
-                  </div>
-                </div>
-
-                <div className="bg-white rounded-2xl border border-slate-200 p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <h4 className="text-sm font-medium text-slate-500">Team Members</h4>
-                    <span className="text-xs text-slate-400">{userProfile?.team_members_count || 1} / Unlimited</span>
-                  </div>
-                  <div className="w-full bg-slate-200 rounded-full h-2">
-                    <div className="bg-emerald-600 rounded-full h-2" style={{ width: '0%' }}></div>
-                  </div>
-                  <button onClick={() => toast.info("Team management feature coming soon!")} className="text-xs text-indigo-600 hover:text-indigo-700 mt-2 block">
-                    Manage team →
-                  </button>
-                </div>
-
-                <div className="bg-white rounded-2xl border border-slate-200 p-4">
-                  <h4 className="text-sm font-medium text-slate-500 mb-1">Next Invoice</h4>
-                  <p className="text-2xl font-bold text-slate-900">₹{priceList.find(p => p.id === selectedPlan)?.price?.toLocaleString() || "999"}</p>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Due on {userProfile?.next_invoice_date ? new Date(userProfile.next_invoice_date).toLocaleDateString() : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString()}
-                  </p>
-                </div>
-              </div>
-
-              {/* Payment Method */}
-              <div className="bg-white rounded-2xl border border-slate-200 p-5">
-                <div className="flex items-center justify-between mb-4">
-                  <h4 className="text-slate-800">Payment Method</h4>
-                  <div className="flex space-x-3">
-                    <button onClick={handleAddPaymentMethod} className="text-xs text-indigo-600 hover:text-indigo-700">
-                      Update
-                    </button>
-                    <button onClick={async () => {
-                      if (confirm("Remove payment method?")) {
-                        try {
-                          const token = localStorage.getItem('token') || session?.access_token;
-                          if (!session?.user?.id || !token) throw new Error("Not logged in");
-                          await api.users.removePaymentMethod(session.user.id, token);
-                          toast.success("Payment method removed successfully");
-                          if (userProfile) {
-                            userProfile.payment_last4 = undefined;
-                            userProfile.payment_brand = undefined;
-                          }
-                          setTimeout(() => window.location.reload(), 500);
-                        } catch (err: any) {
-                          toast.error(err.message || "Failed to remove payment method");
-                        }
-                      }
-                    }} className="text-xs text-red-600 hover:text-red-700">
-                      Remove
-                    </button>
-                  </div>
-                </div>
-
-                {userProfile?.payment_last4 ? (
-                  <div className="flex items-center space-x-3">
-                    <div className="w-10 h-7 bg-gradient-to-r from-indigo-600 to-purple-600 rounded"></div>
-                    <div>
-                      <p className="text-sm font-medium text-slate-800">•••• {userProfile.payment_last4}</p>
-                      <p className="text-xs text-slate-500">{userProfile.payment_brand || "Card"} · Expires {userProfile.payment_expiry || "12/26"}</p>
+                      <div className="text-right">
+                        <span className="text-3xl font-bold text-slate-900">₹{Math.round(calculateTotal())}</span>
+                        <span className="text-sm text-slate-400">/month</span>
+                      </div>
                     </div>
-                    <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full ml-auto">Default</span>
                   </div>
-                ) : (
-                  <button
-                    onClick={handleAddPaymentMethod}
-                    className="w-full py-3 text-center border-2 border-dashed border-slate-300 rounded-xl text-sm text-slate-500 hover:border-indigo-300 hover:text-indigo-600 transition-colors"
-                  >
-                    + Add Payment Method
-                  </button>
-                )}
-              </div>
 
-              {/* Billing History */}
-              <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
-                <div className="px-5 py-3 bg-slate-50 border-b flex justify-between items-center">
-                  <h4 className="font-semibold text-slate-800">Billing History</h4>
-                  <button onClick={() => setBillingHistory([])} className="text-xs text-indigo-600 hover:text-indigo-700">Refresh</button>
+                  {/* Contacts */}
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-slate-700">Contacts</span>
+                      <span className="text-xs text-slate-500">{userProfile?.total_contacts || 0} / 50,000</span>
+                    </div>
+                    <div className="w-full bg-slate-100 rounded-full h-1.5 mt-2">
+                      <div className="bg-indigo-500 rounded-full h-1.5" style={{ width: `${Math.min(((userProfile?.total_contacts || 0) / 50000) * 100, 100)}%` }} />
+                    </div>
+                  </div>
+
+                  {/* Team Members */}
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-slate-700">Team Members</span>
+                      <span className="text-xs text-slate-500">{users?.filter(u => u.isActive).length || 0} / Unlimited</span>
+                    </div>
+                    <div className="w-full bg-slate-100 rounded-full h-1.5 mt-2">
+                      <div className="bg-indigo-500 rounded-full h-1.5" style={{ width: `${Math.min(((users?.filter(u => u.isActive).length || 0) / 50) * 100, 100)}%` }} />
+                    </div>
+                    <button
+                      onClick={() => navigate('/admin')}
+                      className="text-xs text-indigo-600 hover:text-indigo-700 mt-2 flex items-center gap-1"
+                    >
+                      Manage team <ChevronRight size={12} />
+                    </button>
+                  </div>
+
+                  {/* Next Invoice & Payment Method - Side by Side */}
+                  <div className="grid grid-cols-2 gap-4">
+                    {/* Next Invoice */}
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
+                      <p className="text-xs text-slate-400">Next Invoice</p>
+                      <p className="text-xl font-bold text-slate-900 mt-1">₹{Math.round(calculateTotal())}</p>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Due on {new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                      </p>
+                    </div>
+
+                    {/* Payment Method */}
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
+                      <p className="text-xs text-slate-400">Payment Method</p>
+                      {paymentMethods.length > 0 ? (
+                        <>
+                          <div className="flex items-center gap-2 mt-1">
+                            <div className="w-8 h-6 bg-gradient-to-r from-indigo-600 to-purple-600 rounded flex items-center justify-center text-white text-[8px] font-bold">
+                              {paymentMethods[0].brand?.slice(0, 4) || 'VISA'}
+                            </div>
+                            <div>
+                              <p className="text-xs font-medium text-slate-800">**** **** **** {paymentMethods[0].last4}</p>
+                              <p className="text-[10px] text-slate-400">Expires: {paymentMethods[0].expiry}</p>
+                            </div>
+                          </div>
+                          <div className="flex gap-2 mt-1.5">
+                            <button className="text-[10px] text-indigo-600 hover:text-indigo-700">Update</button>
+                            <button className="text-[10px] text-red-500 hover:text-red-600">Remove</button>
+                          </div>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => setShowPaymentModal(true)}
+                          className="text-sm text-indigo-600 hover:text-indigo-700 mt-1 flex items-center gap-1"
+                        >
+                          <Plus size={14} /> Add Payment Method
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 </div>
 
-                {/* Bundle Plan Card - Updated with Dynamic Slider */}
-                <div className="bg-white rounded-2xl border-2 border-indigo-200 shadow-md overflow-hidden">
-                  <div className="bg-gradient-to-r from-indigo-50 to-purple-50 px-5 py-3 border-b border-indigo-100">
-                    <h4 className="font-bold text-indigo-800">Bundle Plan</h4>
+                {/* ===== RIGHT COLUMN (60% = 3/5) ===== */}
+                <div className="lg:col-span-3 space-y-4">
+
+                  {/* CRM Plans */}
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+                    <h3 className="text-sm font-semibold text-slate-800 mb-4">CRM Plans</h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {[
+                        { id: 'starter', name: 'Starter', price: 599, desc: 'For growing teams and basic CRM features', users: '1-50 Users' },
+                        { id: 'custom', name: 'Custom', price: 0, desc: 'Contact sales for custom pricing', users: 'Custom' },
+                      ].map((plan) => {
+                        const isSelected = selectedPlan === plan.id;
+                        return (
+                          <div
+                            key={plan.id}
+                            onClick={() => plan.id !== 'custom' && setSelectedPlan(plan.id)}
+                            className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${isSelected
+                              ? 'border-indigo-500 bg-indigo-50 shadow-sm'
+                              : 'border-slate-200 hover:border-indigo-200'
+                              } ${plan.id === 'custom' ? 'cursor-default' : ''}`}
+                          >
+                            <div className="flex items-start justify-between">
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <span className={`text-sm font-semibold ${isSelected ? 'text-indigo-700' : 'text-slate-800'}`}>
+                                    {plan.name}
+                                  </span>
+                                </div>
+                                {plan.price > 0 ? (
+                                  <p className={`text-xl font-bold ${isSelected ? 'text-indigo-700' : 'text-slate-900'}`}>
+                                    ₹{plan.price}
+                                    <span className="text-xs font-normal text-slate-400">/user/month</span>
+                                  </p>
+                                ) : (
+                                  <p className="text-sm font-medium text-slate-600">Custom Price</p>
+                                )}
+                                <p className="text-xs text-slate-500 mt-0.5">{plan.desc}</p>
+                                <p className="text-[10px] text-slate-400 mt-0.5">{plan.users}</p>
+                              </div>
+                              {isSelected && (
+                                <CheckCircle size={18} className="text-indigo-600 flex-shrink-0 mt-1" />
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
-                  <div className="p-5">
-                    <div className="flex flex-wrap items-end justify-between gap-4">
-                      {/* Left side - Plan info */}
-                      <div>
-                        <div className="text-sm font-semibold text-slate-800">CRM</div>
-                        <div className="text-xs text-slate-500 mt-0.5">Standard Plan ₹{PRICE_PER_USER.toLocaleString()} /user /month</div>
-                      </div>
 
-                      {/* Middle - Pay Period */}
-                      <div>
-                        <div className="text-xs text-slate-400 mb-1">Pay Period</div>
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => { setPayPeriod('monthly'); setBundlePrice(calculatePrice(userCount, 'monthly')); }}
-                            className={`px-4 py-1.5 text-xs rounded-lg transition-colors ${payPeriod === 'monthly' ? 'bg-indigo-600 text-white shadow-sm' : 'border border-slate-200 hover:bg-slate-50'
-                              }`}
-                          >
-                            Monthly
-                          </button>
-                          <button
-                            onClick={() => { setPayPeriod('yearly'); setBundlePrice(calculatePrice(userCount, 'yearly')); }}
-                            className={`px-4 py-1.5 text-xs rounded-lg transition-colors ${payPeriod === 'yearly' ? 'bg-indigo-600 text-white shadow-sm' : 'border border-slate-200 hover:bg-slate-50'
-                              }`}
-                          >
-                            Yearly
-                          </button>
-                        </div>
-                      </div>
+                  {/* Billing Calculator */}
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+                    <h3 className="text-sm font-semibold text-slate-800 mb-4">Billing Calculator</h3>
 
-                      {/* Middle - Users counter - DYNAMIC */}
-                      <div>
-                        <div className="text-xs text-slate-400 mb-1">Users</div>
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => handleUserCountChange(Math.max(1, userCount - 1))}
-                            className="w-7 h-7 rounded-full border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50 transition-colors"
-                          >
-                            <Minus size={14} />
-                          </button>
-                          <span className="w-8 text-center text-sm font-medium text-slate-800">{userCount}</span>
-                          <button
-                            onClick={() => handleUserCountChange(Math.min(50, userCount + 1))}
-                            className="w-7 h-7 rounded-full border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50 transition-colors"
-                          >
-                            <Plus size={14} />
-                          </button>
-                        </div>
-                        {/* Slider for visual feedback */}
+                    {/* Pay Period */}
+                    <div>
+                      <p className="text-xs text-slate-400 mb-2">Pay Period</p>
+                      <div className="flex flex-wrap gap-2">
+                        {[
+                          { id: 'monthly', label: 'Monthly', discount: 0 },
+                          { id: 'quarterly', label: 'Quarterly', discount: 5 },
+                          { id: 'half_yearly', label: 'Half Yearly', discount: 10 },
+                          { id: 'yearly', label: 'Yearly', discount: 15 },
+                        ].map((period) => {
+                          const isSelected = billingPeriod === period.id;
+                          return (
+                            <button
+                              key={period.id}
+                              onClick={() => setBillingPeriod(period.id)}
+                              className={`px-4 py-2 text-xs rounded-lg border transition-all ${isSelected
+                                ? 'bg-indigo-600 text-white border-indigo-600'
+                                : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'
+                                }`}
+                            >
+                              {period.label}
+                              {period.discount > 0 && (
+                                <span className={`ml-1 text-[8px] font-medium ${isSelected ? 'text-indigo-200' : 'text-emerald-500'
+                                  }`}>
+                                  Save {period.discount}%
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Users */}
+                    <div className="mt-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-xs text-slate-400">Active Users</p>
+                        <span className="text-sm font-semibold text-slate-800">{activeUsers}</span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <button
+                          onClick={() => setActiveUsers(Math.max(1, activeUsers - 1))}
+                          className="w-8 h-8 rounded-full border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50"
+                        >
+                          <span className="text-lg">−</span>
+                        </button>
                         <input
                           type="range"
                           min="1"
                           max="50"
-                          value={userCount}
-                          onChange={(e) => handleUserCountChange(parseInt(e.target.value))}
-                          className="w-full mt-1"
+                          value={activeUsers}
+                          onChange={(e) => setActiveUsers(parseInt(e.target.value))}
+                          className="flex-1 h-2 bg-slate-200 rounded-full appearance-none cursor-pointer accent-indigo-600"
                         />
-                      </div>
-
-                      {/* Right side - Price and Next button */}
-                      <div className="text-right">
-                        <div className="text-2xl font-bold text-slate-900">₹{bundlePrice.toLocaleString()}</div>
                         <button
-                          onClick={handlePurchaseBundle}
-                          className="mt-2 px-6 py-2 bg-indigo-600 text-white text-sm rounded-xl hover:bg-indigo-700 transition-colors shadow-sm"
+                          onClick={() => setActiveUsers(Math.min(50, activeUsers + 1))}
+                          className="w-8 h-8 rounded-full border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50"
                         >
-                          Purchase Bundle
+                          <span className="text-lg">+</span>
                         </button>
                       </div>
                     </div>
 
-                    {/* Savings text */}
-                    <div className="mt-4 pt-3 border-t border-slate-100">
-                      <p className="text-xs text-emerald-600 flex items-center gap-1">
-                        <span className="inline-block w-1.5 h-1.5 bg-emerald-500 rounded-full"></span>
-                        Save 33.5% on yearly subscription and earn up to 12% as wallet credit. (T&C)
-                      </p>
+                    {/* Price Breakdown */}
+                    <div className="mt-4 p-4 bg-slate-50 rounded-xl">
+                      <div className="space-y-1.5">
+                        <div className="flex justify-between text-sm">
+                          <span className="text-slate-500">Base Price</span>
+                          <span className="text-slate-700">₹{selectedPlanData.price} × {activeUsers} = ₹{pricing.basePrice.toFixed(0)}</span>
+                        </div>
+                        {pricing.discountAmount > 0 && (
+                          <div className="flex justify-between text-sm">
+                            <span className="text-emerald-500">Discount ({selectedPeriod.discount}%)</span>
+                            <span className="text-emerald-500">-₹{pricing.discountAmount.toFixed(0)}</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between text-sm">
+                          <span className="text-slate-500">GST (18%)</span>
+                          <span className="text-slate-700">₹{pricing.gst.toFixed(0)}</span>
+                        </div>
+                        <div className="border-t border-slate-200 pt-2 mt-2">
+                          <div className="flex justify-between">
+                            <span className="font-semibold text-slate-800">Total</span>
+                            <span className="text-xl font-bold text-indigo-600">₹{pricing.total.toFixed(0)}</span>
+                          </div>
+                          <p className="text-xs text-slate-400 text-right">
+                            {selectedPeriod.label} plan · ₹{pricing.perMonth.toFixed(0)}/month
+                          </p>
+                        </div>
+                      </div>
                     </div>
+
+                    {/* Purchase Button */}
+                    <button
+                      onClick={handlePurchase}
+                      disabled={purchaseLoading}
+                      className="w-full mt-4 py-3 bg-indigo-600 text-white font-semibold rounded-xl hover:bg-indigo-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                      {purchaseLoading ? (
+                        <>Processing...</>
+                      ) : (
+                        <>Purchase Bundle ₹{pricing.total.toFixed(0)}</>
+                      )}
+                    </button>
+
+                    {/* Savings Note */}
+                    {selectedPeriod.discount > 0 && (
+                      <p className="text-xs text-emerald-600 text-center mt-2">
+                        💰 Save {selectedPeriod.discount}% with {selectedPeriod.label} plan
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Pay with PayU */}
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h4 className="text-sm font-semibold text-slate-800">Pay with PayU</h4>
+                        <p className="text-xs text-slate-400">Click below to complete your payment securely via PayU</p>
+                      </div>
+                      <button
+                        onClick={() => window.open('https://u.payu.in/PrZ2PnY224hC', '_blank')}
+                        className="px-6 py-2.5 bg-emerald-600 text-white text-sm font-medium rounded-xl hover:bg-emerald-700 transition-colors flex items-center gap-2"
+                      >
+                        Pay Now
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-3">🔒 Secure payment via PayU Payment Gateway</p>
                   </div>
                 </div>
+              </div>
 
-                {/* ────────────────────────────────────────────────────────────── */}
-                {/* PAYU DIRECT PAYMENT LINK - ADD THIS AFTER BUNDLE PLAN */}
-                {/* ────────────────────────────────────────────────────────────── */}
-
-                <div className="bg-white rounded-2xl border border-slate-200 p-5 mt-4">
-                  <h4 className="text-slate-800 font-semibold mb-2">Pay with PayU</h4>
-                  <p className="text-sm text-slate-500 mb-4">
-                    Click below to complete your payment securely via PayU
-                  </p>
-
-                  <a
-                    href="https://u.payu.in/PrZ2PnY224hC"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-block text-white text-center font-bold text-xs px-6 py-3 rounded"
-                    style={{
-                      width: '135px',
-                      backgroundColor: '#1065b7',
-                      textAlign: 'center',
-                      fontWeight: 800,
-                      padding: '11px 0px',
-                      color: 'white',
-                      fontSize: '12px',
-                      display: 'inline-block',
-                      textDecoration: 'none',
-                      borderRadius: '3.229px'
-                    }}
+              {/* ── BILLING HISTORY (Full Width) ── */}
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+                  <h3 className="font-semibold text-slate-800">Billing History</h3>
+                  <button
+                    onClick={fetchInvoices}
+                    className="p-2 hover:bg-slate-50 rounded-lg transition-colors"
+                    title="Refresh"
                   >
-                    Pay Now
-                  </a>
-
-                  <p className="text-xs text-slate-400 mt-3">
-                    🔒 Secure payment via PayU Payment Gateway
-                  </p>
+                    <RefreshCw size={14} className="text-slate-400" />
+                  </button>
                 </div>
 
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead className="bg-slate-50">
-                      <tr className="border-b">
-                        <th className="text-left px-5 py-2 font-medium text-slate-500">Date</th>
-                        <th className="text-left px-5 py-2 font-medium text-slate-500">Amount</th>
-                        <th className="text-left px-5 py-2 font-medium text-slate-500">Status</th>
-                        <th className="text-right px-5 py-2 font-medium text-slate-500">Actions</th>
+                      <tr>
+                        <th className="text-left py-3 px-5 text-xs text-slate-500 font-medium">Date</th>
+                        <th className="text-left py-3 px-5 text-xs text-slate-500 font-medium">Invoice #</th>
+                        <th className="text-left py-3 px-5 text-xs text-slate-500 font-medium">Amount</th>
+                        <th className="text-left py-3 px-5 text-xs text-slate-500 font-medium">Status</th>
+                        <th className="text-left py-3 px-5 text-xs text-slate-500 font-medium">Actions</th>
                       </tr>
                     </thead>
-                    <tbody>
-                      {billingHistory.length > 0 ? (
-                        billingHistory.map((invoice, idx) => (
-                          <tr key={idx} className="border-b last:border-0 hover:bg-slate-50">
-                            <td className="px-5 py-3 text-slate-700">{new Date(invoice.created_at).toLocaleDateString()}</td>
-                            <td className="px-5 py-3 text-slate-700">₹{invoice.amount?.toLocaleString() || priceList.find(p => p.id === selectedPlan)?.price?.toLocaleString()}</td>
-                            <td className="px-5 py-3">
-                              <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${invoice.status === 'paid' ? 'bg-emerald-100 text-emerald-700' : invoice.status === 'pending' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'
-                                }`}>{invoice.status || 'Paid'}</span>
+                    <tbody className="divide-y divide-slate-50">
+                      {invoices.length > 0 ? (
+                        invoices.map((invoice) => (
+                          <tr key={invoice.id} className="hover:bg-slate-50 transition-colors">
+                            <td className="py-3 px-5 text-xs text-slate-600">
+                              {new Date(invoice.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
                             </td>
-                            <td className="px-5 py-3 text-right">
-                              <button onClick={() => invoice.invoice_url ? window.open(invoice.invoice_url, '_blank') : toast.info("Invoice PDF not available")} className="text-indigo-600 text-sm hover:text-indigo-700">Download PDF</button>
+                            <td className="py-3 px-5 text-xs text-slate-600">{invoice.invoice_number}</td>
+                            <td className="py-3 px-5 text-xs font-semibold text-slate-800">₹{invoice.total_amount}</td>
+                            <td className="py-3 px-5">
+                              <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${invoice.status === 'paid'
+                                ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+                                : 'bg-amber-100 text-amber-700 border-amber-200'
+                                }`}>
+                                {invoice.status}
+                              </span>
+                            </td>
+                            <td className="py-3 px-5">
+                              <button
+                                onClick={() => toast.info('Invoice download coming soon')}
+                                className="text-indigo-600 text-xs hover:text-indigo-700 flex items-center gap-1"
+                              >
+                                <Download size={12} /> Download
+                              </button>
                             </td>
                           </tr>
                         ))
                       ) : (
-                        <tr><td colSpan={4} className="px-5 py-8 text-center text-slate-400">No billing history found</td></tr>
+                        <tr>
+                          <td colSpan={5} className="py-12 text-center text-slate-400 text-sm">
+                            No billing history found
+                          </td>
+                        </tr>
                       )}
                     </tbody>
                   </table>
                 </div>
               </div>
-
-              {/* Confirmation Bar */}
-              {showConfirmBar && pendingPlan && (
-                <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 z-50 bg-white rounded-lg shadow-xl border border-slate-200 p-4 flex items-center space-x-6">
-                  <div>
-                    <p className="text-sm font-medium text-slate-900">
-                      Switch from <span className="font-bold">{priceList.find(p => p.id === selectedPlanBeforeChange)?.name}</span> to <span className="font-bold">{pendingPlan.name}</span>?
-                    </p>
-                    <p className="text-xs text-slate-500">Your next invoice will be adjusted.</p>
-                  </div>
-                  <div className="flex space-x-3">
-                    <button onClick={() => { setShowConfirmBar(false); setPendingPlan(null); setSelectedPlanBeforeChange(null); }} className="px-3 py-1.5 text-sm font-medium text-slate-700 bg-slate-100 rounded-md hover:bg-slate-200">Cancel</button>
-                    <button onClick={async () => {
-                      try {
-                        const token = localStorage.getItem('token') || session?.access_token;
-                        if (!token) throw new Error("Not logged in");
-                        const planName = pendingPlan.id;
-                        const planAmount = getPlanAmount(planName);
-                        const response = await api.payments.createOrder(planAmount, "INR", pendingPlan.name, token);
-                        if (response?.success && response?.payuData && response?.payuUrl) {
-                          submitToPayU(response.payuUrl, { ...response.payuData, plan: planName });
-                        } else {
-                          toast.error("Failed to process plan change");
-                        }
-                      } catch (error) {
-                        toast.error('Failed to process plan change');
-                        console.error(error);
-                      }
-                    }} className="px-3 py-1.5 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700">
-                      Confirm & Pay
-                    </button>
-                  </div>
-                </div>
-              )}
             </div>
           )}
+
+
+
+
           {/* ===== SECURITY ===== */}
           {activeTab === "security" && (
             <div className="space-y-5">
@@ -1890,6 +1937,154 @@ export default function SettingsPage() {
                   ))}
                 </div>
               </div>
+            </div>
+          )}
+          {/* ===== SUBSCRIPTION ===== */}
+          {activeTab === "subscription" && role === "admin" && (
+            <div className="space-y-5">
+              {/* Subscription Overview */}
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <CreditCard size={16} className="text-indigo-600" />
+                    <h3 className="text-slate-800">Subscription Management</h3>
+                    <span className={`ml-2 text-[10px] px-2 py-0.5 rounded-full font-medium ${companySubscription?.company?.subscription_status === 'active'
+                      ? 'bg-emerald-100 text-emerald-700'
+                      : 'bg-amber-100 text-amber-700'
+                      }`}>
+                      {companySubscription?.company?.subscription_status === 'active' ? 'Active' : 'Trial'}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => setShowSubscriptionModal(true)}
+                    className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors flex items-center gap-2"
+                  >
+                    <Edit size={14} /> Change Plan
+                  </button>
+                </div>
+
+                {companySubscriptionLoading ? (
+                  <div className="py-8 flex justify-center">
+                    <RefreshCw size={24} className="animate-spin text-indigo-400" />
+                  </div>
+                ) : companySubscription ? (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="bg-slate-50 rounded-xl p-4">
+                      <div className="text-xs text-slate-400">Current Plan</div>
+                      <div className="text-lg font-bold text-slate-800 mt-1 capitalize">
+                        {companySubscription.company?.plan_type || "Professional"}
+                      </div>
+                      <div className="text-sm text-slate-500">
+                        {companySubscription.company?.billing_period || "Monthly"} ·
+                        {companySubscription.company?.auto_renew ? ' Auto-renew ON' : ' Auto-renew OFF'}
+                      </div>
+                    </div>
+                    <div className="bg-slate-50 rounded-xl p-4">
+                      <div className="text-xs text-slate-400">Active Users</div>
+                      <div className="text-lg font-bold text-slate-800 mt-1">
+                        {companySubscription.active_users || 0}
+                      </div>
+                      <div className="text-sm text-slate-500">
+                        {users?.filter(u => u.isActive).length || 0} active of {users?.length || 0} total
+                      </div>
+                    </div>
+                    <div className="bg-slate-50 rounded-xl p-4">
+                      <div className="text-xs text-slate-400">Monthly Cost</div>
+                      <div className="text-lg font-bold text-indigo-600 mt-1">
+                        ₹{companySubscription.pricing?.total?.toLocaleString() || 0}
+                      </div>
+                      <div className="text-sm text-slate-500">
+                        ₹{companySubscription.pricing?.base_price || 0} × {companySubscription.active_users || 0} users
+                        {companySubscription.pricing?.discount > 0 && ` (${companySubscription.pricing.discount}% off)`}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-slate-400">
+                    <p>No subscription details available</p>
+                    <button
+                      onClick={() => fetchCompanySubscription()}
+                      className="mt-2 text-sm text-indigo-600 hover:text-indigo-700"
+                    >
+                      Refresh
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Invoice History */}
+              <InvoiceHistory
+                invoices={invoices || []}
+                loading={false}
+                onRefresh={fetchInvoices}
+                currency="₹"
+              />
+
+              {/* User Management Summary */}
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+                <div className="flex items-center gap-2 mb-4">
+                  <Users size={16} className="text-indigo-600" />
+                  <h3 className="text-slate-800">User Management</h3>
+                  <span className="text-xs text-slate-400 ml-auto">
+                    {users?.filter(u => u.isActive).length || 0} active · {users?.filter(u => !u.isActive).length || 0} inactive
+                  </span>
+                </div>
+
+                <div className="space-y-2 max-h-60 overflow-y-auto">
+                  {users?.slice(0, 10).map(user => (
+                    <div key={user.id} className="flex items-center justify-between py-2 border-b border-slate-50">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold text-white ${user.role === "admin"
+                          ? "bg-gradient-to-br from-purple-500 to-indigo-600"
+                          : "bg-gradient-to-br from-emerald-500 to-teal-600"
+                          }`}>
+                          {user.name?.charAt(0) || "U"}
+                        </div>
+                        <div>
+                          <div className="text-sm font-medium text-slate-800">{user.name}</div>
+                          <div className="text-xs text-slate-400">{user.email}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className={`text-xs px-2 py-0.5 rounded-full ${user.isActive
+                          ? "bg-emerald-50 text-emerald-700"
+                          : "bg-red-50 text-red-700"
+                          }`}>
+                          {user.isActive ? "Active" : "Inactive"}
+                        </span>
+                        {user.id !== userProfile?.id && (
+                          <button
+                            onClick={() => user.isActive ? deactivateUser(user.id) : activateUser(user.id)}
+                            className={`p-1 rounded-lg transition-colors ${user.isActive
+                              ? "text-red-400 hover:text-red-600 hover:bg-red-50"
+                              : "text-emerald-400 hover:text-emerald-600 hover:bg-emerald-50"
+                              }`}
+                            title={user.isActive ? "Deactivate" : "Activate"}
+                          >
+                            {user.isActive ? <UserX size={14} /> : <UserCheck size={14} />}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  {(users?.length || 0) > 10 && (
+                    <div className="text-center text-xs text-slate-400 pt-2">
+                      +{(users?.length || 0) - 10} more users
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Subscription Modal */}
+              <SubscriptionModal
+                isOpen={showSubscriptionModal}
+                onClose={() => setShowSubscriptionModal(false)}
+                currentPlan={companySubscription?.company?.plan_type || "professional"}
+                currentPeriod={companySubscription?.company?.billing_period || "monthly"}
+                activeUsers={companySubscription?.active_users || 0}
+                autoRenew={companySubscription?.company?.auto_renew ?? true}
+                onSave={updateCompanySubscription}
+              />
             </div>
           )}
         </div>

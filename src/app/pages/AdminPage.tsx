@@ -13,7 +13,7 @@ import { useApp } from "../context/AppContext";
 import type { UserProfile } from "../context/AppContext";
 import { useNavigate } from "react-router";
 
-const ROLE_OPTIONS = ["admin", "user"] as const;
+const ROLE_OPTIONS = ["super_admin", "admin", "manager", "sales", "viewer"] as const;
 const DEPT_OPTIONS = [
   {
     value: "sales",
@@ -76,18 +76,18 @@ interface UserForm {
   email: string;
   password: string;
   confirmPassword: string;
-  role: "admin" | "user";
+  role: "super_admin" | "admin" | "manager" | "sales" | "viewer";
   employeeId: string;
   department: string;
 }
 
 const emptyForm: UserForm = {
   name: "", email: "", password: "", confirmPassword: "",
-  role: "user", employeeId: "", department: "sales",
+  role: "sales", employeeId: "", department: "sales",
 };
 
 export default function AdminPage() {
-  const { role, users, usersLoading, loadUsers, createUser, updateUser, deleteUser, toggleUserAccess, resetUserPassword } = useApp();
+  const { role, users, usersLoading, loadUsers, createUser, updateUser, deleteUser, toggleUserAccess, resetUserPassword, activateUser, deactivateUser, userProfile, } = useApp();
   const navigate = useNavigate();
 
   const employeeOptions = [
@@ -220,8 +220,9 @@ export default function AdminPage() {
   const stats = useMemo(() => ({
     total: users.length,
     active: users.filter(u => u.isActive).length,
-    admins: users.filter(u => u.role === "admin").length,
-    users: users.filter(u => u.role === "user").length,
+    admins: users.filter(u => u.role === "admin" || u.role === "super_admin").length,
+    users: users.filter(u => u.role !== "admin" && u.role !== "super_admin").length,
+    inactive: users.filter(u => !u.isActive).length,
   }), [users]);
 
   const openCreate = () => {
@@ -338,17 +339,19 @@ export default function AdminPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-
+          <button
+            onClick={() => navigate("/subscription")}
+            className="px-3 py-2 text-sm font-medium text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-xl hover:bg-indigo-100 transition-colors flex items-center gap-2"
+          >
+            <CreditCard size={14} /> Manage Subscription
+          </button>
           <button
             onClick={loadUsers}
             disabled={usersLoading}
             className="p-2 border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors"
             title="Refresh"
           >
-            <RefreshCw
-              size={14}
-              className={`text-slate-500 ${usersLoading ? "animate-spin" : ""}`}
-            />
+            <RefreshCw size={14} className={`text-slate-500 ${usersLoading ? "animate-spin" : ""}`} />
           </button>
           <button
             onClick={openCreate}
@@ -666,29 +669,32 @@ export default function AdminPage() {
                             : "Never"}
                         </td>
                         <td className="py-3 px-4">
-                          <div className="flex items-center gap-1">
-                            <button
-                              onClick={() => openEdit(user)}
-                              className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
-                              title="Edit"
-                            >
-                              <Edit size={13} />
-                            </button>
-                            <button
-                              onClick={() => setShowPasswordModal(user)}
-                              className="p-1.5 rounded-lg hover:bg-amber-50 text-slate-400 hover:text-amber-600 transition-colors"
-                              title="Reset Password"
-                            >
-                              <Key size={13} />
-                            </button>
-                            <button
-                              onClick={() => setDeleteConfirm(user)}
-                              className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500 transition-colors"
-                              title="Delete"
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                          </div>
+                          <td className="py-3 px-4">
+                            <div className="flex items-center gap-1">
+                              {/* Activate/Deactivate Button */}
+                              {user.id !== userProfile?.id && (
+                                <button
+                                  onClick={() => user.isActive ? deactivateUser(user.id) : activateUser(user.id)}
+                                  className={`p-1.5 rounded-lg transition-colors ${user.isActive
+                                    ? "text-red-400 hover:text-red-600 hover:bg-red-50"
+                                    : "text-emerald-400 hover:text-emerald-600 hover:bg-emerald-50"
+                                    }`}
+                                  title={user.isActive ? "Deactivate User" : "Activate User"}
+                                >
+                                  {user.isActive ? <UserX size={13} /> : <UserCheck size={13} />}
+                                </button>
+                              )}
+                              <button onClick={() => openEdit(user)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors" title="Edit">
+                                <Edit size={13} />
+                              </button>
+                              <button onClick={() => setShowPasswordModal(user)} className="p-1.5 rounded-lg hover:bg-amber-50 text-slate-400 hover:text-amber-600 transition-colors" title="Reset Password">
+                                <Key size={13} />
+                              </button>
+                              <button onClick={() => setDeleteConfirm(user)} className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500 transition-colors" title="Delete">
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          </td>
                         </td>
                       </tr>
                     ))}

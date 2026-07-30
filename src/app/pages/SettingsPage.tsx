@@ -13,10 +13,50 @@ import { useApp } from "../context/AppContext";
 import { toast } from "sonner";
 import QRCode from "qrcode";
 import { api, getApiBaseUrl } from "../lib/api";
+import { useAdConnections, AdConnection } from "../../hooks/useAdConnections";
 import SubscriptionModal from "../components/SubscriptionModal";
 import InvoiceHistory from "../components/InvoiceHistory";
 // Note: CreditCard is already imported, but you may want to alias it
-type SettingsTab = "profile" | "pricing" | "notifications" | "security" | "subscription" | "system";
+type SettingsTab = "profile" | "integrations" | "pricing" | "notifications" | "security" | "subscription" | "system";
+// ── Ad Platform Configuration ──
+const AD_PLATFORMS = [
+  {
+    platform: "facebook",
+    name: "Facebook Ads",
+    icon: "📘",
+    desc: "Import leads from Facebook Lead Ad campaigns",
+    color: "bg-blue-100 text-blue-700",
+    border: "border-blue-200",
+    bg: "bg-blue-50"
+  },
+  {
+    platform: "google",
+    name: "Google Ads",
+    icon: "📊",
+    desc: "Track leads from Google Ads campaigns",
+    color: "bg-red-100 text-red-700",
+    border: "border-red-200",
+    bg: "bg-red-50"
+  },
+  {
+    platform: "linkedin",
+    name: "LinkedIn Ads",
+    icon: "🔗",
+    desc: "Import B2B leads from LinkedIn",
+    color: "bg-sky-100 text-sky-700",
+    border: "border-sky-200",
+    bg: "bg-sky-50"
+  },
+  {
+    platform: "instagram",
+    name: "Instagram Ads",
+    icon: "📸",
+    desc: "Import Instagram lead form submissions",
+    color: "bg-pink-100 text-pink-700",
+    border: "border-pink-200",
+    bg: "bg-pink-50"
+  },
+];
 
 export default function SettingsPage() {
   const {

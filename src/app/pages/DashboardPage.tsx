@@ -123,6 +123,35 @@ export default function DashboardPage() {
   const conversionRate = leads.length > 0 ? Number(((wonLeads / leads.length) * 100).toFixed(1)) : 0;
   const pipelineValue = formatCurrency(activeDealsValue);
 
+// Real period-over-period comparison (last 30 days vs previous 30 days)
+const now = new Date();
+const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
+
+const calcChange = (current, previous) => {
+  if (previous === 0) return current > 0 ? "+100%" : "0%";
+  const pct = ((current - previous) / previous) * 100;
+  return `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`;
+};
+
+const leadsCurrent = leads.filter(l => l.createdAt && new Date(l.createdAt) >= thirtyDaysAgo).length;
+const leadsPrevious = leads.filter(l => l.createdAt && new Date(l.createdAt) >= sixtyDaysAgo && new Date(l.createdAt) < thirtyDaysAgo).length;
+const leadsChange = calcChange(leadsCurrent, leadsPrevious);
+
+const activeDealsCurrent = deals.filter(d => !["Won", "Lost"].includes(d.stage) && d.createdAt && new Date(d.createdAt) >= thirtyDaysAgo).reduce((s, d) => s + (Number(d.value) || 0), 0);
+const activeDealsPrevious = deals.filter(d => !["Won", "Lost"].includes(d.stage) && d.createdAt && new Date(d.createdAt) >= sixtyDaysAgo && new Date(d.createdAt) < thirtyDaysAgo).reduce((s, d) => s + (Number(d.value) || 0), 0);
+const activeDealsChange = calcChange(activeDealsCurrent, activeDealsPrevious);
+
+const wonCurrent = deals.filter(d => d.stage === "Won" && new Date(d.expectedClose || d.createdAt || Date.now()) >= thirtyDaysAgo).reduce((s, d) => s + (Number(d.value) || 0), 0);
+const wonPrevious = deals.filter(d => d.stage === "Won" && new Date(d.expectedClose || d.createdAt || Date.now()) >= sixtyDaysAgo && new Date(d.expectedClose || d.createdAt || Date.now()) < thirtyDaysAgo).reduce((s, d) => s + (Number(d.value) || 0), 0);
+const revenueChange = calcChange(wonCurrent, wonPrevious);
+
+const wonLeadsCurrent = leads.filter(l => l.status === "Won" && l.createdAt && new Date(l.createdAt) >= thirtyDaysAgo).length;
+const wonLeadsPrevious = leads.filter(l => l.status === "Won" && l.createdAt && new Date(l.createdAt) >= sixtyDaysAgo && new Date(l.createdAt) < thirtyDaysAgo).length;
+const conversionCurrent = leadsCurrent > 0 ? (wonLeadsCurrent / leadsCurrent) * 100 : 0;
+const conversionPrevious = leadsPrevious > 0 ? (wonLeadsPrevious / leadsPrevious) * 100 : 0;
+const conversionChange = calcChange(conversionCurrent, conversionPrevious);
+
   const sourceData = React.useMemo(() => {
     const sourceCounts = leads.reduce((acc: any, lead: any) => {
       acc[lead.source] = (acc[lead.source] || 0) + 1;
@@ -272,10 +301,10 @@ export default function DashboardPage() {
   const totalRevenue = revenueData.reduce((s, d) => s + d.revenue, 0);
 
   const liveKpiCards = [
-    { label: "Total Leads", value: loading ? "..." : formatNumber(leads.length), change: "+18.4%", trend: "up", icon: Users, color: "from-indigo-500 to-indigo-600", bg: "bg-indigo-50", text: "text-indigo-600" },
-    { label: "Active Deals", value: formatCurrency(activeDealsValue), change: "+12.3%", trend: "up", icon: TrendingUp, color: "from-emerald-500 to-emerald-600", bg: "bg-emerald-50", text: "text-emerald-600" },
-    { label: "Revenue (MTD)", value: formatCurrency(wonDealsValue), change: "+9.8%", trend: "up", icon: IndianRupee, color: "from-amber-500 to-orange-500", bg: "bg-amber-50", text: "text-amber-600" },
-    { label: "Conversion Rate", value: `${conversionRate}%`, change: "-2.1%", trend: "down", icon: Target, color: "from-purple-500 to-purple-600", bg: "bg-purple-50", text: "text-purple-600" },
+    { label: "Total Leads", value: loading ? "..." : formatNumber(leads.length), change: leadsChange, trend: leadsChange.startsWith("-") ? "down" : "up", icon: Users, color: "from-indigo-500 to-indigo-600", bg: "bg-indigo-50", text: "text-indigo-600" },
+    { label: "Active Deals", value: formatCurrency(activeDealsValue), change: activeDealsChange, trend: activeDealsChange.startsWith("-") ? "down" : "up", icon: TrendingUp, color: "from-emerald-500 to-emerald-600", bg: "bg-emerald-50", text: "text-emerald-600" },
+    { label: "Revenue (MTD)", value: formatCurrency(wonDealsValue), change: revenueChange, trend: revenueChange.startsWith("-") ? "down" : "up", icon: IndianRupee, color: "from-amber-500 to-orange-500", bg: "bg-amber-50", text: "text-amber-600" },
+    { label: "Conversion Rate", value: `${conversionRate}%`, change: conversionChange, trend: conversionChange.startsWith("-") ? "down" : "up", icon: Target, color: "from-purple-500 to-purple-600", bg: "bg-purple-50", text: "text-purple-600" },
   ];
 
   const liveActivities = activities;

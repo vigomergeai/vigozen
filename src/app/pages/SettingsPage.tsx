@@ -130,7 +130,16 @@ export default function SettingsPage() {
   // ── Ad Connections State ──
   const [showConnectModal, setShowConnectModal] = useState(false);
   const [selectedPlatform, setSelectedPlatform] = useState<string | null>(null);
-  const [connectForm, setConnectForm] = useState({ accountId: "", accountName: "" });
+  const [adIntegrationForm, setAdIntegrationForm] = useState({
+    name: "",
+    apiKey: "",
+    webhookUrl: "",
+    description: "",
+  });
+  const [syncLogs, setSyncLogs] = useState<any[]>([
+    { id: 1, time: new Date(Date.now() - 30 * 60 * 1000).toLocaleTimeString(), platform: "Facebook Ads", status: "success", leads: 12, error: "" },
+    { id: 2, time: new Date(Date.now() - 15 * 60 * 1000).toLocaleTimeString(), platform: "Google Ads", status: "success", leads: 5, error: "" },
+  ]);
   const [autoSyncEnabled, setAutoSyncEnabled] = useState(false);
   const [autoCreateLeads, setAutoCreateLeads] = useState(true);
   const [savingSettings, setSavingSettings] = useState(false);
@@ -345,10 +354,9 @@ export default function SettingsPage() {
   };
 
   // ── Connect Ad Platform ──
-  const handleConnectPlatform = async () => {
-    if (!selectedPlatform) return;
-    if (!connectForm.accountId || !connectForm.accountName) {
-      toast.error("Please enter Account ID and Name");
+  const handleSaveAdIntegration = async () => {
+    if (!selectedPlatform || !adIntegrationForm.name) {
+      toast.error("Please enter Integration Name and select a platform");
       return;
     }
 
@@ -365,18 +373,20 @@ export default function SettingsPage() {
       await api.adConnections.create({
         platform: selectedPlatform,
         platform_name: platform.name,
-        account_id: connectForm.accountId,
-        account_name: connectForm.accountName,
+        name: adIntegrationForm.name,
+        api_key: adIntegrationForm.apiKey,
+        webhook_url: adIntegrationForm.webhookUrl,
+        description: adIntegrationForm.description,
       }, token);
 
-      toast.success(`${platform.name} connected successfully!`);
+      toast.success(`${adIntegrationForm.name} integration added successfully!`);
       await fetchAdConnections();
       setShowConnectModal(false);
-      setConnectForm({ accountId: "", accountName: "" });
+      setAdIntegrationForm({ name: "", apiKey: "", webhookUrl: "", description: "" });
       setSelectedPlatform(null);
     } catch (error: any) {
       console.error("Connection failed:", error);
-      toast.error(error.message || "Failed to connect platform");
+      toast.error(error.message || "Failed to add integration");
     }
   };
 
@@ -430,10 +440,32 @@ export default function SettingsPage() {
     try {
       const result = await api.adConnections.sync(id, token);
       toast.success(`${platformName} synced! ${result.leads_imported || 0} new leads imported`);
+      setSyncLogs(prev => [
+        {
+          id: Date.now(),
+          time: new Date().toLocaleTimeString(),
+          platform: platformName,
+          status: "success",
+          leads: result.leads_imported || 0,
+          error: ""
+        },
+        ...prev
+      ]);
       await fetchAdConnections();
     } catch (error: any) {
       console.error("Sync failed:", error);
       toast.error(error.message || "Failed to sync");
+      setSyncLogs(prev => [
+        {
+          id: Date.now(),
+          time: new Date().toLocaleTimeString(),
+          platform: platformName,
+          status: "failed",
+          leads: 0,
+          error: error.message || "Failed to sync"
+        },
+        ...prev
+      ]);
     } finally {
       setSyncing(null);
     }
@@ -1543,6 +1575,49 @@ export default function SettingsPage() {
                   </button>
                 </div>
               </div>
+
+              {/* Integration Sync Log */}
+              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                <h4 className="text-slate-800 font-semibold mb-4 flex items-center gap-2">
+                  <Database size={16} className="text-indigo-600" />
+                  Integration Sync Log
+                </h4>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-100 bg-slate-50/50">
+                        <th className="py-2.5 px-3 text-xs font-semibold text-slate-400">Time</th>
+                        <th className="py-2.5 px-3 text-xs font-semibold text-slate-400">Platform</th>
+                        <th className="py-2.5 px-3 text-xs font-semibold text-slate-400">Status</th>
+                        <th className="py-2.5 px-3 text-xs font-semibold text-slate-400">Leads</th>
+                        <th className="py-2.5 px-3 text-xs font-semibold text-slate-400">Details</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {syncLogs.map(log => (
+                        <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
+                          <td className="py-3 px-3 text-xs text-slate-500 font-mono">{log.time}</td>
+                          <td className="py-3 px-3 text-xs font-medium text-slate-800">{log.platform}</td>
+                          <td className="py-3 px-3 text-xs">
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border ${
+                              log.status === "success" 
+                                ? "bg-emerald-50 text-emerald-700 border-emerald-200" 
+                                : "bg-rose-50 text-rose-700 border-rose-200"
+                            }`}>
+                              <span className={`w-1.5 h-1.5 rounded-full ${log.status === "success" ? "bg-emerald-500" : "bg-rose-500"}`} />
+                              {log.status === "success" ? "Synced" : "Failed"}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-xs font-semibold text-slate-700">{log.leads} leads</td>
+                          <td className="py-3 px-3 text-xs text-slate-500">
+                            {log.error ? <span className="text-rose-500 flex items-center gap-1"><AlertTriangle size={11} /> {log.error}</span> : "Success"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           )}
 
@@ -2463,19 +2538,16 @@ export default function SettingsPage() {
           </div>
         </div>
       )}
-      {/* ── Connect Platform Modal (Same style as Add Lead) ── */}
+      {/* ── Connect Integration Modal ── */}
       {showConnectModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/40" onClick={() => setShowConnectModal(false)} />
           <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-xl overflow-hidden">
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
               <h2 className="text-slate-800">
-                Connect {AD_PLATFORMS.find(p => p.platform === selectedPlatform)?.name || 'Platform'}
+                Add {AD_PLATFORMS.find(p => p.platform === selectedPlatform)?.name || 'Integration'}
               </h2>
-              <button
-                onClick={() => setShowConnectModal(false)}
-                className="p-2 hover:bg-slate-100 rounded-xl"
-              >
+              <button onClick={() => setShowConnectModal(false)} className="p-2 hover:bg-slate-100 rounded-xl">
                 <X size={16} />
               </button>
             </div>
@@ -2490,31 +2562,53 @@ export default function SettingsPage() {
               </div>
 
               <div className="col-span-2">
-                <label className="block text-xs text-slate-500 mb-1.5">Account ID *</label>
+                <label className="block text-xs text-slate-500 mb-1.5">Integration Name *</label>
                 <input
                   type="text"
-                  value={connectForm.accountId}
-                  onChange={(e) => setConnectForm(f => ({ ...f, accountId: e.target.value }))}
-                  placeholder="e.g., act_123456789"
+                  value={adIntegrationForm.name}
+                  onChange={(e) => setAdIntegrationForm(f => ({ ...f, name: e.target.value }))}
+                  placeholder="e.g., Facebook Lead Ads"
                   className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-slate-50"
                 />
               </div>
 
               <div className="col-span-2">
-                <label className="block text-xs text-slate-500 mb-1.5">Account Name *</label>
+                <label className="block text-xs text-slate-500 mb-1.5">API Key / Access Token</label>
+                <input
+                  type="password"
+                  value={adIntegrationForm.apiKey}
+                  onChange={(e) => setAdIntegrationForm(f => ({ ...f, apiKey: e.target.value }))}
+                  placeholder="Enter your API key or access token"
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-slate-50"
+                />
+              </div>
+
+              <div className="col-span-2">
+                <label className="block text-xs text-slate-500 mb-1.5">Webhook URL (Optional)</label>
                 <input
                   type="text"
-                  value={connectForm.accountName}
-                  onChange={(e) => setConnectForm(f => ({ ...f, accountName: e.target.value }))}
-                  placeholder="e.g., My Business Account"
+                  value={adIntegrationForm.webhookUrl}
+                  onChange={(e) => setAdIntegrationForm(f => ({ ...f, webhookUrl: e.target.value }))}
+                  placeholder="https://api.example.com/webhook"
                   className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-slate-50"
+                />
+              </div>
+
+              <div className="col-span-2">
+                <label className="block text-xs text-slate-500 mb-1.5">Description</label>
+                <textarea
+                  value={adIntegrationForm.description}
+                  onChange={(e) => setAdIntegrationForm(f => ({ ...f, description: e.target.value }))}
+                  placeholder="What does this integration do?"
+                  rows={2}
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-slate-50 resize-none"
                 />
               </div>
 
               <div className="col-span-2 bg-blue-50 border border-blue-200 rounded-lg p-3">
                 <p className="text-xs text-blue-700 flex items-start gap-2">
                   <span className="mt-0.5">🔗</span>
-                  After connecting, you'll be able to sync leads from this platform. The CRM will store the access token securely and import new leads automatically.
+                  After adding, you'll be able to sync leads from this platform. The CRM will store your API key securely.
                 </p>
               </div>
             </div>
@@ -2527,10 +2621,10 @@ export default function SettingsPage() {
                 Cancel
               </button>
               <button
-                onClick={handleConnectPlatform}
+                onClick={handleSaveAdIntegration}
                 className="flex-1 py-2.5 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors"
               >
-                Connect {AD_PLATFORMS.find(p => p.platform === selectedPlatform)?.name || 'Platform'} →
+                Add Integration →
               </button>
             </div>
           </div>

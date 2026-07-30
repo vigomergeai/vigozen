@@ -274,7 +274,11 @@ const upload = multer({
       ADD COLUMN IF NOT EXISTS last_sync_status VARCHAR(50) DEFAULT 'never',
       ADD COLUMN IF NOT EXISTS last_sync_error TEXT,
       ADD COLUMN IF NOT EXISTS sync_logs JSONB DEFAULT '[]',
-      ADD COLUMN IF NOT EXISTS last_sync_count INTEGER DEFAULT 0
+      ADD COLUMN IF NOT EXISTS last_sync_count INTEGER DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS name VARCHAR(255),
+      ADD COLUMN IF NOT EXISTS api_key TEXT,
+      ADD COLUMN IF NOT EXISTS webhook_url TEXT,
+      ADD COLUMN IF NOT EXISTS description TEXT
     `).catch(() => {});
 
     // ── AD SYNC LOGS TABLE ──
@@ -2400,24 +2404,28 @@ app.get("/ad-connections", authenticateToken, async (req, res) => {
 
 app.post("/ad-connections", authenticateToken, async (req, res) => {
   try {
-    const { platform, platform_name, account_id, account_name } = req.body;
+    const { platform, platform_name, account_id, account_name, name, api_key, webhook_url, description } = req.body;
     if (!platform || !platform_name) {
       return res.status(400).json({ error: "Platform and platform name are required" });
     }
 
     const result = await pool.query(
       `INSERT INTO ad_connections
-        (user_id, platform, platform_name, connected, account_id, account_name, leads_imported, cost_spent, created_at, updated_at)
-       VALUES ($1, $2, $3, true, $4, $5, 0, 0, NOW(), NOW())
+        (user_id, platform, platform_name, connected, account_id, account_name, leads_imported, cost_spent, created_at, updated_at, name, api_key, webhook_url, description)
+       VALUES ($1, $2, $3, true, $4, $5, 0, 0, NOW(), NOW(), $6, $7, $8, $9)
        ON CONFLICT (user_id, platform)
        DO UPDATE SET
          platform_name = EXCLUDED.platform_name,
          connected = true,
          account_id = EXCLUDED.account_id,
          account_name = EXCLUDED.account_name,
+         name = EXCLUDED.name,
+         api_key = EXCLUDED.api_key,
+         webhook_url = EXCLUDED.webhook_url,
+         description = EXCLUDED.description,
          updated_at = NOW()
        RETURNING *`,
-      [req.user.id, platform, platform_name, account_id, account_name]
+      [req.user.id, platform, platform_name, account_id || null, account_name || null, name || null, api_key || null, webhook_url || null, description || null]
     );
     res.json(result.rows[0]);
   } catch (err) {

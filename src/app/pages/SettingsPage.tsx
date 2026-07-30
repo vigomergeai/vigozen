@@ -5,7 +5,7 @@ import {
   Check, X, Eye, EyeOff, Plug, RefreshCw, Key, Bot, Zap,
   Plus, Minus, Trash2, Edit, ChevronRight, Star, Crown, CheckCircle,
   Mail, Phone, Building, Globe, AlertTriangle, Database, RotateCcw, UserCog, ExternalLink, Lock,
-  UserCheck, UserX, Calendar, TrendingUp, CreditCard as CreditCardIcon, Users, Download
+  UserCheck, UserX, Calendar, TrendingUp, CreditCard as CreditCardIcon, Users, Download, FileText
 } from "lucide-react";
 import { useNavigate } from "react-router";
 import { priceList as mockPriceList, PriceItem } from "../data/mockData";
@@ -13,50 +13,10 @@ import { useApp } from "../context/AppContext";
 import { toast } from "sonner";
 import QRCode from "qrcode";
 import { api, getApiBaseUrl } from "../lib/api";
-import { useAdConnections, AdConnection } from "../../hooks/useAdConnections";
 import SubscriptionModal from "../components/SubscriptionModal";
 import InvoiceHistory from "../components/InvoiceHistory";
 // Note: CreditCard is already imported, but you may want to alias it
-type SettingsTab = "profile" | "integrations" | "pricing" | "notifications" | "security" | "subscription" | "system";
-// ── Ad Platform Configuration ──
-const AD_PLATFORMS = [
-  {
-    platform: "facebook",
-    name: "Facebook Ads",
-    icon: "📘",
-    desc: "Import leads from Facebook Lead Ad campaigns",
-    color: "bg-blue-100 text-blue-700",
-    border: "border-blue-200",
-    bg: "bg-blue-50"
-  },
-  {
-    platform: "google",
-    name: "Google Ads",
-    icon: "📊",
-    desc: "Track leads from Google Ads campaigns",
-    color: "bg-red-100 text-red-700",
-    border: "border-red-200",
-    bg: "bg-red-50"
-  },
-  {
-    platform: "linkedin",
-    name: "LinkedIn Ads",
-    icon: "🔗",
-    desc: "Import B2B leads from LinkedIn",
-    color: "bg-sky-100 text-sky-700",
-    border: "border-sky-200",
-    bg: "bg-sky-50"
-  },
-  {
-    platform: "instagram",
-    name: "Instagram Ads",
-    icon: "📸",
-    desc: "Import Instagram lead form submissions",
-    color: "bg-pink-100 text-pink-700",
-    border: "border-pink-200",
-    bg: "bg-pink-50"
-  },
-];
+type SettingsTab = "profile" | "pricing" | "notifications" | "security" | "subscription" | "system";
 
 export default function SettingsPage() {
   const {
@@ -127,16 +87,6 @@ export default function SettingsPage() {
   //  ADD THIS
   const [twoFAEnabled, setTwoFAEnabled] = useState(false);
   const [sessions, setSessions] = useState<any[]>([]);
-  // ── Ad Connections State ──
-  const [showConnectModal, setShowConnectModal] = useState(false);
-  const [selectedPlatform, setSelectedPlatform] = useState<string | null>(null);
-  const [connectForm, setConnectForm] = useState({ accountId: "", accountName: "" });
-  const [autoSyncEnabled, setAutoSyncEnabled] = useState(false);
-  const [autoCreateLeads, setAutoCreateLeads] = useState(true);
-  const [savingSettings, setSavingSettings] = useState(false);
-  const [adConnections, setAdConnections] = useState<AdConnection[]>([]);
-  const [adLoading, setAdLoading] = useState(false);
-  const [syncing, setSyncing] = useState<string | null>(null);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
 
@@ -145,6 +95,8 @@ export default function SettingsPage() {
   const [billingPeriod, setBillingPeriod] = useState('monthly');
   const [purchaseLoading, setPurchaseLoading] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [editingPayment, setEditingPayment] = useState<any>(null);
 
   // Selected plan data
   const selectedPlanData = ({
@@ -181,18 +133,89 @@ export default function SettingsPage() {
     try {
       const token = localStorage.getItem('token') || session?.access_token;
       if (!token) throw new Error("Not logged in");
-      const response = await api.payments.createOrder(pricing.total, "INR", `bundle_${activeUsers}`, token);
+
+      // 1. Create invoice first
+      const invoiceData = {
+        amount: pricing.total,
+        plan: selectedPlan,
+        period: billingPeriod,
+        users: activeUsers,
+        companyId: userProfile?.company_id
+      };
+
+      const invoiceResponse = await api.company.generateInvoice({
+        subscription_id: (companySubscription?.company as any)?.id || 'temp',
+        billing_period_start: new Date().toISOString(),
+        billing_period_end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+      }, token);
+
+      // 2. Create PayU order with invoice ID
+      const response = await api.payments.createOrder(
+        pricing.total,
+        "INR",
+        `invoice_${invoiceResponse?.id || Date.now()}`,
+        token
+      );
+
       if (!response?.success || !response?.payuData || !response?.payuUrl) {
         toast.error("Could not create payment order. Please try again.");
         return;
       }
+
       toast.success(`Order ${response.txnid} created!`);
+
+      // 3. Refresh data
+      await fetchInvoices();
+      await fetchCompanySubscription();
+
       submitToPayU(response.payuUrl, response.payuData);
     } catch (error: any) {
       toast.error(error.message || 'Failed to create payment');
       console.error(error);
     } finally {
       setPurchaseLoading(false);
+    }
+  };
+
+  // ── Handle Invoice Download ──
+  const handleDownloadInvoice = async (invoiceId: string) => {
+    try {
+      const token = localStorage.getItem('token') || session?.access_token;
+      if (!token) throw new Error("Not logged in");
+
+      const response = await fetch(`${getApiBaseUrl()}/api/invoices/download/${invoiceId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to download invoice');
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `invoice-${invoiceId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success('Invoice downloaded successfully');
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to download invoice');
+      console.error('Download error:', error);
+    }
+  };
+
+  // ── Handle Remove Payment Method ──
+  const handleRemovePayment = async (id: string) => {
+    if (!confirm('Remove this payment method?')) return;
+    try {
+      await deletePaymentMethod(id);
+      toast.success('Payment method removed');
+      await fetchPaymentMethods();
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to remove payment method');
     }
   };
 
@@ -248,123 +271,6 @@ export default function SettingsPage() {
     };
     return planMap[plan] || 999;
   };
-  // ── Fetch Ad Connections ──
-  const fetchAdConnections = async () => {
-    const token = localStorage.getItem('token');
-    if (!token) return;
-    setAdLoading(true);
-    try {
-      const data = await api.adConnections.list(token);
-      setAdConnections(data || []);
-      // Load settings from userSettings
-      if (userSettings?.ad_auto_sync !== undefined) {
-        setAutoSyncEnabled(userSettings.ad_auto_sync);
-      }
-      if (userSettings?.ad_auto_create !== undefined) {
-        setAutoCreateLeads(userSettings.ad_auto_create);
-      }
-    } catch (error) {
-      console.error("Failed to fetch ad connections:", error);
-      toast.error("Failed to load ad connections");
-    } finally {
-      setAdLoading(false);
-    }
-  };
-
-  // ── Connect Ad Platform ──
-  const handleConnectPlatform = async () => {
-    if (!selectedPlatform) return;
-    if (!connectForm.accountId || !connectForm.accountName) {
-      toast.error("Please enter Account ID and Name");
-      return;
-    }
-
-    const platform = AD_PLATFORMS.find(p => p.platform === selectedPlatform);
-    if (!platform) return;
-
-    const token = localStorage.getItem('token');
-    if (!token) {
-      toast.error("Please log in again");
-      return;
-    }
-
-    try {
-      await api.adConnections.create({
-        platform: selectedPlatform,
-        platform_name: platform.name,
-        account_id: connectForm.accountId,
-        account_name: connectForm.accountName,
-      }, token);
-
-      toast.success(`${platform.name} connected successfully!`);
-      await fetchAdConnections();
-      setShowConnectModal(false);
-      setConnectForm({ accountId: "", accountName: "" });
-      setSelectedPlatform(null);
-    } catch (error: any) {
-      console.error("Connection failed:", error);
-      toast.error(error.message || "Failed to connect platform");
-    }
-  };
-
-  // ── Disconnect Ad Platform ──
-  const handleDisconnect = async (id: string, platformName: string) => {
-    if (!confirm(`Are you sure you want to disconnect ${platformName}?`)) return;
-
-    const token = localStorage.getItem('token');
-    if (!token) {
-      toast.error("Please log in again");
-      return;
-    }
-
-    try {
-      await api.adConnections.delete(id, token);
-      toast.success(`${platformName} disconnected`);
-      await fetchAdConnections();
-    } catch (error: any) {
-      console.error("Disconnect failed:", error);
-      toast.error(error.message || "Failed to disconnect");
-    }
-  };
-
-  // ── Sync Ad Platform ──
-  const handleSyncPlatform = async (id: string, platformName: string) => {
-    const token = localStorage.getItem('token');
-    if (!token) {
-      toast.error("Please log in again");
-      return;
-    }
-
-    setSyncing(id);
-    try {
-      const result = await api.adConnections.sync(id, token);
-      toast.success(`${platformName} synced! ${result.leads_imported || 0} new leads imported`);
-      await fetchAdConnections();
-    } catch (error: any) {
-      console.error("Sync failed:", error);
-      toast.error(error.message || "Failed to sync");
-    } finally {
-      setSyncing(null);
-    }
-  };
-
-  // ── Save Auto-Import Settings ──
-  const handleSaveAutoSettings = async () => {
-    setSavingSettings(true);
-    try {
-      await saveSettings({
-        ad_auto_sync: autoSyncEnabled,
-        ad_auto_create: autoCreateLeads,
-      });
-      toast.success("Auto-import settings saved");
-    } catch (error) {
-      console.error("Save settings failed:", error);
-      toast.error("Failed to save settings");
-    } finally {
-      setSavingSettings(false);
-    }
-  };
-
   const getPlanId = (plan: string): string => {
     // Map plan names to Razorpay plan IDs
     const planMap: Record<string, string> = {
@@ -1024,7 +930,6 @@ export default function SettingsPage() {
   const tabs: { id: SettingsTab; label: string; icon: React.ElementType; adminOnly?: boolean }[] = [
     { id: "profile", label: "Profile", icon: User },
     { id: "notifications", label: "Notifications", icon: Bell },
-    { id: "integrations", label: "Lead Integrations", icon: Plug },
     { id: "pricing", label: "Price List", icon: CreditCard },
     { id: "security", label: "Security", icon: Shield },
     { id: "system", label: "System", icon: Database, adminOnly: true },
@@ -1303,142 +1208,7 @@ export default function SettingsPage() {
             </div>
           )}
 
-          {/* ===== INTEGRATIONS ===== */}
-          {activeTab === "integrations" && (
-            <div className="space-y-6">
-              {/* Header */}
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-slate-800 dark:text-white">Ad Platform Connections</h3>
-                  <p className="text-xs text-slate-400 mt-0.5">Connect your advertising accounts to auto-import leads</p>
-                </div>
-              </div>
 
-              {/* Stats Summary */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                {[
-                  { label: "Connected Platforms", value: adConnections.filter(c => c.connected !== false).length, color: "text-emerald-600" },
-                  { label: "Total Leads Imported", value: adConnections.reduce((s, c) => s + (c.leads_imported || 0), 0), color: "text-indigo-600" },
-                  { label: "Total Ad Spend", value: `₹${adConnections.reduce((s, c) => s + (c.cost_spent || 0), 0).toLocaleString()}`, color: "text-amber-600" },
-                  { label: "Auto-Sync", value: autoSyncEnabled ? "ON" : "OFF", color: autoSyncEnabled ? "text-emerald-600" : "text-slate-400" },
-                ].map(stat => (
-                  <div key={stat.label} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
-                    <div className={`text-lg font-bold ${stat.color}`}>{stat.value}</div>
-                    <div className="text-xs text-slate-400">{stat.label}</div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Platform Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {AD_PLATFORMS.map(platform => {
-                  const connection = adConnections.find(c => c.platform === platform.platform);
-                  const isConnected = connection && connection.connected !== false;
-
-                  return (
-                    <div key={platform.platform} className={`bg-white rounded-2xl border p-5 shadow-sm hover:shadow-md transition-all ${isConnected ? 'border-emerald-200' : 'border-slate-200'}`}>
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className={`w-11 h-11 rounded-xl flex items-center justify-center text-2xl ${platform.bg} ${platform.color}`}>
-                            {platform.icon}
-                          </div>
-                          <div>
-                            <div className="text-sm font-semibold text-slate-800">{platform.name}</div>
-                            <div className="text-xs text-slate-400">{platform.desc}</div>
-                          </div>
-                        </div>
-                        <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${isConnected ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
-                          {isConnected ? '✅ Connected' : '❌ Not Connected'}
-                        </span>
-                      </div>
-
-                      {isConnected && (
-                        <div className="mt-3 pt-3 border-t border-slate-100">
-                          <div className="flex items-center justify-between text-xs text-slate-500">
-                            <span>Account: {connection.account_name || connection.account_id || '—'}</span>
-                            <span>{connection.leads_imported || 0} leads imported</span>
-                            <span>Last sync: {connection.last_sync ? new Date(connection.last_sync).toLocaleDateString() : 'Never'}</span>
-                          </div>
-                          <div className="flex items-center gap-2 mt-2">
-                            <button
-                              onClick={() => handleSyncPlatform(connection.id, platform.name)}
-                              disabled={syncing === connection.id}
-                              className="flex-1 py-1.5 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-1"
-                            >
-                              {syncing === connection.id ? (
-                                <><RefreshCw size={11} className="animate-spin" /> Syncing...</>
-                              ) : (
-                                <><RefreshCw size={11} /> Sync Now</>
-                              )}
-                            </button>
-                            <button
-                              onClick={() => handleDisconnect(connection.id, platform.name)}
-                              className="px-3 py-1.5 text-xs text-red-600 border border-red-200 rounded-lg hover:bg-red-50"
-                            >
-                              Disconnect
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                      {!isConnected && (
-                        <button
-                          onClick={() => {
-                            setSelectedPlatform(platform.platform);
-                            setConnectForm({ accountId: "", accountName: "" });
-                            setShowConnectModal(true);
-                          }}
-                          className="mt-3 w-full py-2 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
-                        >
-                          Connect {platform.name} →
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Auto-Import Settings */}
-              <div className="bg-white rounded-2xl border border-slate-200 p-5">
-                <h4 className="text-slate-800 font-semibold mb-4">Auto-Import Settings</h4>
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between py-3 border-b border-slate-50">
-                    <div>
-                      <div className="text-sm font-medium text-slate-800">Auto-sync leads from ads</div>
-                      <div className="text-xs text-slate-400">Automatically fetch new leads from connected ad platforms every 15 minutes</div>
-                    </div>
-                    <button
-                      onClick={() => setAutoSyncEnabled(!autoSyncEnabled)}
-                      className={`w-11 h-6 rounded-full flex items-center transition-all ${autoSyncEnabled ? "bg-indigo-600 justify-end" : "bg-slate-200 justify-start"}`}
-                    >
-                      <div className="w-5 h-5 bg-white rounded-full shadow-sm mx-0.5" />
-                    </button>
-                  </div>
-
-                  <div className="flex items-center justify-between py-3 border-b border-slate-50">
-                    <div>
-                      <div className="text-sm font-medium text-slate-800">Create leads automatically</div>
-                      <div className="text-xs text-slate-400">Automatically add imported leads to your Leads table</div>
-                    </div>
-                    <button
-                      onClick={() => setAutoCreateLeads(!autoCreateLeads)}
-                      className={`w-11 h-6 rounded-full flex items-center transition-all ${autoCreateLeads ? "bg-indigo-600 justify-end" : "bg-slate-200 justify-start"}`}
-                    >
-                      <div className="w-5 h-5 bg-white rounded-full shadow-sm mx-0.5" />
-                    </button>
-                  </div>
-
-                  <button
-                    onClick={handleSaveAutoSettings}
-                    disabled={savingSettings}
-                    className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
-                  >
-                    {savingSettings ? (<><RefreshCw size={13} className="animate-spin" /> Saving...</>) : (<><Save size={13} /> Save Settings</>)}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
 
           {/* ===== PRICING & SUBSCRIPTION ===== */}
           {activeTab === "pricing" && (
@@ -1453,25 +1223,25 @@ export default function SettingsPage() {
                   {/* Current Plan Summary */}
                   <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
                     <p className="text-xs text-slate-400 uppercase tracking-wider">Current Plan</p>
-                    <div className="flex items-start justify-between mt-2">
-                      <div>
-                        <h3 className="text-xl font-bold text-slate-900">
+                    <div className="flex flex-col sm:flex-row sm:items-start justify-between mt-2 gap-3 sm:gap-0">
+                      <div className="w-full sm:w-auto">
+                        <h3 className="text-lg sm:text-xl font-bold text-slate-900">
                           {formatPlanType(companySubscription?.company?.plan_type)}
                         </h3>
-                        <p className="text-sm text-slate-500">
+                        <p className="text-xs sm:text-sm text-slate-500">
                           Renews on: {companySubscription?.company?.subscription_end
                             ? new Date(companySubscription.company.subscription_end).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
                             : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
                         </p>
                         <button
-                          onClick={() => toast.info('Cancel subscription feature coming soon')}
+                          onClick={() => setShowCancelModal(true)}
                           className="text-xs text-red-500 hover:text-red-600 mt-1"
                         >
                           Cancel subscription
                         </button>
                       </div>
-                      <div className="text-right">
-                        <span className="text-3xl font-bold text-slate-900">₹{Math.round(calculateTotal())}</span>
+                      <div className="text-left sm:text-right">
+                        <span className="text-2xl sm:text-3xl font-bold text-slate-900">₹{Math.round(calculateTotal())}</span>
                         <span className="text-sm text-slate-400">/month</span>
                       </div>
                     </div>
@@ -1489,58 +1259,71 @@ export default function SettingsPage() {
                   </div>
 
                   {/* Team Members */}
-                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-3 sm:p-4">
                     <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium text-slate-700">Team Members</span>
-                      <span className="text-xs text-slate-500">{users?.filter(u => u.isActive).length || 0} / Unlimited</span>
+                      <span className="text-xs sm:text-sm font-medium text-slate-700">Team Members</span>
+                      <span className="text-[10px] sm:text-xs text-slate-500">{users?.filter(u => u.isActive).length || 0} / Unlimited</span>
                     </div>
-                    <div className="w-full bg-slate-100 rounded-full h-1.5 mt-2">
-                      <div className="bg-indigo-500 rounded-full h-1.5" style={{ width: `${Math.min(((users?.filter(u => u.isActive).length || 0) / 50) * 100, 100)}%` }} />
+                    <div className="w-full bg-slate-100 rounded-full h-1 mt-1 sm:mt-2">
+                      <div className="bg-indigo-500 rounded-full h-1" style={{ width: `${Math.min(((users?.filter(u => u.isActive).length || 0) / 50) * 100, 100)}%` }} />
                     </div>
                     <button
                       onClick={() => navigate('/admin')}
-                      className="text-xs text-indigo-600 hover:text-indigo-700 mt-2 flex items-center gap-1"
+                      className="text-[10px] sm:text-xs text-indigo-600 hover:text-indigo-700 mt-1.5 sm:mt-2 flex items-center gap-1"
                     >
-                      Manage team <ChevronRight size={12} />
+                      Manage team <ChevronRight size={10} className="sm:size-12" />
                     </button>
                   </div>
 
                   {/* Next Invoice & Payment Method - Side by Side */}
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                     {/* Next Invoice */}
-                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
-                      <p className="text-xs text-slate-400">Next Invoice</p>
-                      <p className="text-xl font-bold text-slate-900 mt-1">₹{Math.round(calculateTotal())}</p>
-                      <p className="text-xs text-slate-400 mt-0.5">
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-3 sm:p-4">
+                      <p className="text-[10px] sm:text-xs text-slate-400">Next Invoice</p>
+                      <p className="text-lg sm:text-xl font-bold text-slate-900 mt-1">₹{Math.round(calculateTotal())}</p>
+                      <p className="text-[10px] sm:text-xs text-slate-400 mt-0.5">
                         Due on {new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
                       </p>
                     </div>
 
                     {/* Payment Method */}
-                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
-                      <p className="text-xs text-slate-400">Payment Method</p>
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-3 sm:p-4">
+                      <p className="text-[10px] sm:text-xs text-slate-400">Payment Method</p>
                       {paymentMethods.length > 0 ? (
                         <>
                           <div className="flex items-center gap-2 mt-1">
-                            <div className="w-8 h-6 bg-gradient-to-r from-indigo-600 to-purple-600 rounded flex items-center justify-center text-white text-[8px] font-bold">
+                            <div className="w-6 h-5 sm:w-8 sm:h-6 bg-gradient-to-r from-indigo-600 to-purple-600 rounded flex items-center justify-center text-white text-[6px] sm:text-[8px] font-bold">
                               {paymentMethods[0].brand?.slice(0, 4) || 'VISA'}
                             </div>
                             <div>
-                              <p className="text-xs font-medium text-slate-800">**** **** **** {paymentMethods[0].last4}</p>
-                              <p className="text-[10px] text-slate-400">Expires: {paymentMethods[0].expiry}</p>
+                              <p className="text-[10px] sm:text-xs font-medium text-slate-800">**** **** **** {paymentMethods[0].last4}</p>
+                              <p className="text-[8px] sm:text-[10px] text-slate-400">Expires: {paymentMethods[0].expiry}</p>
                             </div>
                           </div>
-                          <div className="flex gap-2 mt-1.5">
-                            <button className="text-[10px] text-indigo-600 hover:text-indigo-700">Update</button>
-                            <button className="text-[10px] text-red-500 hover:text-red-600">Remove</button>
+                          <div className="flex flex-wrap gap-2 mt-1.5">
+                            <button
+                              onClick={() => {
+                                setShowPaymentModal(true);
+                                setEditingPayment(paymentMethods[0]);
+                              }}
+                              className="text-[8px] sm:text-[10px] text-indigo-600 hover:text-indigo-700"
+                            >
+                              Update
+                            </button>
+                            <button
+                              onClick={() => handleRemovePayment(paymentMethods[0].id)}
+                              className="text-[8px] sm:text-[10px] text-red-500 hover:text-red-600"
+                            >
+                              Remove
+                            </button>
                           </div>
                         </>
                       ) : (
                         <button
                           onClick={() => setShowPaymentModal(true)}
-                          className="text-sm text-indigo-600 hover:text-indigo-700 mt-1 flex items-center gap-1"
+                          className="text-xs sm:text-sm text-indigo-600 hover:text-indigo-700 mt-1 flex items-center gap-1"
                         >
-                          <Plus size={14} /> Add Payment Method
+                          <Plus size={12} className="sm:size-14" /> Add Payment Method
                         </button>
                       )}
                     </div>
@@ -1603,7 +1386,7 @@ export default function SettingsPage() {
                     {/* Pay Period */}
                     <div>
                       <p className="text-xs text-slate-400 mb-2">Pay Period</p>
-                      <div className="flex flex-wrap gap-2">
+                      <div className="flex flex-wrap gap-1.5 sm:gap-2">
                         {[
                           { id: 'monthly', label: 'Monthly', discount: 0 },
                           { id: 'quarterly', label: 'Quarterly', discount: 5 },
@@ -1615,14 +1398,14 @@ export default function SettingsPage() {
                             <button
                               key={period.id}
                               onClick={() => setBillingPeriod(period.id)}
-                              className={`px-4 py-2 text-xs rounded-lg border transition-all ${isSelected
+                              className={`px-2 sm:px-4 py-1.5 sm:py-2 text-[10px] sm:text-xs rounded-lg border transition-all ${isSelected
                                 ? 'bg-indigo-600 text-white border-indigo-600'
                                 : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'
                                 }`}
                             >
                               {period.label}
                               {period.discount > 0 && (
-                                <span className={`ml-1 text-[8px] font-medium ${isSelected ? 'text-indigo-200' : 'text-emerald-500'
+                                <span className={`ml-1 text-[7px] sm:text-[8px] font-medium ${isSelected ? 'text-indigo-200' : 'text-emerald-500'
                                   }`}>
                                   Save {period.discount}%
                                 </span>
@@ -1639,12 +1422,12 @@ export default function SettingsPage() {
                         <p className="text-xs text-slate-400">Active Users</p>
                         <span className="text-sm font-semibold text-slate-800">{activeUsers}</span>
                       </div>
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2 sm:gap-3">
                         <button
                           onClick={() => setActiveUsers(Math.max(1, activeUsers - 1))}
-                          className="w-8 h-8 rounded-full border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50"
+                          className="w-7 h-7 sm:w-8 sm:h-8 rounded-full border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50"
                         >
-                          <span className="text-lg">−</span>
+                          <span className="text-base sm:text-lg">−</span>
                         </button>
                         <input
                           type="range"
@@ -1652,23 +1435,30 @@ export default function SettingsPage() {
                           max="50"
                           value={activeUsers}
                           onChange={(e) => setActiveUsers(parseInt(e.target.value))}
-                          className="flex-1 h-2 bg-slate-200 rounded-full appearance-none cursor-pointer accent-indigo-600"
+                          className="flex-1 h-1.5 sm:h-2 bg-slate-200 rounded-full appearance-none cursor-pointer accent-indigo-600"
                         />
                         <button
                           onClick={() => setActiveUsers(Math.min(50, activeUsers + 1))}
-                          className="w-8 h-8 rounded-full border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50"
+                          className="w-7 h-7 sm:w-8 sm:h-8 rounded-full border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50"
                         >
-                          <span className="text-lg">+</span>
+                          <span className="text-base sm:text-lg">+</span>
                         </button>
                       </div>
+                      <p className="text-[8px] sm:text-[10px] text-slate-400 mt-1">
+                        Billing calculated for Active Users only
+                      </p>
                     </div>
 
                     {/* Price Breakdown */}
                     <div className="mt-4 p-4 bg-slate-50 rounded-xl">
                       <div className="space-y-1.5">
                         <div className="flex justify-between text-sm">
+                          <span className="text-slate-500">Active Users</span>
+                          <span className="text-slate-700">{activeUsers} × ₹{selectedPlanData.price}</span>
+                        </div>
+                        <div className="flex justify-between text-sm border-t border-slate-200 pt-1.5">
                           <span className="text-slate-500">Base Price</span>
-                          <span className="text-slate-700">₹{selectedPlanData.price} × {activeUsers} = ₹{pricing.basePrice.toFixed(0)}</span>
+                          <span className="text-slate-700">₹{pricing.basePrice.toFixed(0)}</span>
                         </div>
                         {pricing.discountAmount > 0 && (
                           <div className="flex justify-between text-sm">
@@ -1679,6 +1469,10 @@ export default function SettingsPage() {
                         <div className="flex justify-between text-sm">
                           <span className="text-slate-500">GST (18%)</span>
                           <span className="text-slate-700">₹{pricing.gst.toFixed(0)}</span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                          <span className="text-slate-500">Billing Cycle</span>
+                          <span className="text-slate-700">{selectedPeriod.label}</span>
                         </div>
                         <div className="border-t border-slate-200 pt-2 mt-2">
                           <div className="flex justify-between">
@@ -1734,8 +1528,8 @@ export default function SettingsPage() {
 
               {/* ── BILLING HISTORY (Full Width) ── */}
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                <div className="p-5 border-b border-slate-100 flex items-center justify-between">
-                  <h3 className="font-semibold text-slate-800">Billing History</h3>
+                <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between">
+                  <h3 className="font-semibold text-slate-800 text-sm sm:text-base">Billing History</h3>
                   <button
                     onClick={fetchInvoices}
                     className="p-2 hover:bg-slate-50 rounded-lg transition-colors"
@@ -1745,55 +1539,109 @@ export default function SettingsPage() {
                   </button>
                 </div>
 
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-slate-50">
-                      <tr>
-                        <th className="text-left py-3 px-5 text-xs text-slate-500 font-medium">Date</th>
-                        <th className="text-left py-3 px-5 text-xs text-slate-500 font-medium">Invoice #</th>
-                        <th className="text-left py-3 px-5 text-xs text-slate-500 font-medium">Amount</th>
-                        <th className="text-left py-3 px-5 text-xs text-slate-500 font-medium">Status</th>
-                        <th className="text-left py-3 px-5 text-xs text-slate-500 font-medium">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-50">
-                      {invoices.length > 0 ? (
-                        invoices.map((invoice) => (
-                          <tr key={invoice.id} className="hover:bg-slate-50 transition-colors">
-                            <td className="py-3 px-5 text-xs text-slate-600">
-                              {new Date(invoice.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
-                            </td>
-                            <td className="py-3 px-5 text-xs text-slate-600">{invoice.invoice_number}</td>
-                            <td className="py-3 px-5 text-xs font-semibold text-slate-800">₹{invoice.total_amount}</td>
-                            <td className="py-3 px-5">
-                              <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${invoice.status === 'paid'
-                                ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
-                                : 'bg-amber-100 text-amber-700 border-amber-200'
-                                }`}>
-                                {invoice.status}
-                              </span>
-                            </td>
-                            <td className="py-3 px-5">
-                              <button
-                                onClick={() => toast.info('Invoice download coming soon')}
-                                className="text-indigo-600 text-xs hover:text-indigo-700 flex items-center gap-1"
-                              >
-                                <Download size={12} /> Download
-                              </button>
+                <div className="overflow-x-auto -mx-4 sm:mx-0">
+                  <div className="min-w-[600px] sm:min-w-full">
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-50">
+                        <tr>
+                          <th className="text-left py-2 sm:py-3 px-3 sm:px-5 text-[10px] sm:text-xs text-slate-500 font-medium">Date</th>
+                          <th className="text-left py-2 sm:py-3 px-3 sm:px-5 text-[10px] sm:text-xs text-slate-500 font-medium">Invoice #</th>
+                          <th className="text-left py-2 sm:py-3 px-3 sm:px-5 text-[10px] sm:text-xs text-slate-500 font-medium">Amount</th>
+                          <th className="text-left py-2 sm:py-3 px-3 sm:px-5 text-[10px] sm:text-xs text-slate-500 font-medium">Status</th>
+                          <th className="text-left py-2 sm:py-3 px-3 sm:px-5 text-[10px] sm:text-xs text-slate-500 font-medium">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-50">
+                        {invoices.length > 0 ? (
+                          invoices.map((invoice) => (
+                            <tr key={invoice.id} className="hover:bg-slate-50 transition-colors">
+                              <td className="py-2 sm:py-3 px-3 sm:px-5 text-[10px] sm:text-xs text-slate-600">
+                                {new Date(invoice.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                              </td>
+                              <td className="py-2 sm:py-3 px-3 sm:px-5 text-[10px] sm:text-xs text-slate-600">{invoice.invoice_number}</td>
+                              <td className="py-2 sm:py-3 px-3 sm:px-5 text-[10px] sm:text-xs font-semibold text-slate-800">₹{invoice.total_amount}</td>
+                              <td className="py-2 sm:py-3 px-3 sm:px-5">
+                                <span className={`text-[8px] sm:text-xs px-1.5 sm:px-2 py-0.5 rounded-full border font-medium ${invoice.status === 'paid' ? 'bg-emerald-100 text-emerald-700 border-emerald-200' :
+                                  invoice.status === 'pending' ? 'bg-amber-100 text-amber-700 border-amber-200' :
+                                    invoice.status === 'failed' ? 'bg-red-100 text-red-700 border-red-200' :
+                                      invoice.status === 'cancelled' ? 'bg-slate-100 text-slate-700 border-slate-200' :
+                                        'bg-slate-100 text-slate-700 border-slate-200'
+                                  }`}>
+                                  {invoice.status?.charAt(0).toUpperCase() + invoice.status?.slice(1) || 'Pending'}
+                                </span>
+                              </td>
+                              <td className="py-2 sm:py-3 px-3 sm:px-5">
+                                <button
+                                  onClick={() => handleDownloadInvoice(invoice.id)}
+                                  className="text-indigo-600 text-[10px] sm:text-xs hover:text-indigo-700 flex items-center gap-1"
+                                >
+                                  <Download size={12} className="hidden sm:inline" />
+                                  <span className="sm:hidden">📄</span>
+                                  <span className="hidden sm:inline">Download</span>
+                                </button>
+                              </td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan={5} className="py-8 sm:py-12 text-center text-slate-400">
+                              <div className="flex flex-col items-center gap-1 sm:gap-2">
+                                <FileText size={24} className="sm:hidden text-slate-300" />
+                                <FileText size={32} className="hidden sm:block text-slate-300" />
+                                <p className="text-xs sm:text-sm text-slate-400">No invoices available.</p>
+                                <p className="text-[10px] sm:text-xs text-slate-300">Invoices will appear here after your first purchase.</p>
+                              </div>
                             </td>
                           </tr>
-                        ))
-                      ) : (
-                        <tr>
-                          <td colSpan={5} className="py-12 text-center text-slate-400 text-sm">
-                            No billing history found
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               </div>
+
+              {/* ── CANCEL SUBSCRIPTION MODAL ── */}
+              {showCancelModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+                  <div className="bg-white rounded-2xl sm:rounded-3xl shadow-2xl w-[90%] max-w-sm mx-4 overflow-hidden">
+                    <div className="p-4 sm:p-6 text-center">
+                      <div className="w-10 h-10 sm:w-14 sm:h-14 rounded-full bg-red-50 border border-red-100 flex items-center justify-center mx-auto mb-3 sm:mb-4">
+                        <AlertTriangle size={18} className="sm:text-2xl text-red-500" />
+                      </div>
+                      <h3 className="text-base sm:text-lg font-bold text-slate-800 mb-1 sm:mb-2">Cancel Subscription?</h3>
+                      <p className="text-xs sm:text-sm text-slate-500 mb-4 sm:mb-6">
+                        You will lose access to all premium features after the current billing period ends.
+                      </p>
+                      <div className="flex gap-2 sm:gap-3">
+                        <button
+                          onClick={() => setShowCancelModal(false)}
+                          className="flex-1 py-2 sm:py-2.5 text-xs sm:text-sm border border-slate-200 text-slate-600 rounded-lg sm:rounded-xl hover:bg-slate-50 transition-colors"
+                        >
+                          Keep Plan
+                        </button>
+                        <button
+                          onClick={async () => {
+                            try {
+                              const token = localStorage.getItem('token') || session?.access_token;
+                              if (!token) throw new Error("Not logged in");
+
+                              await api.subscription.cancel(token);
+                              toast.success('Subscription cancelled successfully');
+                              await fetchCompanySubscription();
+                              setShowCancelModal(false);
+                            } catch (error: any) {
+                              toast.error(error.message || 'Failed to cancel subscription');
+                            }
+                          }}
+                          className="flex-1 py-2 sm:py-2.5 text-xs sm:text-sm bg-red-600 text-white rounded-lg sm:rounded-xl hover:bg-red-700 transition-colors"
+                        >
+                          Confirm Cancel
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -2274,79 +2122,6 @@ export default function SettingsPage() {
                 className="flex-1 px-4 py-2.5 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {saving ? <><RefreshCw size={13} className="animate-spin" />Saving...</> : <><Save size={14} />Save Integration</>}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      {/* ── Connect Platform Modal (Same style as Add Lead) ── */}
-      {showConnectModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/40" onClick={() => setShowConnectModal(false)} />
-          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-xl overflow-hidden">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
-              <h2 className="text-slate-800">
-                Connect {AD_PLATFORMS.find(p => p.platform === selectedPlatform)?.name || 'Platform'}
-              </h2>
-              <button
-                onClick={() => setShowConnectModal(false)}
-                className="p-2 hover:bg-slate-100 rounded-xl"
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            <div className="p-6 grid grid-cols-2 gap-4 max-h-[72vh] overflow-y-auto">
-              <div className="col-span-2">
-                <label className="block text-xs text-slate-500 mb-1.5">Platform</label>
-                <div className="flex items-center gap-3 px-3 py-2.5 border border-slate-200 rounded-xl bg-slate-50">
-                  <span className="text-lg">{AD_PLATFORMS.find(p => p.platform === selectedPlatform)?.icon}</span>
-                  <span className="text-sm font-medium text-slate-700">{AD_PLATFORMS.find(p => p.platform === selectedPlatform)?.name}</span>
-                </div>
-              </div>
-
-              <div className="col-span-2">
-                <label className="block text-xs text-slate-500 mb-1.5">Account ID *</label>
-                <input
-                  type="text"
-                  value={connectForm.accountId}
-                  onChange={(e) => setConnectForm(f => ({ ...f, accountId: e.target.value }))}
-                  placeholder="e.g., act_123456789"
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-slate-50"
-                />
-              </div>
-
-              <div className="col-span-2">
-                <label className="block text-xs text-slate-500 mb-1.5">Account Name *</label>
-                <input
-                  type="text"
-                  value={connectForm.accountName}
-                  onChange={(e) => setConnectForm(f => ({ ...f, accountName: e.target.value }))}
-                  placeholder="e.g., My Business Account"
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-slate-50"
-                />
-              </div>
-
-              <div className="col-span-2 bg-blue-50 border border-blue-200 rounded-lg p-3">
-                <p className="text-xs text-blue-700 flex items-start gap-2">
-                  <span className="mt-0.5">🔗</span>
-                  After connecting, you'll be able to sync leads from this platform. The CRM will store the access token securely and import new leads automatically.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex gap-3 px-6 py-4 border-t border-slate-200">
-              <button
-                onClick={() => setShowConnectModal(false)}
-                className="flex-1 py-2.5 text-sm border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConnectPlatform}
-                className="flex-1 py-2.5 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors"
-              >
-                Connect {AD_PLATFORMS.find(p => p.platform === selectedPlatform)?.name || 'Platform'} →
               </button>
             </div>
           </div>

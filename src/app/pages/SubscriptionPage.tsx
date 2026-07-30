@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useApp } from "../context/AppContext";
+import { api } from "../lib/api";
 import { formatCurrency } from "../../utils/formatters";
 
 // ── Constants ──

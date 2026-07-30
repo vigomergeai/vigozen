@@ -1599,11 +1599,10 @@ export default function SettingsPage() {
                           <td className="py-3 px-3 text-xs text-slate-500 font-mono">{log.time}</td>
                           <td className="py-3 px-3 text-xs font-medium text-slate-800">{log.platform}</td>
                           <td className="py-3 px-3 text-xs">
-                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border ${
-                              log.status === "success" 
-                                ? "bg-emerald-50 text-emerald-700 border-emerald-200" 
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border ${log.status === "success"
+                                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                                 : "bg-rose-50 text-rose-700 border-rose-200"
-                            }`}>
+                              }`}>
                               <span className={`w-1.5 h-1.5 rounded-full ${log.status === "success" ? "bg-emerald-500" : "bg-rose-500"}`} />
                               {log.status === "success" ? "Synced" : "Failed"}
                             </span>
@@ -1682,7 +1681,7 @@ export default function SettingsPage() {
                       onClick={() => navigate('/admin')}
                       className="text-[10px] sm:text-xs text-indigo-600 hover:text-indigo-700 mt-1.5 sm:mt-2 flex items-center gap-1"
                     >
-                      Manage team <ChevronRight size={10} className="sm:size-12" />
+                      Manage team <ChevronRight size={13} className="inline-block" />
                     </button>
                   </div>
 
@@ -1734,7 +1733,7 @@ export default function SettingsPage() {
                           onClick={() => setShowPaymentModal(true)}
                           className="text-xs sm:text-sm text-indigo-600 hover:text-indigo-700 mt-1 flex items-center gap-1"
                         >
-                          <Plus size={12} className="sm:size-14" /> Add Payment Method
+                          <Plus size={14} className="inline-block" /> Add Payment Method
                         </button>
                       )}
                     </div>

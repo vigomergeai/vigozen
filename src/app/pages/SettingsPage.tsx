@@ -5,7 +5,7 @@ import {
   Check, X, Eye, EyeOff, Plug, RefreshCw, Key, Bot, Zap,
   Plus, Minus, Trash2, Edit, ChevronRight, Star, Crown, CheckCircle,
   Mail, Phone, Building, Globe, AlertTriangle, Database, RotateCcw, UserCog, ExternalLink, Lock,
-  UserCheck, UserX, Calendar, TrendingUp, CreditCard as CreditCardIcon, Users, Download
+  UserCheck, UserX, Calendar, TrendingUp, CreditCard as CreditCardIcon, Users, Download, FileText
 } from "lucide-react";
 import { useNavigate } from "react-router";
 import { priceList as mockPriceList, PriceItem } from "../data/mockData";
@@ -145,6 +145,8 @@ export default function SettingsPage() {
   const [billingPeriod, setBillingPeriod] = useState('monthly');
   const [purchaseLoading, setPurchaseLoading] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [editingPayment, setEditingPayment] = useState<any>(null);
 
   // Selected plan data
   const selectedPlanData = ({
@@ -181,18 +183,89 @@ export default function SettingsPage() {
     try {
       const token = localStorage.getItem('token') || session?.access_token;
       if (!token) throw new Error("Not logged in");
-      const response = await api.payments.createOrder(pricing.total, "INR", `bundle_${activeUsers}`, token);
+
+      // 1. Create invoice first
+      const invoiceData = {
+        amount: pricing.total,
+        plan: selectedPlan,
+        period: billingPeriod,
+        users: activeUsers,
+        companyId: userProfile?.company_id
+      };
+
+      const invoiceResponse = await api.company.generateInvoice({
+        subscription_id: (companySubscription?.company as any)?.id || 'temp',
+        billing_period_start: new Date().toISOString(),
+        billing_period_end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+      }, token);
+
+      // 2. Create PayU order with invoice ID
+      const response = await api.payments.createOrder(
+        pricing.total,
+        "INR",
+        `invoice_${invoiceResponse?.id || Date.now()}`,
+        token
+      );
+
       if (!response?.success || !response?.payuData || !response?.payuUrl) {
         toast.error("Could not create payment order. Please try again.");
         return;
       }
+
       toast.success(`Order ${response.txnid} created!`);
+
+      // 3. Refresh data
+      await fetchInvoices();
+      await fetchCompanySubscription();
+
       submitToPayU(response.payuUrl, response.payuData);
     } catch (error: any) {
       toast.error(error.message || 'Failed to create payment');
       console.error(error);
     } finally {
       setPurchaseLoading(false);
+    }
+  };
+
+  // ── Handle Invoice Download ──
+  const handleDownloadInvoice = async (invoiceId: string) => {
+    try {
+      const token = localStorage.getItem('token') || session?.access_token;
+      if (!token) throw new Error("Not logged in");
+
+      const response = await fetch(`${getApiBaseUrl()}/api/invoices/download/${invoiceId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to download invoice');
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `invoice-${invoiceId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success('Invoice downloaded successfully');
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to download invoice');
+      console.error('Download error:', error);
+    }
+  };
+
+  // ── Handle Remove Payment Method ──
+  const handleRemovePayment = async (id: string) => {
+    if (!confirm('Remove this payment method?')) return;
+    try {
+      await deletePaymentMethod(id);
+      toast.success('Payment method removed');
+      await fetchPaymentMethods();
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to remove payment method');
     }
   };
 
@@ -304,6 +377,24 @@ export default function SettingsPage() {
     } catch (error: any) {
       console.error("Connection failed:", error);
       toast.error(error.message || "Failed to connect platform");
+    }
+  };
+
+  // ── Connect Ad Platform OAuth ──
+  const handleConnectOAuth = async (platform: string) => {
+    try {
+      const token = localStorage.getItem('token') || session?.access_token;
+      if (!token) throw new Error("Not logged in");
+
+      const response = await api.oauth.authorize(platform, token);
+      if (response && response.authUrl) {
+        window.location.href = response.authUrl;
+      } else {
+        toast.error("Failed to initiate authorization");
+      }
+    } catch (error: any) {
+      toast.error(error.message || "Failed to initiate authorization");
+      console.error("OAuth init error:", error);
     }
   };
 
@@ -598,6 +689,24 @@ export default function SettingsPage() {
     }
   }, []);
 
+  // ── Handle OAuth Callback Params ──
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const connected = urlParams.get('connected');
+    const error = urlParams.get('error');
+
+    if (connected) {
+      toast.success(`${connected.charAt(0).toUpperCase() + connected.slice(1)} Ads connected successfully!`);
+      setActiveTab("integrations");
+      window.history.replaceState({}, document.title, window.location.pathname);
+      fetchAdConnections();
+    } else if (error) {
+      toast.error(`Connection failed: ${error}`);
+      setActiveTab("integrations");
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
+
   // ── Load subscription data ──
   useEffect(() => {
     if (userProfile?.id && role === "admin") {
@@ -605,6 +714,7 @@ export default function SettingsPage() {
       fetchPaymentMethods();
       fetchInvoices();
       loadUsers();
+      fetchAdConnections();
     }
   }, [userProfile?.id, role]);
 
@@ -1315,16 +1425,16 @@ export default function SettingsPage() {
               </div>
 
               {/* Stats Summary */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
                 {[
                   { label: "Connected Platforms", value: adConnections.filter(c => c.connected !== false).length, color: "text-emerald-600" },
                   { label: "Total Leads Imported", value: adConnections.reduce((s, c) => s + (c.leads_imported || 0), 0), color: "text-indigo-600" },
                   { label: "Total Ad Spend", value: `₹${adConnections.reduce((s, c) => s + (c.cost_spent || 0), 0).toLocaleString()}`, color: "text-amber-600" },
                   { label: "Auto-Sync", value: autoSyncEnabled ? "ON" : "OFF", color: autoSyncEnabled ? "text-emerald-600" : "text-slate-400" },
                 ].map(stat => (
-                  <div key={stat.label} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
-                    <div className={`text-lg font-bold ${stat.color}`}>{stat.value}</div>
-                    <div className="text-xs text-slate-400">{stat.label}</div>
+                  <div key={stat.label} className="bg-white rounded-2xl p-3 sm:p-4 border border-slate-100 shadow-sm">
+                    <div className={`text-base sm:text-lg font-bold ${stat.color}`}>{stat.value}</div>
+                    <div className="text-[10px] sm:text-xs text-slate-400">{stat.label}</div>
                   </div>
                 ))}
               </div>
@@ -1383,11 +1493,7 @@ export default function SettingsPage() {
 
                       {!isConnected && (
                         <button
-                          onClick={() => {
-                            setSelectedPlatform(platform.platform);
-                            setConnectForm({ accountId: "", accountName: "" });
-                            setShowConnectModal(true);
-                          }}
+                          onClick={() => handleConnectOAuth(platform.platform)}
                           className="mt-3 w-full py-2 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
                         >
                           Connect {platform.name} →
@@ -1453,25 +1559,25 @@ export default function SettingsPage() {
                   {/* Current Plan Summary */}
                   <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
                     <p className="text-xs text-slate-400 uppercase tracking-wider">Current Plan</p>
-                    <div className="flex items-start justify-between mt-2">
-                      <div>
-                        <h3 className="text-xl font-bold text-slate-900">
+                    <div className="flex flex-col sm:flex-row sm:items-start justify-between mt-2 gap-3 sm:gap-0">
+                      <div className="w-full sm:w-auto">
+                        <h3 className="text-lg sm:text-xl font-bold text-slate-900">
                           {formatPlanType(companySubscription?.company?.plan_type)}
                         </h3>
-                        <p className="text-sm text-slate-500">
+                        <p className="text-xs sm:text-sm text-slate-500">
                           Renews on: {companySubscription?.company?.subscription_end
                             ? new Date(companySubscription.company.subscription_end).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
                             : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
                         </p>
                         <button
-                          onClick={() => toast.info('Cancel subscription feature coming soon')}
+                          onClick={() => setShowCancelModal(true)}
                           className="text-xs text-red-500 hover:text-red-600 mt-1"
                         >
                           Cancel subscription
                         </button>
                       </div>
-                      <div className="text-right">
-                        <span className="text-3xl font-bold text-slate-900">₹{Math.round(calculateTotal())}</span>
+                      <div className="text-left sm:text-right">
+                        <span className="text-2xl sm:text-3xl font-bold text-slate-900">₹{Math.round(calculateTotal())}</span>
                         <span className="text-sm text-slate-400">/month</span>
                       </div>
                     </div>
@@ -1489,58 +1595,71 @@ export default function SettingsPage() {
                   </div>
 
                   {/* Team Members */}
-                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-3 sm:p-4">
                     <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium text-slate-700">Team Members</span>
-                      <span className="text-xs text-slate-500">{users?.filter(u => u.isActive).length || 0} / Unlimited</span>
+                      <span className="text-xs sm:text-sm font-medium text-slate-700">Team Members</span>
+                      <span className="text-[10px] sm:text-xs text-slate-500">{users?.filter(u => u.isActive).length || 0} / Unlimited</span>
                     </div>
-                    <div className="w-full bg-slate-100 rounded-full h-1.5 mt-2">
-                      <div className="bg-indigo-500 rounded-full h-1.5" style={{ width: `${Math.min(((users?.filter(u => u.isActive).length || 0) / 50) * 100, 100)}%` }} />
+                    <div className="w-full bg-slate-100 rounded-full h-1 mt-1 sm:mt-2">
+                      <div className="bg-indigo-500 rounded-full h-1" style={{ width: `${Math.min(((users?.filter(u => u.isActive).length || 0) / 50) * 100, 100)}%` }} />
                     </div>
                     <button
                       onClick={() => navigate('/admin')}
-                      className="text-xs text-indigo-600 hover:text-indigo-700 mt-2 flex items-center gap-1"
+                      className="text-[10px] sm:text-xs text-indigo-600 hover:text-indigo-700 mt-1.5 sm:mt-2 flex items-center gap-1"
                     >
-                      Manage team <ChevronRight size={12} />
+                      Manage team <ChevronRight size={10} className="sm:size-12" />
                     </button>
                   </div>
 
                   {/* Next Invoice & Payment Method - Side by Side */}
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                     {/* Next Invoice */}
-                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
-                      <p className="text-xs text-slate-400">Next Invoice</p>
-                      <p className="text-xl font-bold text-slate-900 mt-1">₹{Math.round(calculateTotal())}</p>
-                      <p className="text-xs text-slate-400 mt-0.5">
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-3 sm:p-4">
+                      <p className="text-[10px] sm:text-xs text-slate-400">Next Invoice</p>
+                      <p className="text-lg sm:text-xl font-bold text-slate-900 mt-1">₹{Math.round(calculateTotal())}</p>
+                      <p className="text-[10px] sm:text-xs text-slate-400 mt-0.5">
                         Due on {new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
                       </p>
                     </div>
 
                     {/* Payment Method */}
-                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
-                      <p className="text-xs text-slate-400">Payment Method</p>
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-3 sm:p-4">
+                      <p className="text-[10px] sm:text-xs text-slate-400">Payment Method</p>
                       {paymentMethods.length > 0 ? (
                         <>
                           <div className="flex items-center gap-2 mt-1">
-                            <div className="w-8 h-6 bg-gradient-to-r from-indigo-600 to-purple-600 rounded flex items-center justify-center text-white text-[8px] font-bold">
+                            <div className="w-6 h-5 sm:w-8 sm:h-6 bg-gradient-to-r from-indigo-600 to-purple-600 rounded flex items-center justify-center text-white text-[6px] sm:text-[8px] font-bold">
                               {paymentMethods[0].brand?.slice(0, 4) || 'VISA'}
                             </div>
                             <div>
-                              <p className="text-xs font-medium text-slate-800">**** **** **** {paymentMethods[0].last4}</p>
-                              <p className="text-[10px] text-slate-400">Expires: {paymentMethods[0].expiry}</p>
+                              <p className="text-[10px] sm:text-xs font-medium text-slate-800">**** **** **** {paymentMethods[0].last4}</p>
+                              <p className="text-[8px] sm:text-[10px] text-slate-400">Expires: {paymentMethods[0].expiry}</p>
                             </div>
                           </div>
-                          <div className="flex gap-2 mt-1.5">
-                            <button className="text-[10px] text-indigo-600 hover:text-indigo-700">Update</button>
-                            <button className="text-[10px] text-red-500 hover:text-red-600">Remove</button>
+                          <div className="flex flex-wrap gap-2 mt-1.5">
+                            <button
+                              onClick={() => {
+                                setShowPaymentModal(true);
+                                setEditingPayment(paymentMethods[0]);
+                              }}
+                              className="text-[8px] sm:text-[10px] text-indigo-600 hover:text-indigo-700"
+                            >
+                              Update
+                            </button>
+                            <button
+                              onClick={() => handleRemovePayment(paymentMethods[0].id)}
+                              className="text-[8px] sm:text-[10px] text-red-500 hover:text-red-600"
+                            >
+                              Remove
+                            </button>
                           </div>
                         </>
                       ) : (
                         <button
                           onClick={() => setShowPaymentModal(true)}
-                          className="text-sm text-indigo-600 hover:text-indigo-700 mt-1 flex items-center gap-1"
+                          className="text-xs sm:text-sm text-indigo-600 hover:text-indigo-700 mt-1 flex items-center gap-1"
                         >
-                          <Plus size={14} /> Add Payment Method
+                          <Plus size={12} className="sm:size-14" /> Add Payment Method
                         </button>
                       )}
                     </div>
@@ -1603,7 +1722,7 @@ export default function SettingsPage() {
                     {/* Pay Period */}
                     <div>
                       <p className="text-xs text-slate-400 mb-2">Pay Period</p>
-                      <div className="flex flex-wrap gap-2">
+                      <div className="flex flex-wrap gap-1.5 sm:gap-2">
                         {[
                           { id: 'monthly', label: 'Monthly', discount: 0 },
                           { id: 'quarterly', label: 'Quarterly', discount: 5 },
@@ -1615,14 +1734,14 @@ export default function SettingsPage() {
                             <button
                               key={period.id}
                               onClick={() => setBillingPeriod(period.id)}
-                              className={`px-4 py-2 text-xs rounded-lg border transition-all ${isSelected
+                              className={`px-2 sm:px-4 py-1.5 sm:py-2 text-[10px] sm:text-xs rounded-lg border transition-all ${isSelected
                                 ? 'bg-indigo-600 text-white border-indigo-600'
                                 : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'
                                 }`}
                             >
                               {period.label}
                               {period.discount > 0 && (
-                                <span className={`ml-1 text-[8px] font-medium ${isSelected ? 'text-indigo-200' : 'text-emerald-500'
+                                <span className={`ml-1 text-[7px] sm:text-[8px] font-medium ${isSelected ? 'text-indigo-200' : 'text-emerald-500'
                                   }`}>
                                   Save {period.discount}%
                                 </span>
@@ -1639,12 +1758,12 @@ export default function SettingsPage() {
                         <p className="text-xs text-slate-400">Active Users</p>
                         <span className="text-sm font-semibold text-slate-800">{activeUsers}</span>
                       </div>
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2 sm:gap-3">
                         <button
                           onClick={() => setActiveUsers(Math.max(1, activeUsers - 1))}
-                          className="w-8 h-8 rounded-full border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50"
+                          className="w-7 h-7 sm:w-8 sm:h-8 rounded-full border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50"
                         >
-                          <span className="text-lg">−</span>
+                          <span className="text-base sm:text-lg">−</span>
                         </button>
                         <input
                           type="range"
@@ -1652,23 +1771,30 @@ export default function SettingsPage() {
                           max="50"
                           value={activeUsers}
                           onChange={(e) => setActiveUsers(parseInt(e.target.value))}
-                          className="flex-1 h-2 bg-slate-200 rounded-full appearance-none cursor-pointer accent-indigo-600"
+                          className="flex-1 h-1.5 sm:h-2 bg-slate-200 rounded-full appearance-none cursor-pointer accent-indigo-600"
                         />
                         <button
                           onClick={() => setActiveUsers(Math.min(50, activeUsers + 1))}
-                          className="w-8 h-8 rounded-full border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50"
+                          className="w-7 h-7 sm:w-8 sm:h-8 rounded-full border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50"
                         >
-                          <span className="text-lg">+</span>
+                          <span className="text-base sm:text-lg">+</span>
                         </button>
                       </div>
+                      <p className="text-[8px] sm:text-[10px] text-slate-400 mt-1">
+                        Billing calculated for Active Users only
+                      </p>
                     </div>
 
                     {/* Price Breakdown */}
                     <div className="mt-4 p-4 bg-slate-50 rounded-xl">
                       <div className="space-y-1.5">
                         <div className="flex justify-between text-sm">
+                          <span className="text-slate-500">Active Users</span>
+                          <span className="text-slate-700">{activeUsers} × ₹{selectedPlanData.price}</span>
+                        </div>
+                        <div className="flex justify-between text-sm border-t border-slate-200 pt-1.5">
                           <span className="text-slate-500">Base Price</span>
-                          <span className="text-slate-700">₹{selectedPlanData.price} × {activeUsers} = ₹{pricing.basePrice.toFixed(0)}</span>
+                          <span className="text-slate-700">₹{pricing.basePrice.toFixed(0)}</span>
                         </div>
                         {pricing.discountAmount > 0 && (
                           <div className="flex justify-between text-sm">
@@ -1679,6 +1805,10 @@ export default function SettingsPage() {
                         <div className="flex justify-between text-sm">
                           <span className="text-slate-500">GST (18%)</span>
                           <span className="text-slate-700">₹{pricing.gst.toFixed(0)}</span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                          <span className="text-slate-500">Billing Cycle</span>
+                          <span className="text-slate-700">{selectedPeriod.label}</span>
                         </div>
                         <div className="border-t border-slate-200 pt-2 mt-2">
                           <div className="flex justify-between">
@@ -1734,8 +1864,8 @@ export default function SettingsPage() {
 
               {/* ── BILLING HISTORY (Full Width) ── */}
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                <div className="p-5 border-b border-slate-100 flex items-center justify-between">
-                  <h3 className="font-semibold text-slate-800">Billing History</h3>
+                <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between">
+                  <h3 className="font-semibold text-slate-800 text-sm sm:text-base">Billing History</h3>
                   <button
                     onClick={fetchInvoices}
                     className="p-2 hover:bg-slate-50 rounded-lg transition-colors"
@@ -1745,55 +1875,109 @@ export default function SettingsPage() {
                   </button>
                 </div>
 
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-slate-50">
-                      <tr>
-                        <th className="text-left py-3 px-5 text-xs text-slate-500 font-medium">Date</th>
-                        <th className="text-left py-3 px-5 text-xs text-slate-500 font-medium">Invoice #</th>
-                        <th className="text-left py-3 px-5 text-xs text-slate-500 font-medium">Amount</th>
-                        <th className="text-left py-3 px-5 text-xs text-slate-500 font-medium">Status</th>
-                        <th className="text-left py-3 px-5 text-xs text-slate-500 font-medium">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-50">
-                      {invoices.length > 0 ? (
-                        invoices.map((invoice) => (
-                          <tr key={invoice.id} className="hover:bg-slate-50 transition-colors">
-                            <td className="py-3 px-5 text-xs text-slate-600">
-                              {new Date(invoice.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
-                            </td>
-                            <td className="py-3 px-5 text-xs text-slate-600">{invoice.invoice_number}</td>
-                            <td className="py-3 px-5 text-xs font-semibold text-slate-800">₹{invoice.total_amount}</td>
-                            <td className="py-3 px-5">
-                              <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${invoice.status === 'paid'
-                                ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
-                                : 'bg-amber-100 text-amber-700 border-amber-200'
-                                }`}>
-                                {invoice.status}
-                              </span>
-                            </td>
-                            <td className="py-3 px-5">
-                              <button
-                                onClick={() => toast.info('Invoice download coming soon')}
-                                className="text-indigo-600 text-xs hover:text-indigo-700 flex items-center gap-1"
-                              >
-                                <Download size={12} /> Download
-                              </button>
+                <div className="overflow-x-auto -mx-4 sm:mx-0">
+                  <div className="min-w-[600px] sm:min-w-full">
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-50">
+                        <tr>
+                          <th className="text-left py-2 sm:py-3 px-3 sm:px-5 text-[10px] sm:text-xs text-slate-500 font-medium">Date</th>
+                          <th className="text-left py-2 sm:py-3 px-3 sm:px-5 text-[10px] sm:text-xs text-slate-500 font-medium">Invoice #</th>
+                          <th className="text-left py-2 sm:py-3 px-3 sm:px-5 text-[10px] sm:text-xs text-slate-500 font-medium">Amount</th>
+                          <th className="text-left py-2 sm:py-3 px-3 sm:px-5 text-[10px] sm:text-xs text-slate-500 font-medium">Status</th>
+                          <th className="text-left py-2 sm:py-3 px-3 sm:px-5 text-[10px] sm:text-xs text-slate-500 font-medium">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-50">
+                        {invoices.length > 0 ? (
+                          invoices.map((invoice) => (
+                            <tr key={invoice.id} className="hover:bg-slate-50 transition-colors">
+                              <td className="py-2 sm:py-3 px-3 sm:px-5 text-[10px] sm:text-xs text-slate-600">
+                                {new Date(invoice.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                              </td>
+                              <td className="py-2 sm:py-3 px-3 sm:px-5 text-[10px] sm:text-xs text-slate-600">{invoice.invoice_number}</td>
+                              <td className="py-2 sm:py-3 px-3 sm:px-5 text-[10px] sm:text-xs font-semibold text-slate-800">₹{invoice.total_amount}</td>
+                              <td className="py-2 sm:py-3 px-3 sm:px-5">
+                                <span className={`text-[8px] sm:text-xs px-1.5 sm:px-2 py-0.5 rounded-full border font-medium ${invoice.status === 'paid' ? 'bg-emerald-100 text-emerald-700 border-emerald-200' :
+                                  invoice.status === 'pending' ? 'bg-amber-100 text-amber-700 border-amber-200' :
+                                    invoice.status === 'failed' ? 'bg-red-100 text-red-700 border-red-200' :
+                                      invoice.status === 'cancelled' ? 'bg-slate-100 text-slate-700 border-slate-200' :
+                                        'bg-slate-100 text-slate-700 border-slate-200'
+                                  }`}>
+                                  {invoice.status?.charAt(0).toUpperCase() + invoice.status?.slice(1) || 'Pending'}
+                                </span>
+                              </td>
+                              <td className="py-2 sm:py-3 px-3 sm:px-5">
+                                <button
+                                  onClick={() => handleDownloadInvoice(invoice.id)}
+                                  className="text-indigo-600 text-[10px] sm:text-xs hover:text-indigo-700 flex items-center gap-1"
+                                >
+                                  <Download size={12} className="hidden sm:inline" />
+                                  <span className="sm:hidden">📄</span>
+                                  <span className="hidden sm:inline">Download</span>
+                                </button>
+                              </td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan={5} className="py-8 sm:py-12 text-center text-slate-400">
+                              <div className="flex flex-col items-center gap-1 sm:gap-2">
+                                <FileText size={24} className="sm:hidden text-slate-300" />
+                                <FileText size={32} className="hidden sm:block text-slate-300" />
+                                <p className="text-xs sm:text-sm text-slate-400">No invoices available.</p>
+                                <p className="text-[10px] sm:text-xs text-slate-300">Invoices will appear here after your first purchase.</p>
+                              </div>
                             </td>
                           </tr>
-                        ))
-                      ) : (
-                        <tr>
-                          <td colSpan={5} className="py-12 text-center text-slate-400 text-sm">
-                            No billing history found
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               </div>
+
+              {/* ── CANCEL SUBSCRIPTION MODAL ── */}
+              {showCancelModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+                  <div className="bg-white rounded-2xl sm:rounded-3xl shadow-2xl w-[90%] max-w-sm mx-4 overflow-hidden">
+                    <div className="p-4 sm:p-6 text-center">
+                      <div className="w-10 h-10 sm:w-14 sm:h-14 rounded-full bg-red-50 border border-red-100 flex items-center justify-center mx-auto mb-3 sm:mb-4">
+                        <AlertTriangle size={18} className="sm:text-2xl text-red-500" />
+                      </div>
+                      <h3 className="text-base sm:text-lg font-bold text-slate-800 mb-1 sm:mb-2">Cancel Subscription?</h3>
+                      <p className="text-xs sm:text-sm text-slate-500 mb-4 sm:mb-6">
+                        You will lose access to all premium features after the current billing period ends.
+                      </p>
+                      <div className="flex gap-2 sm:gap-3">
+                        <button
+                          onClick={() => setShowCancelModal(false)}
+                          className="flex-1 py-2 sm:py-2.5 text-xs sm:text-sm border border-slate-200 text-slate-600 rounded-lg sm:rounded-xl hover:bg-slate-50 transition-colors"
+                        >
+                          Keep Plan
+                        </button>
+                        <button
+                          onClick={async () => {
+                            try {
+                              const token = localStorage.getItem('token') || session?.access_token;
+                              if (!token) throw new Error("Not logged in");
+
+                              await api.subscription.cancel(token);
+                              toast.success('Subscription cancelled successfully');
+                              await fetchCompanySubscription();
+                              setShowCancelModal(false);
+                            } catch (error: any) {
+                              toast.error(error.message || 'Failed to cancel subscription');
+                            }
+                          }}
+                          className="flex-1 py-2 sm:py-2.5 text-xs sm:text-sm bg-red-600 text-white rounded-lg sm:rounded-xl hover:bg-red-700 transition-colors"
+                        >
+                          Confirm Cancel
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

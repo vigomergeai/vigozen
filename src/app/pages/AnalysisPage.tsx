@@ -619,7 +619,7 @@ export default function AnalysisPage() {
 
                   // ✅ DYNAMIC: Calculate trend based on stage
                   const prevPeriodDeals = deals.filter(d => {
-                    const date = new Date(d.createdAt || d.created_at);
+                    const date = new Date(d.createdAt || (d as any).created_at);
                     const now = new Date();
                     const prev = new Date();
                     prev.setDate(prev.getDate() - 7);

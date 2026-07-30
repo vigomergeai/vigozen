@@ -248,7 +248,7 @@ export default function PriceListPage() {
     };
 
     // ── Role Check ──
-    if (role !== "admin" && role !== "super_admin") {
+    if ((role as any) !== "admin" && (role as any) !== "super_admin") {
         return (
             <div className="p-4 lg:p-6 flex items-center justify-center min-h-[60vh]">
                 <div className="text-center max-w-md">

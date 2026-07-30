@@ -390,6 +390,27 @@ export const api = {
       request("PUT", `/api/payment-methods/${id}/default`, undefined, token),
   },
 
+  // ── Ad Connections OAuth ──
+  oauth: {
+    authorize: (platform: string, token: string) =>
+      request("GET", `/api/ad-connections/oauth/${platform}/authorize`, undefined, token),
+    
+    callback: (platform: string, code: string) =>
+      request("GET", `/api/ad-connections/oauth/${platform}/callback?code=${code}`, undefined, undefined),
+  },
+
+  // ── Invoice Methods ──
+  invoice: {
+    generate: (data: { subscription_id: string; billing_period_start: string; billing_period_end: string }, token: string) =>
+      request("POST", "/api/invoices/generate", data, token),
+    
+    download: (id: string, token: string) =>
+      request("GET", `/api/invoices/download/${id}`, undefined, token),
+    
+    markPaid: (id: string, token: string) =>
+      request("POST", `/api/invoices/${id}/mark-paid`, undefined, token),
+  },
+
 
 
   admin: {

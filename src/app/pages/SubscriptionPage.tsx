@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useApp } from "../context/AppContext";
+import { api } from "../lib/api";
 import { formatCurrency } from "../../utils/formatters";
 
 // ── Constants ──
@@ -96,7 +97,7 @@ export default function SubscriptionPage() {
     // ── Load Data ──
     useEffect(() => {
         // Redirect if not admin or super_admin
-        if (role !== "admin" && role !== "super_admin") {
+        if ((role as any) !== "admin" && (role as any) !== "super_admin") {
             navigate("/");
             return;
         }

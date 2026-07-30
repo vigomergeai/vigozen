@@ -210,14 +210,6 @@ export const api = {
   faqs: {
     list: (token?: string) => request("GET", "/faqs", undefined, token),
   },
-  adConnections: {
-    list: (token: string) => request("GET", "/ad-connections", undefined, token),
-    create: (data: any, token: string) => request("POST", "/ad-connections", data, token),
-    delete: (id: string, token: string) => request("DELETE", `/ad-connections/${id}`, undefined, token),
-    sync: (id: string, token: string) => request("POST", `/ad-connections/${id}/sync`, undefined, token),
-    updateCount: (platform: string, leadsCount: number, cost: number, token: string) =>
-      request("PUT", "/ad-connections/update-count", { platform, leadsCount, cost }, token),
-  },
   sessions: {
     list: (userId: string, token: string) => request("GET", `/user-sessions/${userId}`, undefined, token),
     create: (data: any, token: string) => request("POST", "/user-sessions", data, token),
@@ -388,15 +380,6 @@ export const api = {
      */
     setDefaultPaymentMethod: (id: string, token: string) =>
       request("PUT", `/api/payment-methods/${id}/default`, undefined, token),
-  },
-
-  // ── Ad Connections OAuth ──
-  oauth: {
-    authorize: (platform: string, token: string) =>
-      request("GET", `/api/ad-connections/oauth/${platform}/authorize`, undefined, token),
-    
-    callback: (platform: string, code: string) =>
-      request("GET", `/api/ad-connections/oauth/${platform}/callback?code=${code}`, undefined, undefined),
   },
 
   // ── Invoice Methods ──

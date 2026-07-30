@@ -87,16 +87,6 @@ export default function SettingsPage() {
   //  ADD THIS
   const [twoFAEnabled, setTwoFAEnabled] = useState(false);
   const [sessions, setSessions] = useState<any[]>([]);
-  // ── Ad Connections State ──
-  const [showConnectModal, setShowConnectModal] = useState(false);
-  const [selectedPlatform, setSelectedPlatform] = useState<string | null>(null);
-  const [connectForm, setConnectForm] = useState({ accountId: "", accountName: "" });
-  const [autoSyncEnabled, setAutoSyncEnabled] = useState(false);
-  const [autoCreateLeads, setAutoCreateLeads] = useState(true);
-  const [savingSettings, setSavingSettings] = useState(false);
-  const [adConnections, setAdConnections] = useState<AdConnection[]>([]);
-  const [adLoading, setAdLoading] = useState(false);
-  const [syncing, setSyncing] = useState<string | null>(null);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
 
@@ -281,141 +271,6 @@ export default function SettingsPage() {
     };
     return planMap[plan] || 999;
   };
-  // ── Fetch Ad Connections ──
-  const fetchAdConnections = async () => {
-    const token = localStorage.getItem('token');
-    if (!token) return;
-    setAdLoading(true);
-    try {
-      const data = await api.adConnections.list(token);
-      setAdConnections(data || []);
-      // Load settings from userSettings
-      if (userSettings?.ad_auto_sync !== undefined) {
-        setAutoSyncEnabled(userSettings.ad_auto_sync);
-      }
-      if (userSettings?.ad_auto_create !== undefined) {
-        setAutoCreateLeads(userSettings.ad_auto_create);
-      }
-    } catch (error) {
-      console.error("Failed to fetch ad connections:", error);
-      toast.error("Failed to load ad connections");
-    } finally {
-      setAdLoading(false);
-    }
-  };
-
-  // ── Connect Ad Platform ──
-  const handleConnectPlatform = async () => {
-    if (!selectedPlatform) return;
-    if (!connectForm.accountId || !connectForm.accountName) {
-      toast.error("Please enter Account ID and Name");
-      return;
-    }
-
-    const platform = AD_PLATFORMS.find(p => p.platform === selectedPlatform);
-    if (!platform) return;
-
-    const token = localStorage.getItem('token');
-    if (!token) {
-      toast.error("Please log in again");
-      return;
-    }
-
-    try {
-      await api.adConnections.create({
-        platform: selectedPlatform,
-        platform_name: platform.name,
-        account_id: connectForm.accountId,
-        account_name: connectForm.accountName,
-      }, token);
-
-      toast.success(`${platform.name} connected successfully!`);
-      await fetchAdConnections();
-      setShowConnectModal(false);
-      setConnectForm({ accountId: "", accountName: "" });
-      setSelectedPlatform(null);
-    } catch (error: any) {
-      console.error("Connection failed:", error);
-      toast.error(error.message || "Failed to connect platform");
-    }
-  };
-
-  // ── Connect Ad Platform OAuth ──
-  const handleConnectOAuth = async (platform: string) => {
-    try {
-      const token = localStorage.getItem('token') || session?.access_token;
-      if (!token) throw new Error("Not logged in");
-
-      const response = await api.oauth.authorize(platform, token);
-      if (response && response.authUrl) {
-        window.location.href = response.authUrl;
-      } else {
-        toast.error("Failed to initiate authorization");
-      }
-    } catch (error: any) {
-      toast.error(error.message || "Failed to initiate authorization");
-      console.error("OAuth init error:", error);
-    }
-  };
-
-  // ── Disconnect Ad Platform ──
-  const handleDisconnect = async (id: string, platformName: string) => {
-    if (!confirm(`Are you sure you want to disconnect ${platformName}?`)) return;
-
-    const token = localStorage.getItem('token');
-    if (!token) {
-      toast.error("Please log in again");
-      return;
-    }
-
-    try {
-      await api.adConnections.delete(id, token);
-      toast.success(`${platformName} disconnected`);
-      await fetchAdConnections();
-    } catch (error: any) {
-      console.error("Disconnect failed:", error);
-      toast.error(error.message || "Failed to disconnect");
-    }
-  };
-
-  // ── Sync Ad Platform ──
-  const handleSyncPlatform = async (id: string, platformName: string) => {
-    const token = localStorage.getItem('token');
-    if (!token) {
-      toast.error("Please log in again");
-      return;
-    }
-
-    setSyncing(id);
-    try {
-      const result = await api.adConnections.sync(id, token);
-      toast.success(`${platformName} synced! ${result.leads_imported || 0} new leads imported`);
-      await fetchAdConnections();
-    } catch (error: any) {
-      console.error("Sync failed:", error);
-      toast.error(error.message || "Failed to sync");
-    } finally {
-      setSyncing(null);
-    }
-  };
-
-  // ── Save Auto-Import Settings ──
-  const handleSaveAutoSettings = async () => {
-    setSavingSettings(true);
-    try {
-      await saveSettings({
-        ad_auto_sync: autoSyncEnabled,
-        ad_auto_create: autoCreateLeads,
-      });
-      toast.success("Auto-import settings saved");
-    } catch (error) {
-      console.error("Save settings failed:", error);
-      toast.error("Failed to save settings");
-    } finally {
-      setSavingSettings(false);
-    }
-  };
-
   const getPlanId = (plan: string): string => {
     // Map plan names to Razorpay plan IDs
     const planMap: Record<string, string> = {
@@ -649,24 +504,6 @@ export default function SettingsPage() {
     }
   }, []);
 
-  // ── Handle OAuth Callback Params ──
-  useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const connected = urlParams.get('connected');
-    const error = urlParams.get('error');
-
-    if (connected) {
-      toast.success(`${connected.charAt(0).toUpperCase() + connected.slice(1)} Ads connected successfully!`);
-      setActiveTab("integrations");
-      window.history.replaceState({}, document.title, window.location.pathname);
-      fetchAdConnections();
-    } else if (error) {
-      toast.error(`Connection failed: ${error}`);
-      setActiveTab("integrations");
-      window.history.replaceState({}, document.title, window.location.pathname);
-    }
-  }, []);
-
   // ── Load subscription data ──
   useEffect(() => {
     if (userProfile?.id && role === "admin") {
@@ -674,7 +511,6 @@ export default function SettingsPage() {
       fetchPaymentMethods();
       fetchInvoices();
       loadUsers();
-      fetchAdConnections();
     }
   }, [userProfile?.id, role]);
 
@@ -1094,7 +930,6 @@ export default function SettingsPage() {
   const tabs: { id: SettingsTab; label: string; icon: React.ElementType; adminOnly?: boolean }[] = [
     { id: "profile", label: "Profile", icon: User },
     { id: "notifications", label: "Notifications", icon: Bell },
-    { id: "integrations", label: "Lead Integrations", icon: Plug },
     { id: "pricing", label: "Price List", icon: CreditCard },
     { id: "security", label: "Security", icon: Shield },
     { id: "system", label: "System", icon: Database, adminOnly: true },
@@ -1373,138 +1208,7 @@ export default function SettingsPage() {
             </div>
           )}
 
-          {/* ===== INTEGRATIONS ===== */}
-          {activeTab === "integrations" && (
-            <div className="space-y-6">
-              {/* Header */}
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-slate-800 dark:text-white">Ad Platform Connections</h3>
-                  <p className="text-xs text-slate-400 mt-0.5">Connect your advertising accounts to auto-import leads</p>
-                </div>
-              </div>
 
-              {/* Stats Summary */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-                {[
-                  { label: "Connected Platforms", value: adConnections.filter(c => c.connected !== false).length, color: "text-emerald-600" },
-                  { label: "Total Leads Imported", value: adConnections.reduce((s, c) => s + (c.leads_imported || 0), 0), color: "text-indigo-600" },
-                  { label: "Total Ad Spend", value: `₹${adConnections.reduce((s, c) => s + (c.cost_spent || 0), 0).toLocaleString()}`, color: "text-amber-600" },
-                  { label: "Auto-Sync", value: autoSyncEnabled ? "ON" : "OFF", color: autoSyncEnabled ? "text-emerald-600" : "text-slate-400" },
-                ].map(stat => (
-                  <div key={stat.label} className="bg-white rounded-2xl p-3 sm:p-4 border border-slate-100 shadow-sm">
-                    <div className={`text-base sm:text-lg font-bold ${stat.color}`}>{stat.value}</div>
-                    <div className="text-[10px] sm:text-xs text-slate-400">{stat.label}</div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Platform Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {AD_PLATFORMS.map(platform => {
-                  const connection = adConnections.find(c => c.platform === platform.platform);
-                  const isConnected = connection && connection.connected !== false;
-
-                  return (
-                    <div key={platform.platform} className={`bg-white rounded-2xl border p-5 shadow-sm hover:shadow-md transition-all ${isConnected ? 'border-emerald-200' : 'border-slate-200'}`}>
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className={`w-11 h-11 rounded-xl flex items-center justify-center text-2xl ${platform.bg} ${platform.color}`}>
-                            {platform.icon}
-                          </div>
-                          <div>
-                            <div className="text-sm font-semibold text-slate-800">{platform.name}</div>
-                            <div className="text-xs text-slate-400">{platform.desc}</div>
-                          </div>
-                        </div>
-                        <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${isConnected ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
-                          {isConnected ? '✅ Connected' : '❌ Not Connected'}
-                        </span>
-                      </div>
-
-                      {isConnected && (
-                        <div className="mt-3 pt-3 border-t border-slate-100">
-                          <div className="flex items-center justify-between text-xs text-slate-500">
-                            <span>Account: {connection.account_name || connection.account_id || '—'}</span>
-                            <span>{connection.leads_imported || 0} leads imported</span>
-                            <span>Last sync: {connection.last_sync ? new Date(connection.last_sync).toLocaleDateString() : 'Never'}</span>
-                          </div>
-                          <div className="flex items-center gap-2 mt-2">
-                            <button
-                              onClick={() => handleSyncPlatform(connection.id, platform.name)}
-                              disabled={syncing === connection.id}
-                              className="flex-1 py-1.5 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-1"
-                            >
-                              {syncing === connection.id ? (
-                                <><RefreshCw size={11} className="animate-spin" /> Syncing...</>
-                              ) : (
-                                <><RefreshCw size={11} /> Sync Now</>
-                              )}
-                            </button>
-                            <button
-                              onClick={() => handleDisconnect(connection.id, platform.name)}
-                              className="px-3 py-1.5 text-xs text-red-600 border border-red-200 rounded-lg hover:bg-red-50"
-                            >
-                              Disconnect
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                      {!isConnected && (
-                        <button
-                          onClick={() => handleConnectOAuth(platform.platform)}
-                          className="mt-3 w-full py-2 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
-                        >
-                          Connect {platform.name} →
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Auto-Import Settings */}
-              <div className="bg-white rounded-2xl border border-slate-200 p-5">
-                <h4 className="text-slate-800 font-semibold mb-4">Auto-Import Settings</h4>
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between py-3 border-b border-slate-50">
-                    <div>
-                      <div className="text-sm font-medium text-slate-800">Auto-sync leads from ads</div>
-                      <div className="text-xs text-slate-400">Automatically fetch new leads from connected ad platforms every 15 minutes</div>
-                    </div>
-                    <button
-                      onClick={() => setAutoSyncEnabled(!autoSyncEnabled)}
-                      className={`w-11 h-6 rounded-full flex items-center transition-all ${autoSyncEnabled ? "bg-indigo-600 justify-end" : "bg-slate-200 justify-start"}`}
-                    >
-                      <div className="w-5 h-5 bg-white rounded-full shadow-sm mx-0.5" />
-                    </button>
-                  </div>
-
-                  <div className="flex items-center justify-between py-3 border-b border-slate-50">
-                    <div>
-                      <div className="text-sm font-medium text-slate-800">Create leads automatically</div>
-                      <div className="text-xs text-slate-400">Automatically add imported leads to your Leads table</div>
-                    </div>
-                    <button
-                      onClick={() => setAutoCreateLeads(!autoCreateLeads)}
-                      className={`w-11 h-6 rounded-full flex items-center transition-all ${autoCreateLeads ? "bg-indigo-600 justify-end" : "bg-slate-200 justify-start"}`}
-                    >
-                      <div className="w-5 h-5 bg-white rounded-full shadow-sm mx-0.5" />
-                    </button>
-                  </div>
-
-                  <button
-                    onClick={handleSaveAutoSettings}
-                    disabled={savingSettings}
-                    className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
-                  >
-                    {savingSettings ? (<><RefreshCw size={13} className="animate-spin" /> Saving...</>) : (<><Save size={13} /> Save Settings</>)}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
 
           {/* ===== PRICING & SUBSCRIPTION ===== */}
           {activeTab === "pricing" && (
@@ -2418,79 +2122,6 @@ export default function SettingsPage() {
                 className="flex-1 px-4 py-2.5 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {saving ? <><RefreshCw size={13} className="animate-spin" />Saving...</> : <><Save size={14} />Save Integration</>}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      {/* ── Connect Platform Modal (Same style as Add Lead) ── */}
-      {showConnectModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/40" onClick={() => setShowConnectModal(false)} />
-          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-xl overflow-hidden">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
-              <h2 className="text-slate-800">
-                Connect {AD_PLATFORMS.find(p => p.platform === selectedPlatform)?.name || 'Platform'}
-              </h2>
-              <button
-                onClick={() => setShowConnectModal(false)}
-                className="p-2 hover:bg-slate-100 rounded-xl"
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            <div className="p-6 grid grid-cols-2 gap-4 max-h-[72vh] overflow-y-auto">
-              <div className="col-span-2">
-                <label className="block text-xs text-slate-500 mb-1.5">Platform</label>
-                <div className="flex items-center gap-3 px-3 py-2.5 border border-slate-200 rounded-xl bg-slate-50">
-                  <span className="text-lg">{AD_PLATFORMS.find(p => p.platform === selectedPlatform)?.icon}</span>
-                  <span className="text-sm font-medium text-slate-700">{AD_PLATFORMS.find(p => p.platform === selectedPlatform)?.name}</span>
-                </div>
-              </div>
-
-              <div className="col-span-2">
-                <label className="block text-xs text-slate-500 mb-1.5">Account ID *</label>
-                <input
-                  type="text"
-                  value={connectForm.accountId}
-                  onChange={(e) => setConnectForm(f => ({ ...f, accountId: e.target.value }))}
-                  placeholder="e.g., act_123456789"
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-slate-50"
-                />
-              </div>
-
-              <div className="col-span-2">
-                <label className="block text-xs text-slate-500 mb-1.5">Account Name *</label>
-                <input
-                  type="text"
-                  value={connectForm.accountName}
-                  onChange={(e) => setConnectForm(f => ({ ...f, accountName: e.target.value }))}
-                  placeholder="e.g., My Business Account"
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-slate-50"
-                />
-              </div>
-
-              <div className="col-span-2 bg-blue-50 border border-blue-200 rounded-lg p-3">
-                <p className="text-xs text-blue-700 flex items-start gap-2">
-                  <span className="mt-0.5">🔗</span>
-                  After connecting, you'll be able to sync leads from this platform. The CRM will store the access token securely and import new leads automatically.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex gap-3 px-6 py-4 border-t border-slate-200">
-              <button
-                onClick={() => setShowConnectModal(false)}
-                className="flex-1 py-2.5 text-sm border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConnectPlatform}
-                className="flex-1 py-2.5 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors"
-              >
-                Connect {AD_PLATFORMS.find(p => p.platform === selectedPlatform)?.name || 'Platform'} →
               </button>
             </div>
           </div>

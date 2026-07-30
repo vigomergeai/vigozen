@@ -12,7 +12,6 @@ import { useApp } from "../context/AppContext";
 import { useTickets, useFAQs, useGuides, Guide } from "../../hooks/useSupport";
 import { useUsers } from "../../hooks/useUsers";
 import { useLeadPages } from "../../hooks/useLeadPages";
-import { useAdConnections } from "../../hooks/useAdConnections";
 import { useLeadSources } from "../../hooks/useLeadSources";
 import { toast } from "sonner";
 
@@ -86,11 +85,8 @@ export default function SupportPage() {
   const [savingTicket, setSavingTicket] = useState(false);
   const [showPhoneMenu, setShowPhoneMenu] = useState(false);
   const [showEmailMenu, setShowEmailMenu] = useState(false);
-  const [autoSync, setAutoSync] = useState(false);
-const [autoCreate, setAutoCreate] = useState(false);
-    // ========== LEAD MANAGEMENT HOOKS ==========
+  // ========== LEAD MANAGEMENT HOOKS ==========
   const { leadPages, loading: pagesLoading, addLeadPage, updateLeadPage, deleteLeadPage, fetchLeadPages } = useLeadPages();
-  const { adConnections, loading: adsLoading, connectAdPlatform, disconnectAdPlatform, syncAdLeads, fetchAdConnections } = useAdConnections();
   const { leadSources, loading: sourcesLoading, addLeadSource, fetchLeadSources } = useLeadSources();
   
   // ========== LOCAL STATE ==========
@@ -337,19 +333,6 @@ const handleViewSubmissions = (page: any) => {
 const handleAnalytics = (page: any) => {
   alert(`📊 Analytics for "${page.name}"\n\nLeads: ${page.leads_count || 0}\nConversion: ${page.conversion_rate || 0}%\nCreated: ${new Date(page.created_at).toLocaleDateString()}`);
 };
-const handleConnectAd = async (platform: string, platformName: string) => {
-  const accountId = prompt(`Enter your ${platformName} Account ID:`);
-  const accountName = prompt(`Enter your ${platformName} Account Name:`);
-  if (accountId && accountName) {
-    await connectAdPlatform(platform, platformName, accountId, accountName);
-  }
-};
-
-const handleDisconnectAd = async (id: string, platformName: string) => {
-  if (confirm(`Are you sure you want to disconnect ${platformName}?`)) {
-    await disconnectAdPlatform(id, platformName);
-  }
-};
   // ========== EXISTING copyToClipboard FUNCTION (keep this) ==========
     const handleAddLeadSource = async () => {
     if (!newSourceForm.name) {
@@ -397,7 +380,6 @@ const handleDisconnectAd = async (id: string, platformName: string) => {
     { id: "docs" as const, label: "Docs & Guides", icon: Book },
     ...(isAdmin ? [
       { id: "leadpages" as const, label: "Lead Pages", icon: Layout },
-      { id: "adsmanager" as const, label: "Ads Manager", icon: Target },
       { id: "leadintegrations" as const, label: "Lead Integrations", icon: Plug }
     ] : [])
   ];
@@ -961,117 +943,7 @@ const handleDisconnectAd = async (id: string, platformName: string) => {
         </div>
       )}
 
-           {/* ===== ADS MANAGER (ADMIN ONLY) ===== */}
-      {activeTab === "adsmanager" && isAdmin && (
-        <div className="space-y-5">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
-            <h3 className="text-slate-800 mb-4 flex items-center gap-2">
-              <Target size={18} className="text-indigo-600" />
-              Connected Ad Platforms
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {adsLoading ? (
-                <div className="col-span-2 text-center py-8">Loading...</div>
-              ) : (
-                [
-                  { platform: "facebook", name: "Facebook Ads", icon: Facebook },
-                  { platform: "google", name: "Google Ads", icon: Globe },
-                  { platform: "linkedin", name: "LinkedIn Ads", icon: Linkedin },
-                  { platform: "instagram", name: "Instagram Ads", icon: Instagram }
-                ].map(ad => {
-                  const connection = adConnections.find(c => c.platform === ad.platform);
-                  const Icon = ad.icon;
-                  return (
-                    <div key={ad.platform} className={`border rounded-xl p-4 ${connection?.connected ? 'border-indigo-200 bg-indigo-50/30' : 'border-slate-200'}`}>
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-3">
-                          <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${connection?.connected ? 'bg-indigo-100' : 'bg-slate-100'}`}>
-                            <Icon size={20} className={connection?.connected ? 'text-indigo-600' : 'text-slate-400'} />
-                          </div>
-                          <div>
-                            <div className="font-medium text-slate-800">{ad.name}</div>
-                          <div className="text-xs text-slate-400">
-  {connection?.connected ? 
-    `${(connection.leads_imported || 0).toLocaleString()} leads · ₹${(connection.cost_spent || 0).toLocaleString()}` : 
-    "Not connected"
-  }
-</div>
-                          </div>
-                        </div>
-                        {connection?.connected ? (
-                          <button onClick={() => handleDisconnectAd(connection.id, ad.name)} className="text-xs px-3 py-1.5 rounded-lg bg-red-50 text-red-600">
-                            Disconnect
-                          </button>
-                        ) : (
-                          <button onClick={() => handleConnectAd(ad.platform, ad.name)} className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white">
-                            Connect
-                          </button>
-                        )}
-                      </div>
-                      {connection?.connected && (
-                        <div className="mt-3 pt-3 border-t border-slate-100 flex gap-2">
-                          <button onClick={() => syncAdLeads(connection.id)} className="flex-1 text-xs py-1.5 bg-indigo-600 text-white rounded-lg flex items-center justify-center gap-1">
-                            <RefreshCw size={10} /> Sync Now
-                          </button>
-                          <button className="flex-1 text-xs py-1.5 border border-slate-200 rounded-lg">Analytics</button>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
 
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
-  <h3 className="text-slate-800 mb-4 flex items-center gap-2">
-    <Settings size={18} className="text-indigo-600" />
-    Auto-Import Settings
-  </h3>
-  <div className="space-y-4">
-    {/* Auto-sync toggle */}
-    <div className="flex items-center justify-between py-2">
-      <div>
-        <div className="text-sm font-medium text-slate-800">Auto-sync leads from ads</div>
-        <div className="text-xs text-slate-400">Automatically import leads every 15 minutes</div>
-      </div>
-      <button 
-        onClick={() => setAutoSync(!autoSync)}
-        className={`w-11 h-6 rounded-full flex items-center transition-all ${autoSync ? 'bg-indigo-600 justify-end' : 'bg-slate-200 justify-start'}`}
-      >
-        <div className="w-5 h-5 bg-white rounded-full shadow-sm mx-0.5" />
-      </button>
-    </div>
-    
-    {/* Auto-create toggle */}
-    <div className="flex items-center justify-between py-2">
-      <div>
-        <div className="text-sm font-medium text-slate-800">Create leads automatically</div>
-        <div className="text-xs text-slate-400">Auto-create lead records from ad submissions</div>
-      </div>
-      <button 
-        onClick={() => setAutoCreate(!autoCreate)}
-        className={`w-11 h-6 rounded-full flex items-center transition-all ${autoCreate ? 'bg-indigo-600 justify-end' : 'bg-slate-200 justify-start'}`}
-      >
-        <div className="w-5 h-5 bg-white rounded-full shadow-sm mx-0.5" />
-      </button>
-    </div>
-  </div>
-  
-  <button 
-    onClick={() => {
-      // Save settings to localStorage
-      localStorage.setItem('auto_sync', String(autoSync));
-      localStorage.setItem('auto_create', String(autoCreate));
-      alert(`✅ Settings saved!\nAuto-sync: ${autoSync ? "ON" : "OFF"}\nAuto-create: ${autoCreate ? "ON" : "OFF"}`);
-    }}
-    className="mt-6 w-full py-2 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700"
-  >
-    Save Settings
-  </button>
-</div>
-        </div>
-      )}
 
                     {/* ===== LEAD INTEGRATIONS (ADMIN ONLY) ===== */}
       {activeTab === "leadintegrations" && isAdmin && (

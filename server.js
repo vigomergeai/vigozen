@@ -257,8 +257,39 @@ const upload = multer({
           ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'won';
           ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'Won';
           ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'converted';
+          ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'lost';
+          ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'Lost';
+        END IF;
       END $$;
     `).catch(() => { });
+
+    // ── AD CONNECTIONS TABLE UPDATES ──
+    await pool.query(`
+      ALTER TABLE ad_connections 
+      ADD COLUMN IF NOT EXISTS access_token TEXT,
+      ADD COLUMN IF NOT EXISTS refresh_token TEXT,
+      ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS platform_account_id VARCHAR(255),
+      ADD COLUMN IF NOT EXISTS platform_account_name VARCHAR(255),
+      ADD COLUMN IF NOT EXISTS last_sync_status VARCHAR(50) DEFAULT 'never',
+      ADD COLUMN IF NOT EXISTS last_sync_error TEXT,
+      ADD COLUMN IF NOT EXISTS sync_logs JSONB DEFAULT '[]',
+      ADD COLUMN IF NOT EXISTS last_sync_count INTEGER DEFAULT 0
+    `).catch(() => {});
+
+    // ── AD SYNC LOGS TABLE ──
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ad_sync_logs (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        connection_id UUID REFERENCES ad_connections(id) ON DELETE CASCADE,
+        status VARCHAR(50) NOT NULL,
+        leads_imported INTEGER DEFAULT 0,
+        errors JSONB DEFAULT '[]',
+        started_at TIMESTAMP DEFAULT NOW(),
+        completed_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `).catch(() => {});
 
     console.log("✅ Auto-migration: DB tables ready");
   } catch (err) {
@@ -2351,6 +2382,447 @@ app.delete("/guides/:id", authenticateToken, async (req, res) => {
   } catch (err) {
     console.error("DELETE GUIDE ERROR:", err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/ad-connections", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT * FROM ad_connections WHERE user_id = $1 ORDER BY created_at DESC",
+      [req.user.id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("GET AD CONNECTIONS ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/ad-connections", authenticateToken, async (req, res) => {
+  try {
+    const { platform, platform_name, account_id, account_name } = req.body;
+    if (!platform || !platform_name) {
+      return res.status(400).json({ error: "Platform and platform name are required" });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO ad_connections
+        (user_id, platform, platform_name, connected, account_id, account_name, leads_imported, cost_spent, created_at, updated_at)
+       VALUES ($1, $2, $3, true, $4, $5, 0, 0, NOW(), NOW())
+       ON CONFLICT (user_id, platform)
+       DO UPDATE SET
+         platform_name = EXCLUDED.platform_name,
+         connected = true,
+         account_id = EXCLUDED.account_id,
+         account_name = EXCLUDED.account_name,
+         updated_at = NOW()
+       RETURNING *`,
+      [req.user.id, platform, platform_name, account_id, account_name]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("ADD AD CONNECTION ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/ad-connections/:id", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "DELETE FROM ad_connections WHERE id = $1 AND user_id = $2 RETURNING *",
+      [req.params.id, req.user.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Ad connection not found" });
+    }
+    res.json({ success: true, deleted: result.rows[0] });
+  } catch (err) {
+    console.error("DISCONNECT AD ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/ad-connections/:id/sync", authenticateToken, async (req, res) => {
+  try {
+    const connectionId = req.params.id;
+    const userId = req.user.id;
+    
+    // Get connection details
+    const connResult = await pool.query(
+      "SELECT * FROM ad_connections WHERE id = $1 AND user_id = $2",
+      [connectionId, userId]
+    );
+    
+    if (connResult.rows.length === 0) {
+      return res.status(404).json({ error: "Connection not found" });
+    }
+    
+    const connection = connResult.rows[0];
+    const platform = connection.platform;
+    const accessToken = connection.access_token;
+    
+    // Start sync log
+    const logResult = await pool.query(`
+      INSERT INTO ad_sync_logs (connection_id, status, started_at)
+      VALUES ($1, 'running', NOW())
+      RETURNING id
+    `, [connectionId]);
+    
+    const logId = logResult.rows[0].id;
+    
+    let newLeads = 0;
+    let newCost = 0;
+    let leadData = [];
+    let error = null;
+    
+    try {
+      // ── Platform-specific lead fetching ──
+      switch (platform) {
+        case 'facebook':
+          // Fetch Facebook Lead Ads
+          const fbResponse = await fetch(
+            `https://graph.facebook.com/v18.0/${connection.account_id}/leads?access_token=${accessToken}&fields=id,field_data,ad_id,created_time`
+          );
+          const fbData = await fbResponse.json();
+          
+          if (fbData.data) {
+            leadData = fbData.data.map((lead) => ({
+              name: lead.field_data.find((f) => f.name === 'full_name')?.values?.[0] || 'Facebook Lead',
+              email: lead.field_data.find((f) => f.name === 'email')?.values?.[0] || '',
+              phone: lead.field_data.find((f) => f.name === 'phone_number')?.values?.[0] || '',
+              company: lead.field_data.find((f) => f.name === 'company_name')?.values?.[0] || '',
+              source: 'facebook',
+              created_at: lead.created_time
+            }));
+            newLeads = leadData.length;
+          }
+          break;
+          
+        case 'google':
+          // Google Ads API
+          const googleResponse = await fetch(
+            `https://googleads.googleapis.com/v12/customers/${connection.account_id}/googleAds:search`,
+            {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                query: "SELECT customer.id, campaign.name, metrics.clicks, metrics.cost_micros FROM campaign"
+              })
+            }
+          );
+          const googleData = await googleResponse.json();
+          newLeads = googleData.results?.length || 0;
+          break;
+          
+        case 'linkedin':
+          // LinkedIn Lead Gen Forms
+          const linkedinResponse = await fetch(
+            `https://api.linkedin.com/v2/adAccounts/${connection.account_id}/leadGenForms`,
+            {
+              headers: { 'Authorization': `Bearer ${accessToken}` }
+            }
+          );
+          const linkedinData = await linkedinResponse.json();
+          newLeads = linkedinData.elements?.length || 0;
+          break;
+          
+        case 'instagram':
+          // Instagram Ads via Facebook Graph API
+          const instaResponse = await fetch(
+            `https://graph.facebook.com/v18.0/${connection.account_id}/leadgen_forms?access_token=${accessToken}`
+          );
+          const instaData = await instaResponse.json();
+          newLeads = instaData.data?.length || 0;
+          break;
+          
+        default:
+          error = 'Unsupported platform';
+      }
+      
+      // ── Create CRM leads if auto-create is enabled ──
+      const userSettingsResult = await pool.query(
+        "SELECT ad_auto_create FROM user_settings WHERE user_id = $1",
+        [userId]
+      );
+      const autoCreate = userSettingsResult.rows[0]?.ad_auto_create === true;
+      
+      if (autoCreate && newLeads > 0 && leadData.length > 0) {
+        for (const lead of leadData.slice(0, 10)) { // Limit to 10 per sync
+          await pool.query(
+            `INSERT INTO leads (id, name, email, phone, company, source, status, value, created_at, owner_id, company_id)
+             VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, 'new', 0, COALESCE($6::TIMESTAMP, NOW()), $7, $8)
+             ON CONFLICT (email) WHERE email IS NOT NULL AND email != '' DO NOTHING`,
+            [
+              lead.name || 'Ad Lead',
+              lead.email || null,
+              lead.phone || null,
+              lead.company || null,
+              platform || 'ad_platform',
+              lead.created_at || null,
+              req.user.id,
+              req.user.company_id
+            ]
+          );
+        }
+      }
+      
+      // Update sync log
+      await pool.query(`
+        UPDATE ad_sync_logs 
+        SET status = 'success', 
+            leads_imported = $1,
+            completed_at = NOW()
+        WHERE id = $2
+      `, [newLeads, logId]);
+      
+    } catch (syncError) {
+      error = syncError.message;
+      
+      // Update sync log with error
+      await pool.query(`
+        UPDATE ad_sync_logs 
+        SET status = 'failed', 
+            errors = $1::jsonb,
+            completed_at = NOW()
+        WHERE id = $2
+      `, [JSON.stringify([error]), logId]);
+    }
+    
+    // ── Update ad connection ──
+    const result = await pool.query(`
+      UPDATE ad_connections
+      SET leads_imported = leads_imported + $1,
+          cost_spent = cost_spent + $2,
+          last_sync = NOW(),
+          last_sync_status = $3,
+          last_sync_error = $4,
+          last_sync_count = $1,
+          updated_at = NOW()
+      WHERE id = $5 AND user_id = $6
+      RETURNING *
+    `, [
+      newLeads,
+      newCost,
+      error ? 'failed' : 'success',
+      error || null,
+      connectionId,
+      userId
+    ]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Connection not found" });
+    }
+    
+    res.json({
+      success: true,
+      leads_imported: newLeads,
+      cost_spent: newCost,
+      error: error || null,
+      sync_log_id: logId,
+      connection: result.rows[0]
+    });
+    
+  } catch (err) {
+    console.error("SYNC AD LEADS ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/ad-connections/update-count", authenticateToken, async (req, res) => {
+  try {
+    const { platform, leadsCount, cost } = req.body;
+    if (!platform) {
+      return res.status(400).json({ error: "Platform is required" });
+    }
+
+    const result = await pool.query(
+      `UPDATE ad_connections
+       SET leads_imported = leads_imported + $1,
+           cost_spent = cost_spent + $2,
+           updated_at = NOW()
+       WHERE platform = $3 AND user_id = $4
+       RETURNING *`,
+      [leadsCount || 0, cost || 0, platform, req.user.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Ad connection not found for this platform" });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("UPDATE LEADS COUNT ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── OAUTH CONFIG AND ROUTES ──
+const OAUTH_CONFIG = {
+  facebook: {
+    authorizeUrl: 'https://www.facebook.com/v18.0/dialog/oauth',
+    tokenUrl: 'https://graph.facebook.com/v18.0/oauth/access_token',
+    scope: 'ads_management,leads_retrieval,pages_read_engagement,pages_manage_ads',
+    clientId: process.env.FACEBOOK_APP_ID,
+    clientSecret: process.env.FACEBOOK_APP_SECRET,
+    redirectUri: process.env.FACEBOOK_REDIRECT_URI || `${process.env.APP_URL}/api/ad-connections/oauth/facebook/callback`
+  },
+  google: {
+    authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+    tokenUrl: 'https://oauth2.googleapis.com/token',
+    scope: 'https://www.googleapis.com/auth/adwords',
+    clientId: process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    redirectUri: process.env.GOOGLE_REDIRECT_URI || `${process.env.APP_URL}/api/ad-connections/oauth/google/callback`
+  },
+  linkedin: {
+    authorizeUrl: 'https://www.linkedin.com/oauth/v2/authorization',
+    tokenUrl: 'https://www.linkedin.com/oauth/v2/accessToken',
+    scope: 'r_ads_leadgen,marketing_ads,marketplace_analytics',
+    clientId: process.env.LINKEDIN_CLIENT_ID,
+    clientSecret: process.env.LINKEDIN_CLIENT_SECRET,
+    redirectUri: process.env.LINKEDIN_REDIRECT_URI || `${process.env.APP_URL}/api/ad-connections/oauth/linkedin/callback`
+  },
+  instagram: {
+    authorizeUrl: 'https://api.instagram.com/oauth/authorize',
+    tokenUrl: 'https://api.instagram.com/oauth/access_token',
+    scope: 'instagram_basic,pages_read_engagement,leads_retrieval',
+    clientId: process.env.INSTAGRAM_APP_ID,
+    clientSecret: process.env.INSTAGRAM_APP_SECRET,
+    redirectUri: process.env.INSTAGRAM_REDIRECT_URI || `${process.env.APP_URL}/api/ad-connections/oauth/instagram/callback`
+  }
+};
+
+// OAuth Authorize Redirect
+app.get("/api/ad-connections/oauth/:platform/authorize", authenticateToken, async (req, res) => {
+  try {
+    const { platform } = req.params;
+    const config = OAUTH_CONFIG[platform];
+    
+    if (!config) {
+      return res.status(400).json({ error: "Unsupported platform" });
+    }
+    
+    const state = Buffer.from(JSON.stringify({ userId: req.user.id, platform })).toString('base64');
+    
+    const authUrl = `${config.authorizeUrl}?client_id=${config.clientId}&redirect_uri=${config.redirectUri}&scope=${config.scope}&response_type=code&state=${state}`;
+    
+    res.json({ authUrl });
+  } catch (error) {
+    console.error("OAuth authorize error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// OAuth Callback
+app.get("/api/ad-connections/oauth/:platform/callback", async (req, res) => {
+  try {
+    const { platform } = req.params;
+    const { code, state } = req.query;
+    
+    if (!code) {
+      return res.status(400).json({ error: "Authorization code required" });
+    }
+    
+    const config = OAUTH_CONFIG[platform];
+    if (!config) {
+      return res.status(400).json({ error: "Unsupported platform" });
+    }
+    
+    // Exchange code for access token
+    const tokenResponse = await fetch(config.tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: config.clientId,
+        client_secret: config.clientSecret,
+        redirect_uri: config.redirectUri,
+        code: code,
+        grant_type: 'authorization_code'
+      })
+    });
+    
+    const tokenData = await tokenResponse.json();
+    
+    if (!tokenResponse.ok) {
+      throw new Error(tokenData.error_description || 'Failed to get access token');
+    }
+    
+    // Get platform account info
+    let accountId = null;
+    let accountName = null;
+    
+    if (platform === 'facebook') {
+      const accountRes = await fetch(`https://graph.facebook.com/v18.0/me/adaccounts?access_token=${tokenData.access_token}`);
+      const accountData = await accountRes.json();
+      if (accountData.data && accountData.data.length > 0) {
+        accountId = accountData.data[0].id;
+        accountName = accountData.data[0].name;
+      }
+    } else if (platform === 'google') {
+      // Google Ads account info
+      const accountRes = await fetch(`https://googleads.googleapis.com/v12/customers:listAccessibleCustomers`, {
+        headers: { Authorization: `Bearer ${tokenData.access_token}` }
+      });
+      const accountData = await accountRes.json();
+      if (accountData.resourceNames && accountData.resourceNames.length > 0) {
+        accountId = accountData.resourceNames[0];
+        accountName = 'Google Ads Account';
+      }
+    } else if (platform === 'linkedin') {
+      const accountRes = await fetch('https://api.linkedin.com/v2/adAccounts?q=search&start=0&count=10', {
+        headers: { Authorization: `Bearer ${tokenData.access_token}` }
+      });
+      const accountData = await accountRes.json();
+      if (accountData.elements && accountData.elements.length > 0) {
+        accountId = accountData.elements[0].id;
+        accountName = accountData.elements[0].name;
+      }
+    } else if (platform === 'instagram') {
+      const accountRes = await fetch(`https://graph.facebook.com/v18.0/me/accounts?access_token=${tokenData.access_token}`);
+      const accountData = await accountRes.json();
+      if (accountData.data && accountData.data.length > 0) {
+        accountId = accountData.data[0].id;
+        accountName = accountData.data[0].name;
+      }
+    }
+    
+    // Store connection in database
+    const stateData = JSON.parse(Buffer.from(state, 'base64').toString());
+    
+    const result = await pool.query(`
+      INSERT INTO ad_connections 
+        (user_id, platform, platform_name, connected, account_id, account_name, access_token, refresh_token, token_expires_at, leads_imported, cost_spent, created_at, updated_at)
+      VALUES ($1, $2, $3, true, $4, $5, $6, $7, $8, 0, 0, NOW(), NOW())
+      ON CONFLICT (user_id, platform) DO UPDATE SET
+        platform_name = EXCLUDED.platform_name,
+        connected = true,
+        account_id = EXCLUDED.account_id,
+        account_name = EXCLUDED.account_name,
+        access_token = EXCLUDED.access_token,
+        refresh_token = COALESCE(EXCLUDED.refresh_token, ad_connections.refresh_token),
+        token_expires_at = COALESCE(EXCLUDED.token_expires_at, NOW() + INTERVAL '1 day'),
+        updated_at = NOW()
+      RETURNING *
+    `, [
+      stateData.userId,
+      platform,
+      config.name || platform,
+      accountId,
+      accountName || `${platform} Account`,
+      tokenData.access_token,
+      tokenData.refresh_token || null,
+      tokenData.expires_in ? new Date(Date.now() + tokenData.expires_in * 1000) : new Date(Date.now() + 24 * 60 * 60 * 1000)
+    ]);
+    
+    // Redirect back to frontend
+    const FRONTEND_URL = process.env.APP_URL || 'http://localhost:5173';
+    res.redirect(`${FRONTEND_URL}/settings?tab=integrations&connected=${platform}`);
+    
+  } catch (error) {
+    console.error("OAuth callback error:", error);
+    const FRONTEND_URL = process.env.APP_URL || 'http://localhost:5173';
+    res.redirect(`${FRONTEND_URL}/settings?tab=integrations&error=${encodeURIComponent(error.message)}`);
   }
 });
 

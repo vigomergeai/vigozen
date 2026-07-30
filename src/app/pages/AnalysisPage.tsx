@@ -253,7 +253,7 @@ export default function AnalysisPage() {
         else if (reportType === "employee") dataToSend = filteredEmpData;
         else if (reportType === "status") dataToSend = statusWiseData;
 
-        const res = await fetch(`${import.meta.env.VITE_API_URL}/api/ai/insight`, {
+     const res = await fetch(`${import.meta.env.VITE_API_URL}/ai-insights/generate`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -266,7 +266,7 @@ export default function AnalysisPage() {
           })
         });
         const data = await res.json();
-        setAiInsight(data.insight || "");
+        setAiInsight(data.insight_text || "");
       } catch { setAiInsight(""); }
       finally { setAiInsightLoading(false); }
     };
@@ -408,8 +408,8 @@ export default function AnalysisPage() {
             <div>
               <div className="flex items-center gap-2 mb-1.5">
                 <span className="text-sm font-semibold text-purple-800">AI Analysis Summary</span>
-                <span className="text-[10px] bg-purple-200 text-purple-700 px-2 py-0.5 rounded-full">GPT-4 Powered</span>
-                <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                <span className="text-[10px] bg-purple-200 text-purple-700 px-2 py-0.5 rounded-full">AI Powered</span>
+               <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
               </div>
               <p className="text-sm text-purple-700 leading-relaxed">
                 {aiInsightLoading ? (
@@ -619,7 +619,7 @@ export default function AnalysisPage() {
 
                   // ✅ DYNAMIC: Calculate trend based on stage
                   const prevPeriodDeals = deals.filter(d => {
-                    const date = new Date(d.createdAt || d.created_at);
+                    const date = new Date(d.createdAt);
                     const now = new Date();
                     const prev = new Date();
                     prev.setDate(prev.getDate() - 7);

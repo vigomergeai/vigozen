@@ -1,3 +1,4 @@
+import { api } from "../lib/api";
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router";
 import {
@@ -96,7 +97,7 @@ export default function SubscriptionPage() {
     // ── Load Data ──
     useEffect(() => {
         // Redirect if not admin or super_admin
-        if (role !== "admin" && role !== "super_admin") {
+        if ((role as string) !== "admin" && (role as string) !== "super_admin") {
             navigate("/");
             return;
         }

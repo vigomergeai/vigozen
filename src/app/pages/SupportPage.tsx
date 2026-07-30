@@ -1,5 +1,6 @@
 // src/app/pages/SupportPage.tsx
 import React, { useState, useRef, useEffect } from "react";
+import { api } from "../lib/api";
 import {
   HelpCircle, MessageSquare, Phone, Mail, Book, Search, ChevronDown,
   Plus, Send, Bot, CheckCircle, Clock, AlertTriangle, Star,
@@ -39,24 +40,7 @@ const guidesData: Guide[] = [
   { id: "g6", title: "Team Collaboration Best Practices", read_time: "7 min", icon: "👥", type: "Guide" as const, sort_order: 6 },
 ];
 
-const aiResponses: Record<string, string> = {
-  score: "AI Lead Scoring analyzes 50+ data points including engagement behavior, company profile, industry fit, and historical conversion patterns. Scores range from 0-100. Scores 80+ = Hot Lead, 60-79 = Warm Lead, below 60 = Cold Lead.",
-  facebook: "To connect Facebook Lead Ads: Go to Settings → Lead Integrations → Facebook Ads. Click 'Connect', authorize with your Facebook Business Manager. Leads sync automatically every 15 minutes.",
-  report: "Vigozen CRM offers 3 report types: Employee-wise, Status-wise, and Sales-wise. All support Daily, Weekly, and Custom date filters. Use the AI Insights toggle for GPT-4 powered analysis.",
-  pipeline: "The Sales Pipeline shows deals in a Kanban view. Drag and drop deals between stages (New → Won/Lost). The Forecast view shows weighted pipeline value and predicted revenue.",
-  integration: "Vigozen CRM supports: Facebook Lead Ads, LinkedIn Sales Navigator, Google Ads, Website Forms, Salesforce, HubSpot, Zapier, and WhatsApp Business. Go to Settings → Lead Integrations to manage.",
-  default: "I'm Vigozen CRM AI Assistant! I can help with lead management, pipeline setup, integrations, reports, and more. Try asking about: lead scoring, Facebook integration, report generation, or pipeline management.",
-};
 
-function getAIResponse(message: string): string {
-  const lower = message.toLowerCase();
-  if (lower.includes("score") || lower.includes("ai")) return aiResponses.score;
-  if (lower.includes("facebook") || lower.includes("ads")) return aiResponses.facebook;
-  if (lower.includes("report") || lower.includes("analysis")) return aiResponses.report;
-  if (lower.includes("pipeline") || lower.includes("deal") || lower.includes("kanban")) return aiResponses.pipeline;
-  if (lower.includes("integrat") || lower.includes("connect")) return aiResponses.integration;
-  return aiResponses.default;
-}
 
 export default function SupportPage() {
   const { tickets, loading, isAdmin, addTicket, updateTicket, deleteTicket, fetchTickets } = useTickets();
@@ -156,20 +140,28 @@ const [autoCreate, setAutoCreate] = useState(false);
   const userMsg = { id: chatMessages.length + 1, role: "user", text: chatInput, time: "Now" };
   setChatMessages(prev => [...prev, userMsg]);
   setIsTyping(true);
+  const messageToSend = chatInput;
   setChatInput("");
 
-  await new Promise(resolve => setTimeout(resolve, 800));
-
-  const aiText = getAIResponse(chatInput);
-
-  setChatMessages(prev => [...prev, {
-    id: prev.length + 1,
-    role: "ai",
-    text: aiText,
-    time: "Now"
-  }]);
-
-  setIsTyping(false);
+  try {
+    const token = localStorage.getItem("vigo_token") || localStorage.getItem("auth_token") || localStorage.getItem("token") || "";
+    const response = await api.support.aiChat(messageToSend, token);
+    setChatMessages(prev => [...prev, {
+      id: prev.length + 1,
+      role: "ai",
+      text: response.reply,
+      time: "Now"
+    }]);
+  } catch (err) {
+    setChatMessages(prev => [...prev, {
+      id: prev.length + 1,
+      role: "ai",
+      text: "Sorry, I couldn't process that right now. Please try again.",
+      time: "Now"
+    }]);
+  } finally {
+    setIsTyping(false);
+  }
 };
 const handleSubmitTicket = async () => {
     if (!ticketForm.title.trim()) {

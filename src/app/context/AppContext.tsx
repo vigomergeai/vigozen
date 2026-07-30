@@ -1431,10 +1431,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (data.value !== undefined) payload.value = data.value;
       if (data.stage !== undefined) payload.stage = toDbDealStage[data.stage];
       if (data.owner !== undefined) payload.owner = data.owner;
-      if (validUUID(data.ownerId)) {
-        payload.owner_id = data.ownerId;
-      } else {
-        payload.owner_id = null;
+      if (data.ownerId !== undefined) {
+        payload.owner_id = validUUID(data.ownerId) ? data.ownerId : null;
       }
       if (data.probability !== undefined) payload.probability = data.probability;
       if (data.expectedClose !== undefined) payload.expectedclose = data.expectedClose;

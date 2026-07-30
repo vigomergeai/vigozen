@@ -96,6 +96,9 @@ export const api = {
     update: (id: string, data: any, token?: string) => request("PUT", `/tickets/${id}`, data, token),
     delete: (id: string, token?: string) => request("DELETE", `/tickets/${id}`, undefined, token),
   },
+  support: {
+    aiChat: (message: string, token?: string) => request("POST", "/support/ai-chat", { message }, token),
+  },
   activities: {
     list: (token?: string) => request("GET", "/activities", undefined, token),
     create: (data: any, token?: string) => request("POST", "/activities", data, token),

@@ -225,8 +225,9 @@ export const api = {
   },
   invoices: {
     list: (userId: string, token: string) => request("GET", `/invoices/${userId}`, undefined, token),
+    download: (invoiceId: string, token: string) =>
+      request("GET", `/api/invoices/download/${invoiceId}`, undefined, token),
   },
-
 
   comments: {
     /**
@@ -336,7 +337,7 @@ export const api = {
     create: (data: { plan_type: string }, token?: string) => request("POST", "/subscription/create", data, token),
     paymentSuccess: (data: { plan_type: string; payment_id: string; amount: number }, token?: string) =>
       request("POST", "/subscription/payment-success", data, token),
-    cancel: (subscriptionId: string, token?: string) => request("POST", "/subscription/cancel", { subscriptionId }, token),
+    cancel: (token?: string) => request("POST", "/subscription/cancel", undefined, token), // ← ADD THIS LINE
   },
 
   // ── Company Subscription Management ──
@@ -352,6 +353,24 @@ export const api = {
      */
     updateSubscription: (data: { plan_type?: string; billing_period?: string; auto_renew?: boolean }, token: string) =>
       request("PUT", "/api/company/subscription", data, token),
+
+    /**
+     * Get pricing calculation
+     */
+    getPricing: (token: string) =>
+      request("GET", "/api/company/subscription/pricing", undefined, token),
+
+    /**
+     * Request custom quote
+     */
+    requestQuote: (data: any, token: string) =>
+      request("POST", "/api/company/subscription/quote", data, token),
+
+    /**
+     * Get quote status
+     */
+    getQuoteStatus: (token: string) =>
+      request("GET", "/api/company/subscription/quote-status", undefined, token),
 
     /**
      * Get all invoices for company
@@ -394,19 +413,18 @@ export const api = {
   oauth: {
     authorize: (platform: string, token: string) =>
       request("GET", `/api/ad-connections/oauth/${platform}/authorize`, undefined, token),
-    
+
     callback: (platform: string, code: string) =>
       request("GET", `/api/ad-connections/oauth/${platform}/callback?code=${code}`, undefined, undefined),
   },
+
 
   // ── Invoice Methods ──
   invoice: {
     generate: (data: { subscription_id: string; billing_period_start: string; billing_period_end: string }, token: string) =>
       request("POST", "/api/invoices/generate", data, token),
-    
     download: (id: string, token: string) =>
       request("GET", `/api/invoices/download/${id}`, undefined, token),
-    
     markPaid: (id: string, token: string) =>
       request("POST", `/api/invoices/${id}/mark-paid`, undefined, token),
   },

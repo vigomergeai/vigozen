@@ -830,9 +830,9 @@ app.post("/users", authenticateToken, async (req, res) => {
     const companyId = req.user?.company_id || null;
 
     const result = await pool.query(
-      `INSERT INTO users (name, email, password, role, employee_id, department, is_active, company_id, created_at)
-      VALUES ($1, $2, $3, $4, $5, $6, false, $7, NOW())   -- ← is_active = false (inactive by default)
-      RETURNING id, name, email, role, employee_id AS "employeeId", department, is_active AS "isActive", company_id AS "companyId", created_at AS "createdAt"`,
+      `INSERT INTO users (name, email, password, role, employee_id, department, is_active, status, company_id, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, false, 'Inactive', $7, NOW())   -- ← is_active = false (inactive by default)
+      RETURNING id, name, email, role, employee_id AS "employeeId", department, is_active AS "isActive", status, company_id AS "companyId", created_at AS "createdAt"`,
       [name, email, hashedPassword, role || "user", employeeId || null, department || "sales", companyId]
     );
 
@@ -3409,21 +3409,21 @@ app.post("/users/bulk/action", authenticateToken, async (req, res) => {
     switch (action) {
       case 'activate':
         result = await pool.query(
-          "UPDATE users SET is_active = true, updated_at = NOW() WHERE id = ANY($1) RETURNING id, name",
+          "UPDATE users SET is_active = true, status = 'Active', updated_at = NOW() WHERE id = ANY($1) RETURNING id, name",
           [userIds]
         );
         break;
 
       case 'deactivate':
         result = await pool.query(
-          "UPDATE users SET is_active = false, updated_at = NOW() WHERE id = ANY($1) RETURNING id, name",
+          "UPDATE users SET is_active = false, status = 'Inactive', updated_at = NOW() WHERE id = ANY($1) RETURNING id, name",
           [userIds]
         );
         break;
 
       case 'delete':
         result = await pool.query(
-          "UPDATE users SET is_active = false, updated_at = NOW() WHERE id = ANY($1) RETURNING id, name",
+          "UPDATE users SET is_active = false, status = 'Inactive', updated_at = NOW() WHERE id = ANY($1) RETURNING id, name",
           [userIds]
         );
         break;
@@ -3772,22 +3772,19 @@ app.get("/api/plans", authenticateToken, async (req, res) => {
       {
         id: "starter",
         name: "Starter",
-        price: 599,
-        features: ["5 users", "100 leads/month", "Basic reports", "Email support"],
+        price: 600,
+        description: "For growing teams and small businesses.",
+        users: "1–50 Users",
+        features: ["Per Users", "15,000 contacts", "AI sales forecasting", "Workflow automation", "All integrations", "Custom dashboards", "Priority support", "SSO & RBAC"],
         popular: false
       },
       {
-        id: "professional",
-        name: "Professional",
-        price: 999,
-        features: ["20 users", "Unlimited leads", "AI insights", "Priority support", "Advanced reports"],
-        popular: true
-      },
-      {
-        id: "enterprise",
-        name: "Enterprise",
-        price: 1999,
-        features: ["Unlimited users", "Unlimited leads", "Custom integrations", "Dedicated support", "Custom reports"],
+        id: "custom",
+        name: "Custom",
+        price: null,
+        description: "Contact Sales for custom pricing based on your business requirements.",
+        users: "50+ Users",
+        features: ["Unlimited users", "Unlimited contacts", "Dedicated infrastructure", "Custom AI models", "On-premise option", "SLA guarantee", "Dedicated CSM", "Custom integrations"],
         popular: false
       }
     ];
@@ -4035,6 +4032,53 @@ app.post("/ai-insights/generate", authenticateToken, async (req, res) => {
 
 // ── COMPANY SUBSCRIPTION MANAGEMENT ──
 
+// Pricing calculation helper
+function calculatePricing({ planType, billingPeriod, activeUsers, pricePerUser }) {
+  const planPrices = {
+    'starter': 600,
+    'custom': 0
+  };
+
+  const basePricePerUser = planPrices[planType] !== undefined ? planPrices[planType] : (pricePerUser || 600);
+
+  const periodMonths = {
+    'monthly': 1,
+    'quarterly': 3,
+    'half_yearly': 6,
+    'yearly': 12
+  };
+  const months = periodMonths[billingPeriod] || 1;
+
+  const discounts = {
+    'monthly': 0,
+    'quarterly': 5,
+    'half_yearly': 10,
+    'yearly': 15
+  };
+  const discountPercent = discounts[billingPeriod] || 0;
+
+  const basePrice = activeUsers * basePricePerUser * months;
+  const discountAmount = basePrice * (discountPercent / 100);
+  const subtotal = basePrice - discountAmount;
+  const gst = subtotal * 0.18;
+  const total = subtotal + gst;
+
+  return {
+    activeUsers,
+    pricePerUser: basePricePerUser,
+    months,
+    basePrice: Math.round(basePrice * 100) / 100,
+    discountPercent,
+    discountAmount: Math.round(discountAmount * 100) / 100,
+    subtotal: Math.round(subtotal * 100) / 100,
+    gst: Math.round(gst * 100) / 100,
+    total: Math.round(total * 100) / 100,
+    billingCycle: billingPeriod,
+    planType,
+    currency: 'INR'
+  };
+}
+
 // GET company subscription details
 app.get("/api/company/subscription", authenticateToken, async (req, res) => {
   try {
@@ -4042,7 +4086,7 @@ app.get("/api/company/subscription", authenticateToken, async (req, res) => {
 
     // Get company details
     const companyRes = await pool.query(
-      "SELECT id, name, plan_type, billing_period, subscription_status, subscription_start, subscription_end, auto_renew FROM companies WHERE id = $1",
+      "SELECT id, name, plan_type, billing_period, subscription_status, subscription_start, subscription_end, auto_renew, price_per_user, active_users_count, last_billing_calculation FROM companies WHERE id = $1",
       [companyId]
     );
 
@@ -4052,58 +4096,97 @@ app.get("/api/company/subscription", authenticateToken, async (req, res) => {
 
     const company = companyRes.rows[0];
 
-    // Get active users count
-    const usersRes = await pool.query(
-      "SELECT COUNT(*) as active_count FROM users WHERE company_id = $1 AND is_active = true",
+    // Count active users (both is_active = true and status = 'Active')
+    const activeUsersResult = await pool.query(
+      "SELECT COUNT(*) as count FROM users WHERE company_id = $1 AND is_active = true AND status = 'Active'",
       [companyId]
     );
+    const activeUsers = parseInt(activeUsersResult.rows[0].count);
 
-    const activeUsers = parseInt(usersRes.rows[0].active_count);
+    // Count total and inactive users
+    const totalUsersResult = await pool.query(
+      "SELECT COUNT(*) as count FROM users WHERE company_id = $1",
+      [companyId]
+    );
+    const totalUsers = parseInt(totalUsersResult.rows[0].count);
+    const inactiveUsers = totalUsers - activeUsers;
 
-    // Pricing calculation
-    const planPrices = {
-      'starter': 499,
-      'professional': 1299,
-      'enterprise': 2499
-    };
+    // Calculate pricing based on plan and billing period
+    const pricing = calculatePricing({
+      planType: company.plan_type,
+      billingPeriod: company.billing_period,
+      activeUsers: activeUsers,
+      pricePerUser: company.price_per_user || 600
+    });
 
-    const basePrice = planPrices[company.plan_type] || 1299;
-    const subtotal = basePrice * activeUsers;
-
-    // Discount based on billing period
-    const discounts = {
-      'monthly': 0,
-      'quarterly': 5,
-      'half_yearly': 10,
-      'yearly': 15
-    };
-    const discount = discounts[company.billing_period] || 0;
-    const discountedSubtotal = subtotal * (1 - discount / 100);
-    const gst = discountedSubtotal * 0.18;
-    const total = discountedSubtotal + gst;
+    // Update active users count in companies table
+    await pool.query(
+      "UPDATE companies SET active_users_count = $1, last_billing_calculation = NOW() WHERE id = $2",
+      [activeUsers, companyId]
+    );
 
     res.json({
+      success: true,
       company: {
         plan_type: company.plan_type,
         billing_period: company.billing_period,
         subscription_status: company.subscription_status,
         subscription_start: company.subscription_start,
         subscription_end: company.subscription_end,
-        auto_renew: company.auto_renew
+        auto_renew: company.auto_renew,
+        price_per_user: company.price_per_user || 600,
+        active_users_count: activeUsers,
+        last_billing_calculation: company.last_billing_calculation
       },
       active_users: activeUsers,
-      pricing: {
-        base_price: basePrice,
-        subtotal: subtotal,
-        discount: discount,
-        discounted_subtotal: discountedSubtotal,
-        gst: gst,
-        total: total,
-        currency: 'INR'
+      pricing: pricing,
+      users: {
+        total: totalUsers,
+        active: activeUsers,
+        inactive: inactiveUsers
       }
     });
   } catch (error) {
     console.error("Company subscription error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET pricing calculation directly
+app.get("/api/company/subscription/pricing", authenticateToken, async (req, res) => {
+  try {
+    const companyId = req.user.company_id;
+
+    const companyRes = await pool.query(
+      "SELECT plan_type, billing_period, price_per_user FROM companies WHERE id = $1",
+      [companyId]
+    );
+
+    if (companyRes.rows.length === 0) {
+      return res.status(404).json({ error: "Company not found" });
+    }
+
+    const company = companyRes.rows[0];
+
+    const usersRes = await pool.query(
+      "SELECT COUNT(*) as active_count FROM users WHERE company_id = $1 AND is_active = true AND status = 'Active'",
+      [companyId]
+    );
+    const activeUsers = parseInt(usersRes.rows[0].active_count);
+
+    const pricing = calculatePricing({
+      planType: company.plan_type,
+      billingPeriod: company.billing_period,
+      activeUsers,
+      pricePerUser: company.price_per_user || 600
+    });
+
+    res.json({
+      success: true,
+      pricing
+    });
+  } catch (error) {
+    console.error("Get pricing error:", error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -4118,26 +4201,29 @@ app.put("/api/company/subscription", authenticateToken, async (req, res) => {
     const companyId = req.user.company_id;
     const { plan_type, billing_period, auto_renew } = req.body;
 
-    // Calculate new price
-    const planPrices = {
-      'starter': 499,
-      'professional': 1299,
-      'enterprise': 2499
-    };
+    // Validate
+    if (plan_type && !['starter', 'custom'].includes(plan_type)) {
+      return res.status(400).json({ error: 'Invalid plan type' });
+    }
 
+    if (billing_period && !['monthly', 'quarterly', 'half_yearly', 'yearly'].includes(billing_period)) {
+      return res.status(400).json({ error: 'Invalid billing period' });
+    }
+
+    // Count active users
     const usersRes = await pool.query(
-      "SELECT COUNT(*) as active_count FROM users WHERE company_id = $1 AND is_active = true",
+      "SELECT COUNT(*) as active_count FROM users WHERE company_id = $1 AND is_active = true AND status = 'Active'",
       [companyId]
     );
     const activeUsers = parseInt(usersRes.rows[0].active_count);
-    const basePrice = planPrices[plan_type] || 1299;
-    const amount = basePrice * activeUsers;
 
     const result = await pool.query(
       `UPDATE companies 
        SET plan_type = COALESCE($1, plan_type),
            billing_period = COALESCE($2, billing_period),
            auto_renew = COALESCE($3, auto_renew),
+           active_users_count = $5,
+           last_billing_calculation = NOW(),
            subscription_start = CASE WHEN $1 IS NOT NULL OR $2 IS NOT NULL THEN NOW() ELSE subscription_start END,
            subscription_end = CASE 
              WHEN $2 = 'monthly' THEN NOW() + INTERVAL '1 month'
@@ -4149,16 +4235,74 @@ app.put("/api/company/subscription", authenticateToken, async (req, res) => {
            updated_at = NOW()
        WHERE id = $4
        RETURNING *`,
-      [plan_type, billing_period, auto_renew, companyId]
+      [plan_type, billing_period, auto_renew, companyId, activeUsers]
     );
+
+    const company = result.rows[0];
+
+    // Calculate new pricing
+    const pricing = calculatePricing({
+      planType: company.plan_type,
+      billingPeriod: company.billing_period,
+      activeUsers,
+      pricePerUser: company.price_per_user || 600
+    });
 
     res.json({
       success: true,
       message: "Subscription updated successfully",
-      company: result.rows[0]
+      company,
+      pricing,
+      active_users: activeUsers
     });
   } catch (error) {
     console.error("Update subscription error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/company/subscription/quote - Request custom quote
+app.post("/api/company/subscription/quote", authenticateToken, async (req, res) => {
+  try {
+    const companyId = req.user.company_id;
+
+    await pool.query(
+      "INSERT INTO subscription_quotes (company_id, status, requested_at) VALUES ($1, 'pending', NOW())",
+      [companyId]
+    );
+
+    res.json({
+      success: true,
+      message: "Quote requested successfully. Our sales team will contact you shortly."
+    });
+  } catch (error) {
+    console.error("Request quote error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/company/subscription/quote-status - Check quote status
+app.get("/api/company/subscription/quote-status", authenticateToken, async (req, res) => {
+  try {
+    const companyId = req.user.company_id;
+
+    const result = await pool.query(
+      "SELECT status, requested_at FROM subscription_quotes WHERE company_id = $1 ORDER BY requested_at DESC LIMIT 1",
+      [companyId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.json({ success: true, has_quote: false });
+    }
+
+    res.json({
+      success: true,
+      has_quote: true,
+      status: result.rows[0].status,
+      requested_at: result.rows[0].requested_at
+    });
+  } catch (error) {
+    console.error("Get quote status error:", error);
     res.status(500).json({ error: error.message });
   }
 });

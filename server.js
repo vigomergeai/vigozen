@@ -339,11 +339,12 @@ const authenticateToken = (req, res, next) => {
     });
   }
 
-  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+  jwt.verify(token, process.env.JWT_SECRET || "your-super-secret-key-change-this-later-12345", (err, user) => {
     if (err) {
       console.log("JWT ERROR:", err);
       return res.status(403).json({
-        error: "Invalid token"
+        error: "Invalid token",
+        details: err.message
       });
     }
 
@@ -2062,7 +2063,7 @@ app.post("/auth/signup", async (req, res) => {
         company_id: user.company_id,
         role: user.role
       },
-      process.env.JWT_SECRET,
+      process.env.JWT_SECRET || "your-super-secret-key-change-this-later-12345",
       {
         expiresIn: "7d"
       }
@@ -2124,7 +2125,7 @@ app.post("/auth/login", async (req, res) => {
         company_id: user.company_id,
         role: user.role
       },
-      process.env.JWT_SECRET,
+      process.env.JWT_SECRET || "your-super-secret-key-change-this-later-12345",
       {
         expiresIn: "7d"
       }

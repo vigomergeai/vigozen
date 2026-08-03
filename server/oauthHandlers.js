@@ -19,11 +19,12 @@ const authenticateToken = (req, res, next) => {
         });
     }
 
-    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+    jwt.verify(token, process.env.JWT_SECRET || "your-super-secret-key-change-this-later-12345", (err, user) => {
         if (err) {
             console.log("JWT ERROR in oauthHandlers:", err);
             return res.status(403).json({
-                error: "Invalid token"
+                error: "Invalid token",
+                details: err.message
             });
         }
         req.user = user;

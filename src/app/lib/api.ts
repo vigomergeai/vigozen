@@ -220,6 +220,11 @@ export const api = {
     sync: (id: string, token: string) => request("POST", `/ad-connections/${id}/sync`, undefined, token),
     updateCount: (platform: string, leadsCount: number, cost: number, token: string) =>
       request("PUT", "/ad-connections/update-count", { platform, leadsCount, cost }, token),
+    // ── NEW METHODS ──
+    getSyncLogs: (id: string, token: string) =>
+      request("GET", `/ad-connections/${id}/sync-logs`, undefined, token),
+    getStats: (token: string) =>
+      request("GET", `/ad-connections/stats`, undefined, token),
   },
   sessions: {
     list: (userId: string, token: string) => request("GET", `/user-sessions/${userId}`, undefined, token),
@@ -419,6 +424,9 @@ export const api = {
 
     callback: (platform: string, code: string) =>
       request("GET", `/api/ad-connections/oauth/${platform}/callback?code=${code}`, undefined, undefined),
+
+    refresh: (connectionId: string, token: string) =>
+      request("POST", `/oauth/refresh`, { connectionId }, token),
   },
 
 

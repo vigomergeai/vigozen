@@ -149,6 +149,13 @@ export default function SettingsPage() {
   const [syncing, setSyncing] = useState<string | null>(null);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
+  // ── Ad Stats State ──
+  const [adStats, setAdStats] = useState({
+    total_platforms: 0,
+    total_leads_imported: 0,
+    connected_platforms: 0,
+    last_sync_time: null as string | null
+  });
 
   // ── Billing Calculator State ──
   const activeUsers = Math.max(users?.filter(u => u.isActive).length || 0, 1);
@@ -704,6 +711,9 @@ export default function SettingsPage() {
     }
   }, []);
 
+
+
+
   // ── Handle OAuth Callback Params ──
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -722,6 +732,27 @@ export default function SettingsPage() {
     }
   }, []);
 
+
+  // ── Fetch Ad Connection Stats ──
+  useEffect(() => {
+    const fetchAdStats = async () => {
+      try {
+        const token = localStorage.getItem('token') || session?.access_token;
+        if (!token) return;
+
+        const stats = await api.adConnections.getStats(token);
+        setAdStats(stats);
+      } catch (error) {
+        console.error('Failed to fetch ad stats:', error);
+      }
+    };
+
+    if (activeTab === "integrations") {
+      fetchAdStats();
+    }
+  }, [activeTab]);
+
+
   // ── Load subscription data ──
   useEffect(() => {
     if (userProfile?.id && role === "admin") {
@@ -732,6 +763,9 @@ export default function SettingsPage() {
       fetchAdConnections();
     }
   }, [userProfile?.id, role]);
+
+
+
 
   // Fetch billing history from backend
   useEffect(() => {
@@ -1442,14 +1476,35 @@ export default function SettingsPage() {
               {/* Stats Summary */}
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
                 {[
-                  { label: "Connected Platforms", value: adConnections.filter(c => c.connected !== false).length, color: "text-emerald-600" },
-                  { label: "Total Leads Imported", value: adConnections.reduce((s, c) => s + (c.leads_imported || 0), 0), color: "text-indigo-600" },
-                  { label: "Total Ad Spend", value: `₹${Math.floor(adConnections.reduce((s, c) => s + (c.cost_spent || 0), 0)).toLocaleString()}`, color: "text-amber-600" },
-                  { label: "Auto-Sync", value: autoSyncEnabled ? "ON" : "OFF", color: autoSyncEnabled ? "text-emerald-600" : "text-slate-400" },
+                  {
+                    label: "Connected Platforms",
+                    value: adStats.connected_platforms || adConnections.filter(c => c.connected !== false).length,
+                    color: "text-emerald-600"
+                  },
+                  {
+                    label: "Total Leads Imported",
+                    value: adStats.total_leads_imported || adConnections.reduce((s, c) => s + (c.leads_imported || 0), 0),
+                    color: "text-indigo-600"
+                  },
+                  {
+                    label: "Total Ad Spend",
+                    value: `₹${Math.floor(adConnections.reduce((s, c) => s + (c.cost_spent || 0), 0)).toLocaleString()}`,
+                    color: "text-amber-600"
+                  },
+                  {
+                    label: "Auto-Sync",
+                    value: autoSyncEnabled ? "ON" : "OFF",
+                    color: autoSyncEnabled ? "text-emerald-600" : "text-slate-400"
+                  },
                 ].map(stat => (
                   <div key={stat.label} className="bg-white rounded-2xl p-3 sm:p-4 border border-slate-100 shadow-sm">
                     <div className={`text-base sm:text-lg font-bold ${stat.color}`}>{stat.value}</div>
                     <div className="text-[10px] sm:text-xs text-slate-400">{stat.label}</div>
+                    {stat.label === "Connected Platforms" && adStats.last_sync_time && (
+                      <div className="text-[8px] text-slate-300 mt-0.5">
+                        Last sync: {new Date(adStats.last_sync_time).toLocaleString()}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

@@ -18,6 +18,8 @@ const path = require("path");
 
 require("dotenv").config();
 
+
+
 // Create uploads folder if it doesn't exist
 const uploadDir = path.join(__dirname, 'uploads/avatars');
 if (!fs.existsSync(uploadDir)) {
@@ -279,7 +281,7 @@ const upload = multer({
       ADD COLUMN IF NOT EXISTS api_key TEXT,
       ADD COLUMN IF NOT EXISTS webhook_url TEXT,
       ADD COLUMN IF NOT EXISTS description TEXT
-    `).catch(() => {});
+    `).catch(() => { });
 
     // ── AD SYNC LOGS TABLE ──
     await pool.query(`
@@ -293,7 +295,7 @@ const upload = multer({
         completed_at TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
-    `).catch(() => {});
+    `).catch(() => { });
 
     console.log("✅ Auto-migration: DB tables ready");
   } catch (err) {
@@ -419,6 +421,10 @@ app.options('{*splat}', (req, res) => {
 
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Import OAuth handlers
+const oauthHandlers = require('./server/oauthHandlers');
+app.use('/api/oauth', oauthHandlers);
 
 // Conditional upload helper: applies multer only if the request has multipart/form-data
 const conditionalUpload = (req, res, next) => {
@@ -2454,185 +2460,25 @@ app.post("/ad-connections/:id/sync", authenticateToken, async (req, res) => {
   try {
     const connectionId = req.params.id;
     const userId = req.user.id;
-    
-    // Get connection details
-    const connResult = await pool.query(
+
+    const result = await pool.query(
       "SELECT * FROM ad_connections WHERE id = $1 AND user_id = $2",
       [connectionId, userId]
     );
-    
-    if (connResult.rows.length === 0) {
-      return res.status(404).json({ error: "Connection not found" });
-    }
-    
-    const connection = connResult.rows[0];
-    const platform = connection.platform;
-    const accessToken = connection.access_token;
-    
-    // Start sync log
-    const logResult = await pool.query(`
-      INSERT INTO ad_sync_logs (connection_id, status, started_at)
-      VALUES ($1, 'running', NOW())
-      RETURNING id
-    `, [connectionId]);
-    
-    const logId = logResult.rows[0].id;
-    
-    let newLeads = 0;
-    let newCost = 0;
-    let leadData = [];
-    let error = null;
-    
-    try {
-      // ── Platform-specific lead fetching ──
-      switch (platform) {
-        case 'facebook':
-          // Fetch Facebook Lead Ads
-          const fbResponse = await fetch(
-            `https://graph.facebook.com/v18.0/${connection.account_id}/leads?access_token=${accessToken}&fields=id,field_data,ad_id,created_time`
-          );
-          const fbData = await fbResponse.json();
-          
-          if (fbData.data) {
-            leadData = fbData.data.map((lead) => ({
-              name: lead.field_data.find((f) => f.name === 'full_name')?.values?.[0] || 'Facebook Lead',
-              email: lead.field_data.find((f) => f.name === 'email')?.values?.[0] || '',
-              phone: lead.field_data.find((f) => f.name === 'phone_number')?.values?.[0] || '',
-              company: lead.field_data.find((f) => f.name === 'company_name')?.values?.[0] || '',
-              source: 'facebook',
-              created_at: lead.created_time
-            }));
-            newLeads = leadData.length;
-          }
-          break;
-          
-        case 'google':
-          // Google Ads API
-          const googleResponse = await fetch(
-            `https://googleads.googleapis.com/v12/customers/${connection.account_id}/googleAds:search`,
-            {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${accessToken}`,
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({
-                query: "SELECT customer.id, campaign.name, metrics.clicks, metrics.cost_micros FROM campaign"
-              })
-            }
-          );
-          const googleData = await googleResponse.json();
-          newLeads = googleData.results?.length || 0;
-          break;
-          
-        case 'linkedin':
-          // LinkedIn Lead Gen Forms
-          const linkedinResponse = await fetch(
-            `https://api.linkedin.com/v2/adAccounts/${connection.account_id}/leadGenForms`,
-            {
-              headers: { 'Authorization': `Bearer ${accessToken}` }
-            }
-          );
-          const linkedinData = await linkedinResponse.json();
-          newLeads = linkedinData.elements?.length || 0;
-          break;
-          
-        case 'instagram':
-          // Instagram Ads via Facebook Graph API
-          const instaResponse = await fetch(
-            `https://graph.facebook.com/v18.0/${connection.account_id}/leadgen_forms?access_token=${accessToken}`
-          );
-          const instaData = await instaResponse.json();
-          newLeads = instaData.data?.length || 0;
-          break;
-          
-        default:
-          error = 'Unsupported platform';
-      }
-      
-      // ── Create CRM leads if auto-create is enabled ──
-      const userSettingsResult = await pool.query(
-        "SELECT ad_auto_create FROM user_settings WHERE user_id = $1",
-        [userId]
-      );
-      const autoCreate = userSettingsResult.rows[0]?.ad_auto_create === true;
-      
-      if (autoCreate && newLeads > 0 && leadData.length > 0) {
-        for (const lead of leadData.slice(0, 10)) { // Limit to 10 per sync
-          await pool.query(
-            `INSERT INTO leads (id, name, email, phone, company, source, status, value, created_at, owner_id, company_id)
-             VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, 'new', 0, COALESCE($6::TIMESTAMP, NOW()), $7, $8)
-             ON CONFLICT (email) WHERE email IS NOT NULL AND email != '' DO NOTHING`,
-            [
-              lead.name || 'Ad Lead',
-              lead.email || null,
-              lead.phone || null,
-              lead.company || null,
-              platform || 'ad_platform',
-              lead.created_at || null,
-              req.user.id,
-              req.user.company_id
-            ]
-          );
-        }
-      }
-      
-      // Update sync log
-      await pool.query(`
-        UPDATE ad_sync_logs 
-        SET status = 'success', 
-            leads_imported = $1,
-            completed_at = NOW()
-        WHERE id = $2
-      `, [newLeads, logId]);
-      
-    } catch (syncError) {
-      error = syncError.message;
-      
-      // Update sync log with error
-      await pool.query(`
-        UPDATE ad_sync_logs 
-        SET status = 'failed', 
-            errors = $1::jsonb,
-            completed_at = NOW()
-        WHERE id = $2
-      `, [JSON.stringify([error]), logId]);
-    }
-    
-    // ── Update ad connection ──
-    const result = await pool.query(`
-      UPDATE ad_connections
-      SET leads_imported = leads_imported + $1,
-          cost_spent = cost_spent + $2,
-          last_sync = NOW(),
-          last_sync_status = $3,
-          last_sync_error = $4,
-          last_sync_count = $1,
-          updated_at = NOW()
-      WHERE id = $5 AND user_id = $6
-      RETURNING *
-    `, [
-      newLeads,
-      newCost,
-      error ? 'failed' : 'success',
-      error || null,
-      connectionId,
-      userId
-    ]);
-    
+
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "Connection not found" });
     }
-    
+
+    // Use the syncConnection helper
+    const syncResult = await syncConnection(result.rows[0]);
+
     res.json({
       success: true,
-      leads_imported: newLeads,
-      cost_spent: newCost,
-      error: error || null,
-      sync_log_id: logId,
+      leads_imported: syncResult.leads_fetched,
       connection: result.rows[0]
     });
-    
+
   } catch (err) {
     console.error("SYNC AD LEADS ERROR:", err);
     res.status(500).json({ error: err.message });
@@ -2668,6 +2514,7 @@ app.put("/ad-connections/update-count", authenticateToken, async (req, res) => {
 // ── OAUTH CONFIG AND ROUTES ──
 const OAUTH_CONFIG = {
   facebook: {
+    name: 'Facebook',  // ← ADD THIS
     authorizeUrl: 'https://www.facebook.com/v18.0/dialog/oauth',
     tokenUrl: 'https://graph.facebook.com/v18.0/oauth/access_token',
     scope: 'ads_management,leads_retrieval,pages_read_engagement,pages_manage_ads',
@@ -2676,6 +2523,7 @@ const OAUTH_CONFIG = {
     redirectUri: process.env.FACEBOOK_REDIRECT_URI || `${process.env.APP_URL}/api/ad-connections/oauth/facebook/callback`
   },
   google: {
+    name: 'Google',
     authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
     tokenUrl: 'https://oauth2.googleapis.com/token',
     scope: 'https://www.googleapis.com/auth/adwords',
@@ -2684,6 +2532,7 @@ const OAUTH_CONFIG = {
     redirectUri: process.env.GOOGLE_REDIRECT_URI || `${process.env.APP_URL}/api/ad-connections/oauth/google/callback`
   },
   linkedin: {
+    name: 'LinkedIn',
     authorizeUrl: 'https://www.linkedin.com/oauth/v2/authorization',
     tokenUrl: 'https://www.linkedin.com/oauth/v2/accessToken',
     scope: 'r_ads_leadgen,marketing_ads,marketplace_analytics',
@@ -2692,6 +2541,7 @@ const OAUTH_CONFIG = {
     redirectUri: process.env.LINKEDIN_REDIRECT_URI || `${process.env.APP_URL}/api/ad-connections/oauth/linkedin/callback`
   },
   instagram: {
+    name: 'Instagram',
     authorizeUrl: 'https://api.instagram.com/oauth/authorize',
     tokenUrl: 'https://api.instagram.com/oauth/access_token',
     scope: 'instagram_basic,pages_read_engagement,leads_retrieval',
@@ -2701,20 +2551,163 @@ const OAUTH_CONFIG = {
   }
 };
 
+
+
+// ── SYNC CONNECTION HELPER ──
+// Add this after all OAuth routes (around line 1850-1900)
+
+async function syncConnection(connection) {
+  try {
+    console.log(`🔄 Syncing ${connection.platform}...`);
+
+    const credentials = {
+      accessToken: connection.access_token,
+      refreshToken: connection.refresh_token,
+      clientId: connection.client_id,
+      clientSecret: connection.client_secret
+    };
+
+    const integration = createPlatformIntegration(connection.platform, credentials);
+    const since = connection.last_sync || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    let rawLeads = [];
+    switch (connection.platform) {
+      case 'facebook':
+        rawLeads = await integration.fetchAllLeads(connection.account_id, since);
+        break;
+      case 'google':
+      case 'linkedin':
+      case 'instagram':
+        // For now return empty array for other platforms
+        rawLeads = [];
+        break;
+      default:
+        throw new Error(`Unsupported platform: ${connection.platform}`);
+    }
+
+    const mappedLeads = mapMultipleLeadsToCRM(connection.platform, rawLeads);
+    let importedCount = 0;
+
+    const settingsResult = await pool.query(
+      "SELECT ad_auto_create FROM user_settings WHERE user_id = $1",
+      [connection.user_id]
+    );
+    const autoCreate = settingsResult.rows[0]?.ad_auto_create || false;
+
+    if (autoCreate && mappedLeads.length > 0) {
+      for (const lead of mappedLeads) {
+        try {
+          const existing = await pool.query(
+            "SELECT id FROM leads WHERE platform_id = $1 AND company_id = $2",
+            [lead.platform_id, connection.company_id]
+          );
+          if (existing.rows.length === 0) {
+            await pool.query(
+              `INSERT INTO leads (id, name, email, phone, company, source, platform, platform_id, status, owner_id, company_id)
+               VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, 'new', $8, $9)`,
+              [lead.name, lead.email, lead.phone, lead.company, lead.source, lead.platform, lead.platform_id, connection.user_id, connection.company_id]
+            );
+            importedCount++;
+          }
+        } catch (err) {
+          console.error('Import lead error:', err);
+        }
+      }
+    }
+
+    await pool.query(
+      `UPDATE ad_connections 
+       SET leads_imported = leads_imported + $1, last_sync = NOW(), last_sync_status = 'success', last_sync_error = NULL
+       WHERE id = $2`,
+      [rawLeads.length, connection.id]
+    );
+
+    await pool.query(
+      `INSERT INTO ad_sync_logs (connection_id, status, leads_imported, started_at, completed_at)
+       VALUES ($1, 'success', $2, NOW(), NOW())`,
+      [connection.id, importedCount]
+    );
+
+    return { success: true, leads_fetched: rawLeads.length, leads_imported: importedCount, platform: connection.platform };
+
+  } catch (error) {
+    console.error('Sync error:', error);
+    await pool.query(
+      `UPDATE ad_connections SET last_sync_status = 'failed', last_sync_error = $1, last_sync = NOW() WHERE id = $2`,
+      [error.message, connection.id]
+    );
+    await pool.query(
+      `INSERT INTO ad_sync_logs (connection_id, status, errors, started_at, completed_at)
+       VALUES ($1, 'failed', $2::jsonb, NOW(), NOW())`,
+      [connection.id, JSON.stringify([error.message])]
+    );
+    throw error;
+  }
+}
+
+// ── MANUAL SYNC ENDPOINTS ──
+// Add after OAuth callback routes
+
+app.post("/api/ad-connections/:id/sync-manual", authenticateToken, async (req, res) => {
+  try {
+    const connectionId = req.params.id;
+    const userId = req.user.id;
+
+    const result = await pool.query(
+      "SELECT * FROM ad_connections WHERE id = $1 AND user_id = $2",
+      [connectionId, userId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Connection not found" });
+    }
+
+    const syncResult = await syncConnection(result.rows[0]);
+    res.json({ success: true, ...syncResult });
+  } catch (error) {
+    console.error("Manual sync error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/ad-connections/sync-all", authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const connections = await pool.query(
+      "SELECT * FROM ad_connections WHERE user_id = $1 AND connected = true",
+      [userId]
+    );
+
+    const results = [];
+    for (const connection of connections.rows) {
+      try {
+        const syncResult = await syncConnection(connection);
+        results.push({ connection_id: connection.id, platform: connection.platform, ...syncResult });
+      } catch (error) {
+        results.push({ connection_id: connection.id, platform: connection.platform, success: false, error: error.message });
+      }
+    }
+
+    res.json({ success: true, total: connections.rows.length, results });
+  } catch (error) {
+    console.error("Sync all error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // OAuth Authorize Redirect
 app.get("/api/ad-connections/oauth/:platform/authorize", authenticateToken, async (req, res) => {
   try {
     const { platform } = req.params;
     const config = OAUTH_CONFIG[platform];
-    
+
     if (!config) {
       return res.status(400).json({ error: "Unsupported platform" });
     }
-    
+
     const state = Buffer.from(JSON.stringify({ userId: req.user.id, platform })).toString('base64');
-    
+
     const authUrl = `${config.authorizeUrl}?client_id=${config.clientId}&redirect_uri=${config.redirectUri}&scope=${config.scope}&response_type=code&state=${state}`;
-    
+
     res.json({ authUrl });
   } catch (error) {
     console.error("OAuth authorize error:", error);
@@ -2727,16 +2720,16 @@ app.get("/api/ad-connections/oauth/:platform/callback", async (req, res) => {
   try {
     const { platform } = req.params;
     const { code, state } = req.query;
-    
+
     if (!code) {
       return res.status(400).json({ error: "Authorization code required" });
     }
-    
+
     const config = OAUTH_CONFIG[platform];
     if (!config) {
       return res.status(400).json({ error: "Unsupported platform" });
     }
-    
+
     // Exchange code for access token
     const tokenResponse = await fetch(config.tokenUrl, {
       method: 'POST',
@@ -2749,17 +2742,17 @@ app.get("/api/ad-connections/oauth/:platform/callback", async (req, res) => {
         grant_type: 'authorization_code'
       })
     });
-    
+
     const tokenData = await tokenResponse.json();
-    
+
     if (!tokenResponse.ok) {
       throw new Error(tokenData.error_description || 'Failed to get access token');
     }
-    
+
     // Get platform account info
     let accountId = null;
     let accountName = null;
-    
+
     if (platform === 'facebook') {
       const accountRes = await fetch(`https://graph.facebook.com/v18.0/me/adaccounts?access_token=${tokenData.access_token}`);
       const accountData = await accountRes.json();
@@ -2794,10 +2787,10 @@ app.get("/api/ad-connections/oauth/:platform/callback", async (req, res) => {
         accountName = accountData.data[0].name;
       }
     }
-    
+
     // Store connection in database
     const stateData = JSON.parse(Buffer.from(state, 'base64').toString());
-    
+
     const result = await pool.query(`
       INSERT INTO ad_connections 
         (user_id, platform, platform_name, connected, account_id, account_name, access_token, refresh_token, token_expires_at, leads_imported, cost_spent, created_at, updated_at)
@@ -2822,11 +2815,11 @@ app.get("/api/ad-connections/oauth/:platform/callback", async (req, res) => {
       tokenData.refresh_token || null,
       tokenData.expires_in ? new Date(Date.now() + tokenData.expires_in * 1000) : new Date(Date.now() + 24 * 60 * 60 * 1000)
     ]);
-    
+
     // Redirect back to frontend
     const FRONTEND_URL = process.env.APP_URL || 'http://localhost:5173';
     res.redirect(`${FRONTEND_URL}/settings?tab=integrations&connected=${platform}`);
-    
+
   } catch (error) {
     console.error("OAuth callback error:", error);
     const FRONTEND_URL = process.env.APP_URL || 'http://localhost:5173';
@@ -4430,27 +4423,27 @@ app.post("/api/invoices/generate", authenticateToken, async (req, res) => {
   try {
     const { subscription_id, billing_period_start, billing_period_end } = req.body;
     const companyId = req.user.company_id;
-    
+
     // Get subscription details
     const subRes = await pool.query(
       "SELECT * FROM subscriptions WHERE id = $1 AND company_id = $2",
       [subscription_id, companyId]
     );
-    
+
     if (subRes.rows.length === 0) {
       return res.status(404).json({ error: "Subscription not found" });
     }
-    
+
     const subscription = subRes.rows[0];
     const amount = subscription.amount || 0;
     const gst = amount * 0.18;
     const cgst = amount * 0.09;
     const sgst = amount * 0.09;
     const total = amount + gst;
-    
+
     // Generate invoice number
     const invoiceNumber = `INV-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-    
+
     const result = await pool.query(`
       INSERT INTO invoices 
         (subscription_id, company_id, invoice_number, amount, gst_amount, cgst, sgst, total_amount, status, due_date, billing_period_start, billing_period_end)
@@ -4468,7 +4461,7 @@ app.post("/api/invoices/generate", authenticateToken, async (req, res) => {
       billing_period_start || new Date().toISOString(),
       billing_period_end || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
     ]);
-    
+
     res.json(result.rows[0]);
   } catch (error) {
     console.error("Generate invoice error:", error);
@@ -4481,77 +4474,77 @@ app.get("/api/invoices/download/:id", authenticateToken, async (req, res) => {
   try {
     const invoiceId = req.params.id;
     const companyId = req.user.company_id;
-    
+
     const result = await pool.query(`
       SELECT i.*, c.name as company_name, c.plan_type 
       FROM invoices i
       JOIN companies c ON i.company_id = c.id
       WHERE i.id = $1 AND i.company_id = $2
     `, [invoiceId, companyId]);
-    
+
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "Invoice not found" });
     }
-    
+
     const invoice = result.rows[0];
-    
+
     // Generate PDF using PDFDocument
     const doc = new PDFDocument({ margin: 50 });
     const filename = `invoice-${invoice.invoice_number}.pdf`;
-    
+
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename=${filename}`);
     doc.pipe(res);
-    
+
     // ── Invoice PDF Content ──
     doc.fontSize(24).fillColor('#4F46E5').text("VIGOZEN CRM", { align: "center" });
     doc.fontSize(10).fillColor('#64748B').text("Invoice", { align: "center" });
     doc.moveDown(2);
-    
+
     doc.fontSize(12).fillColor('#1E293B').text(`Invoice #: ${invoice.invoice_number}`);
     doc.fontSize(10).fillColor('#64748B').text(`Date: ${new Date(invoice.created_at).toLocaleDateString()}`);
     doc.fontSize(10).fillColor('#64748B').text(`Due Date: ${new Date(invoice.due_date).toLocaleDateString()}`);
     doc.moveDown(2);
-    
+
     doc.fontSize(12).fillColor('#1E293B').text("Company Details");
     doc.fontSize(10).fillColor('#64748B').text(`Name: ${invoice.company_name || 'Vigozen'}`);
     doc.text(`Plan: ${invoice.plan_type || 'Professional'}`);
     doc.moveDown(2);
-    
+
     doc.fontSize(12).fillColor('#1E293B').text("Invoice Details");
     doc.moveDown(0.5);
-    
+
     // Table header
     const tableTop = doc.y;
     doc.fontSize(10).fillColor('#475569');
     doc.text("Description", 50, tableTop);
     doc.text("Amount", 400, tableTop);
     doc.moveDown();
-    
+
     doc.moveTo(50, doc.y).lineTo(550, doc.y).stroke();
     doc.moveDown();
-    
+
     doc.fontSize(10).fillColor('#334155');
     doc.text(`Subscription (${invoice.plan_type || 'CRM'})`, 50, doc.y);
     doc.text(`₹${invoice.amount.toLocaleString()}`, 400, doc.y);
     doc.moveDown();
-    
+
     doc.fontSize(10).fillColor('#64748B');
     doc.text(`GST (18%)`, 50, doc.y);
     doc.text(`₹${invoice.gst_amount.toLocaleString()}`, 400, doc.y);
     doc.moveDown();
-    
+
     doc.moveTo(50, doc.y).lineTo(550, doc.y).stroke();
     doc.moveDown();
-    
+
     doc.fontSize(12).fillColor('#1E293B').text("Total", 50, doc.y);
     doc.fontSize(14).fillColor('#4F46E5').text(`₹${invoice.total_amount.toLocaleString()}`, 400, doc.y);
     doc.moveDown(2);
-    
+
     doc.fontSize(10).fillColor('#64748B').text("Status", 50, doc.y);
     const statusColor = invoice.status === 'paid' ? '#10B981' : '#F59E0B';
     doc.fillColor(statusColor).text(invoice.status.toUpperCase(), 400, doc.y);
-    
+
     doc.end();
   } catch (error) {
     console.error("Invoice download error:", error);
@@ -4564,18 +4557,18 @@ app.post("/api/invoices/:id/mark-paid", authenticateToken, async (req, res) => {
   try {
     const invoiceId = req.params.id;
     const companyId = req.user.company_id;
-    
+
     const result = await pool.query(`
       UPDATE invoices 
       SET status = 'paid', paid_at = NOW()
       WHERE id = $1 AND company_id = $2
       RETURNING *
     `, [invoiceId, companyId]);
-    
+
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "Invoice not found" });
     }
-    
+
     res.json({ success: true, invoice: result.rows[0] });
   } catch (error) {
     console.error("Mark paid error:", error);
@@ -4588,31 +4581,8 @@ app.listen(5000, "0.0.0.0", () => {
   startNotificationWorker();
 });
 
-// ── Change 4: Auto-sync background worker (every 15 minutes) ──
-setInterval(async () => {
-  try {
-    console.log("🔄 Running auto-sync for ad connections...");
-
-    // Find all connections where auto-sync is enabled
-    const connections = await pool.query(`
-      SELECT ac.* FROM ad_connections ac
-      JOIN user_settings us ON us.user_id = ac.user_id
-      WHERE us.ad_auto_sync = true
-        AND ac.connected = true
-    `);
-
-    for (const conn of connections.rows) {
-      console.log(`  → Syncing ${conn.platform}...`);
-      await pool.query(
-        `UPDATE ad_connections SET last_sync = NOW() WHERE id = $1`,
-        [conn.id]
-      );
-    }
-
-    console.log(`✅ Auto-sync completed for ${connections.rows.length} connections`);
-  } catch (error) {
-    console.error("Auto-sync error:", error);
-  }
-}, 15 * 60 * 1000); // every 15 minutes
+// Start cron job for background sync
+require('./server/cronSync');
+console.log('⏰ Cron sync job started');
 
 // Nodemon trigger restart comment

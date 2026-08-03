@@ -75,10 +75,14 @@ export interface PriceItem {
   id: string;
   name: string;
   category: string;
-  price?: number; 
+  price?: number;
   billing: "Monthly" | "Annual" | "One-time" | "Custom";
   features: string[];
   isPopular: boolean;
+  description?: string;
+  users?: string;
+  minUsers?: number;
+  maxUsers?: number;
 }
 
 export interface Integration {
@@ -140,33 +144,32 @@ export const integrations: Integration[] = [
 ];
 
 
-  export const priceList: PriceItem[] = [
-  { 
-    id: "p1", 
-    name: "Starter", 
-    category: "CRM Plans", 
-    price: 599, 
-    billing: "Monthly", 
-    features: ["Per Users", "15,000 contacts", "AI sales forecasting", "Workflow automation", "All integrations", "Custom dashboards", "Priority support", "SSO & RBAC"], 
-    isPopular: false 
+export const priceList: PriceItem[] = [
+  {
+    id: "starter",
+    name: "Starter",
+    category: "CRM Plans",
+    price: 600,
+    billing: "Monthly",
+    features: ["Per Users", "15,000 contacts", "AI sales forecasting", "Workflow automation", "All integrations", "Custom dashboards", "Priority support", "SSO & RBAC"],
+    isPopular: false,
+    description: "For growing teams and small businesses.",
+    users: "1–50 Users",
+    minUsers: 1,
+    maxUsers: 50
   },
-  { 
-    id: "p2", 
-    name: "Professional", 
-    category: "CRM Plans", 
-    price: 999, 
-    billing: "Monthly", 
-    features: ["Per Users", "50,000 contacts", "AI sales forecasting", "Workflow automation", "All integrations", "Custom dashboards", "Priority support", "SSO & RBAC"], 
-    isPopular: true 
-  },
-  { 
-    id: "p3", 
-    name: "Enterprise", 
-    category: "CRM Plans", 
-    price: undefined, 
-    billing: "Custom", 
-    features: ["Unlimited users", "Unlimited contacts", "Dedicated infrastructure", "Custom AI models", "On-premise option", "SLA guarantee", "Dedicated CSM", "Custom integrations"], 
-    isPopular: false 
+  {
+    id: "custom",
+    name: "Custom",
+    category: "CRM Plans",
+    price: undefined,
+    billing: "Custom",
+    features: ["Unlimited users", "Unlimited contacts", "Dedicated infrastructure", "Custom AI models", "On-premise option", "SLA guarantee", "Dedicated CSM", "Custom integrations"],
+    isPopular: false,
+    description: "Contact Sales for custom pricing based on your business requirements.",
+    users: "50+ Users",
+    minUsers: 50,
+    maxUsers: undefined
   },
 
   //{ id: "p4", name: "Annual Starter", category: "CRM Plans", price: 9990, billing: "Annual", features: ["All Starter features", "2 months free", "Onboarding support"], isPopular: false },

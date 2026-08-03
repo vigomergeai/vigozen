@@ -47,6 +47,7 @@ interface Plan {
     popular?: boolean;
     userLimit?: number;
     icon?: string;
+    users?: string;
 }
 
 interface Invoice {
@@ -73,52 +74,21 @@ const PLANS: Plan[] = [
     {
         id: "starter",
         name: "Starter",
-        price: 499,
-        description: "For small teams and basic CRM needs",
+        price: 600,
+        description: "For growing teams and small businesses.",
         icon: "🚀",
-        features: ["5 Users", "100 Leads/month", "Basic Reports", "Email Support", "2GB Storage"],
-        userLimit: 5,
-    },
-    {
-        id: "professional",
-        name: "Professional",
-        price: 1299,
-        description: "Advanced features for growing businesses",
-        icon: "💼",
-        features: [
-            "50 Users",
-            "Unlimited Leads",
-            "AI Insights",
-            "Priority Support",
-            "10GB Storage",
-            "Advanced Reports",
-        ],
-        popular: true,
+        features: ["Per Users", "15,000 contacts", "AI sales forecasting", "Workflow automation", "All integrations", "Custom dashboards", "Priority support", "SSO & RBAC"],
         userLimit: 50,
-    },
-    {
-        id: "enterprise",
-        name: "Enterprise",
-        price: 2499,
-        description: "Full-scale solutions for large organizations",
-        icon: "🏢",
-        features: [
-            "Unlimited Users",
-            "Custom Integrations",
-            "Dedicated Support",
-            "50GB Storage",
-            "Custom Reports",
-            "SLA Agreement",
-        ],
-        userLimit: 999,
+        users: "1–50 Users",
     },
     {
         id: "custom",
         name: "Custom",
         price: 0,
-        description: "Contact our sales team for custom pricing",
+        description: "Contact Sales for custom pricing based on your business requirements.",
         icon: "🤝",
-        features: ["Custom Features", "Personalized Support", "SLA Agreement"],
+        features: ["Unlimited users", "Unlimited contacts", "Dedicated infrastructure", "Custom AI models", "On-premise option", "SLA guarantee", "Dedicated CSM", "Custom integrations"],
+        users: "50+ Users",
     },
 ];
 
@@ -146,9 +116,9 @@ export default function PriceListPage() {
     } = useApp();
 
     const navigate = useNavigate();
-    const [selectedPlan, setSelectedPlan] = useState<string>("professional");
+    const [selectedPlan, setSelectedPlan] = useState<string>("starter");
     const [billingPeriod, setBillingPeriod] = useState<string>("yearly");
-    const [activeUsers, setActiveUsers] = useState<number>(8);
+    const activeUsers = Math.max(users.filter((u) => u.isActive).length, 1);
     const [loading, setLoading] = useState(false);
     const [showUserManagement, setShowUserManagement] = useState(false);
     const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -162,12 +132,12 @@ export default function PriceListPage() {
     }, []);
 
     // ── Get Selected Plan ──
-    const selectedPlanData = PLANS.find((p) => p.id === selectedPlan) || PLANS[1];
+    const selectedPlanData = PLANS.find((p) => p.id === selectedPlan) || PLANS[0];
     const selectedPeriod = BILLING_PERIODS.find((p) => p.id === billingPeriod) || BILLING_PERIODS[3];
 
     // ── Calculate Pricing ──
     const calculatePrice = () => {
-        const basePrice = selectedPlanData.price * Math.max(activeUsers, 1);
+        const basePrice = 600 * activeUsers * selectedPeriod.multiplier;
         const discountAmount = (basePrice * selectedPeriod.discount) / 100;
         const discountedPrice = basePrice - discountAmount;
         const gst = discountedPrice * 0.18;
@@ -399,67 +369,80 @@ export default function PriceListPage() {
                         </div>
                     </div>
 
-                    {/* Next Invoice & Payment Method */}
-                    <div className="grid grid-cols-2 gap-4">
-                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
-                            <p className="text-xs text-slate-400">Next Invoice</p>
-                            <p className="text-xl font-bold text-slate-900 mt-1">
-                                ₹{Math.round(pricing.total)}
-                            </p>
-                            <p className="text-xs text-slate-400 mt-0.5">
-                                Due:{" "}
-                                {new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString(
-                                    "en-IN",
-                                    { day: "numeric", month: "short", year: "numeric" }
-                                )}
-                            </p>
+                    {/* Billing History */}
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                        <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+                            <h3 className="font-semibold text-slate-800 text-sm">Billing History</h3>
+                            <button
+                                onClick={() => fetchInvoices()}
+                                className="p-1.5 hover:bg-slate-50 rounded-lg transition-colors"
+                                title="Refresh"
+                            >
+                                <RefreshCw size={12} className="text-slate-400" />
+                            </button>
                         </div>
 
-                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
-                            <p className="text-xs text-slate-400">Payment Method</p>
-                            {paymentMethods.length > 0 ? (
-                                <>
-                                    <div className="flex items-center gap-2 mt-1">
-                                        <div className="w-8 h-8 bg-gradient-to-r from-indigo-600 to-purple-600 rounded flex items-center justify-center text-white text-[10px] font-bold">
-                                            {paymentMethods[0].brand?.slice(0, 4) || "VISA"}
-                                        </div>
-                                        <div>
-                                            <p className="text-xs font-medium text-slate-800">
-                                                **** **** **** {paymentMethods[0].last4}
-                                            </p>
-                                            <p className="text-[10px] text-slate-400">
-                                                Expires: {paymentMethods[0].expiry}
-                                            </p>
-                                        </div>
-                                    </div>
-                                    <div className="flex gap-2 mt-2">
-                                        <button className="text-xs text-indigo-600 hover:text-indigo-700">
-                                            Update
-                                        </button>
-                                        <button className="text-xs text-red-500 hover:text-red-600">
-                                            Remove
-                                        </button>
-                                    </div>
-                                </>
-                            ) : (
-                                <button
-                                    onClick={() => setShowPaymentModal(true)}
-                                    className="text-xs text-indigo-600 hover:text-indigo-700 mt-1 flex items-center gap-1"
-                                >
-                                    <Plus size={12} /> Add Payment Method
-                                </button>
-                            )}
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-xs text-left border-collapse">
+                                <thead className="bg-slate-50">
+                                    <tr>
+                                        <th className="py-2 px-3 text-[10px] text-slate-500 font-medium">Date</th>
+                                        <th className="py-2 px-3 text-[10px] text-slate-500 font-medium">Invoice #</th>
+                                        <th className="py-2 px-3 text-[10px] text-slate-500 font-medium">Amount</th>
+                                        <th className="py-2 px-3 text-[10px] text-slate-500 font-medium">Status</th>
+                                        <th className="py-2 px-3 text-[10px] text-slate-500 font-medium">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {invoices.length > 0 ? (
+                                        invoices.map((invoice: Invoice) => (
+                                            <tr key={invoice.id} className="hover:bg-slate-50/50 transition-colors">
+                                                <td className="py-2.5 px-3 text-[10px] text-slate-600">
+                                                    {new Date(invoice.created_at).toLocaleDateString("en-IN", {
+                                                        day: "numeric",
+                                                        month: "short",
+                                                    })}
+                                                </td>
+                                                <td className="py-2.5 px-3 text-[10px] text-slate-600">
+                                                    {invoice.invoice_number}
+                                                </td>
+                                                <td className="py-2.5 px-3 text-[10px] font-semibold text-slate-800">
+                                                    ₹{invoice.total_amount}
+                                                </td>
+                                                <td className="py-2.5 px-3">
+                                                    <span
+                                                        className={`text-[8px] px-1.5 py-0.5 rounded-full border font-medium ${getStatusBadge(
+                                                            invoice.status
+                                                        )}`}
+                                                    >
+                                                        {invoice.status}
+                                                    </span>
+                                                </td>
+                                                <td className="py-2.5 px-3">
+                                                    <button
+                                                        onClick={() => toast.info("Invoice download coming soon")}
+                                                        className="text-indigo-600 text-[10px] hover:text-indigo-700"
+                                                    >
+                                                        Download
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        ))
+                                    ) : (
+                                        <tr>
+                                            <td colSpan={5} className="py-8 text-center text-slate-400">
+                                                <div className="flex flex-col items-center gap-1.5">
+                                                    <FileText size={20} className="text-slate-300" />
+                                                    <p className="text-[11px] text-slate-400">No invoices available.</p>
+                                                    <p className="text-[9px] text-slate-300">Invoices will appear after purchase.</p>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
                         </div>
                     </div>
-
-                    {paymentMethods.length === 0 && (
-                        <button
-                            onClick={() => setShowPaymentModal(true)}
-                            className="w-full py-2 border-2 border-dashed border-slate-300 rounded-xl text-sm text-slate-500 hover:border-indigo-300 hover:text-indigo-600 transition-colors"
-                        >
-                            + Add Payment Method
-                        </button>
-                    )}
                 </div>
 
                 {/* ── RIGHT COLUMN (60%) ── */}
@@ -468,55 +451,58 @@ export default function PriceListPage() {
                     <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
                         <h3 className="text-sm font-semibold text-slate-800 mb-4">CRM Plans</h3>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            {PLANS.map((plan) => {
-                                const isSelected = selectedPlan === plan.id;
-                                return (
-                                    <div
-                                        key={plan.id}
-                                        onClick={() => plan.id !== "custom" && setSelectedPlan(plan.id)}
-                                        className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${isSelected
-                                            ? "border-indigo-500 bg-indigo-50 shadow-sm"
-                                            : "border-slate-200 hover:border-indigo-200"
-                                            } ${plan.id === "custom" ? "cursor-default" : ""}`}
-                                    >
-                                        <div className="flex items-start justify-between">
-                                            <div>
-                                                <div className="flex items-center gap-2">
-                                                    <span className="text-lg">{plan.icon}</span>
-                                                    <span
-                                                        className={`text-sm font-semibold ${isSelected ? "text-indigo-700" : "text-slate-800"
-                                                            }`}
-                                                    >
-                                                        {plan.name}
-                                                    </span>
-                                                    {plan.popular && (
-                                                        <span className="text-[8px] bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-1.5 py-0.5 rounded-full font-medium">
-                                                            POPULAR
-                                                        </span>
-                                                    )}
-                                                </div>
-                                                {plan.price > 0 ? (
-                                                    <p
-                                                        className={`text-xl font-bold ${isSelected ? "text-indigo-700" : "text-slate-900"
-                                                            }`}
-                                                    >
-                                                        ₹{plan.price}
-                                                        <span className="text-xs font-normal text-slate-400">
-                                                            /user/month
-                                                        </span>
-                                                    </p>
-                                                ) : (
-                                                    <p className="text-sm font-medium text-slate-600">Custom Price</p>
-                                                )}
-                                                <p className="text-xs text-slate-500 mt-0.5">{plan.description}</p>
-                                            </div>
-                                            {isSelected && (
-                                                <CheckCircle size={18} className="text-indigo-600 flex-shrink-0 mt-1" />
-                                            )}
-                                        </div>
+                            {/* Starter Plan */}
+                            <div
+                                className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                                    selectedPlan === 'starter' 
+                                        ? 'border-indigo-500 bg-indigo-50 shadow-sm' 
+                                        : 'border-slate-200 hover:border-indigo-200'
+                                }`}
+                                onClick={() => setSelectedPlan('starter')}
+                            >
+                                <div className="flex items-start justify-between">
+                                    <div>
+                                        <span className={`text-sm font-semibold ${selectedPlan === 'starter' ? 'text-indigo-700' : 'text-slate-800'}`}>
+                                            Starter Plan
+                                        </span>
+                                        <p className={`text-xl font-bold ${selectedPlan === 'starter' ? 'text-indigo-700' : 'text-slate-900'}`}>
+                                            ₹600
+                                            <span className="text-xs font-normal text-slate-400">/user/month</span>
+                                        </p>
+                                        <p className="text-xs text-slate-500 mt-0.5">For growing teams and small businesses.</p>
+                                        <p className="text-[10px] text-slate-400 mt-0.5">1-50 Users</p>
                                     </div>
-                                );
-                            })}
+                                    {selectedPlan === 'starter' && (
+                                        <CheckCircle size={18} className="text-indigo-600 flex-shrink-0 mt-1" />
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Custom Plan */}
+                            <div
+                                className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                                    selectedPlan === 'custom' 
+                                        ? 'border-indigo-500 bg-indigo-50 shadow-sm' 
+                                        : 'border-slate-200 hover:border-indigo-200'
+                                }`}
+                                onClick={() => setSelectedPlan('custom')}
+                            >
+                                <div className="flex items-start justify-between">
+                                    <div>
+                                        <span className={`text-sm font-semibold ${selectedPlan === 'custom' ? 'text-indigo-700' : 'text-slate-800'}`}>
+                                            Custom Plan
+                                        </span>
+                                        <p className={`text-xl font-bold ${selectedPlan === 'custom' ? 'text-indigo-700' : 'text-slate-900'}`}>
+                                            Custom Price
+                                        </p>
+                                        <p className="text-xs text-slate-500 mt-0.5">Contact Sales for custom pricing based on your business requirements.</p>
+                                        <p className="text-[10px] text-slate-400 mt-0.5">50+ Users</p>
+                                    </div>
+                                    {selectedPlan === 'custom' && (
+                                        <CheckCircle size={18} className="text-indigo-600 flex-shrink-0 mt-1" />
+                                    )}
+                                </div>
+                            </div>
                         </div>
                     </div>
 
@@ -554,33 +540,21 @@ export default function PriceListPage() {
                             </div>
                         </div>
 
-                        {/* Users */}
+                        {/* Users (Automatic) */}
                         <div className="mt-4">
-                            <div className="flex items-center justify-between mb-2">
-                                <p className="text-xs text-slate-400">Active Users</p>
-                                <span className="text-sm font-semibold text-slate-800">{activeUsers}</span>
-                            </div>
-                            <div className="flex items-center gap-3">
-                                <button
-                                    onClick={() => setActiveUsers(Math.max(1, activeUsers - 1))}
-                                    className="w-8 h-8 rounded-full border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50"
-                                >
-                                    <span className="text-lg">−</span>
-                                </button>
-                                <input
-                                    type="range"
-                                    min="1"
-                                    max="50"
-                                    value={activeUsers}
-                                    onChange={(e) => setActiveUsers(parseInt(e.target.value))}
-                                    className="flex-1 h-2 bg-slate-200 rounded-full appearance-none cursor-pointer accent-indigo-600"
-                                />
-                                <button
-                                    onClick={() => setActiveUsers(Math.min(50, activeUsers + 1))}
-                                    className="w-8 h-8 rounded-full border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50"
-                                >
-                                    <span className="text-lg">+</span>
-                                </button>
+                            <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between">
+                                <div>
+                                    <p className="text-xs font-medium text-slate-500">Active Users (Auto)</p>
+                                    <p className="text-[10px] text-slate-400 mt-0.5">
+                                        {users.filter(u => u.isActive).length} Active of {users.length} Total Users
+                                    </p>
+                                    <p className="text-[9px] text-indigo-500 font-medium mt-1">
+                                        Managed automatically from User Management.
+                                    </p>
+                                </div>
+                                <span className="text-lg font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100">
+                                    {users.filter(u => u.isActive).length}
+                                </span>
                             </div>
                         </div>
 
@@ -588,10 +562,15 @@ export default function PriceListPage() {
                         <div className="mt-4 p-4 bg-slate-50 rounded-xl">
                             <div className="space-y-1.5">
                                 <div className="flex justify-between text-sm">
+                                    <span className="text-slate-500">Active Users</span>
+                                    <span className="text-slate-700">
+                                        {activeUsers} × ₹600{selectedPeriod.multiplier > 1 ? ` × ${selectedPeriod.multiplier} mo` : ""}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between text-sm border-t border-slate-200 pt-1.5">
                                     <span className="text-slate-500">Base Price</span>
                                     <span className="text-slate-700">
-                                        ₹{selectedPlanData.price} × {activeUsers} = ₹
-                                        {pricing.basePrice.toFixed(0)}
+                                        ₹{pricing.basePrice.toFixed(0)}
                                     </span>
                                 </div>
                                 {pricing.discountAmount > 0 && (
@@ -665,79 +644,7 @@ export default function PriceListPage() {
                 </div>
             </div>
 
-            {/* ── BILLING HISTORY ── */}
-            <div className="mt-6 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                <div className="p-5 border-b border-slate-100 flex items-center justify-between">
-                    <h3 className="font-semibold text-slate-800">Billing History</h3>
-                    <button
-                        onClick={() => fetchInvoices()}
-                        className="p-2 hover:bg-slate-50 rounded-lg transition-colors"
-                        title="Refresh"
-                    >
-                        <RefreshCw size={14} className="text-slate-400" />
-                    </button>
-                </div>
 
-                <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                        <thead className="bg-slate-50">
-                            <tr>
-                                <th className="text-left py-3 px-5 text-xs text-slate-500 font-medium">Date</th>
-                                <th className="text-left py-3 px-5 text-xs text-slate-500 font-medium">
-                                    Invoice #
-                                </th>
-                                <th className="text-left py-3 px-5 text-xs text-slate-500 font-medium">Amount</th>
-                                <th className="text-left py-3 px-5 text-xs text-slate-500 font-medium">Status</th>
-                                <th className="text-left py-3 px-5 text-xs text-slate-500 font-medium">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-50">
-                            {invoices.length > 0 ? (
-                                invoices.map((invoice: Invoice) => (
-                                    <tr key={invoice.id} className="hover:bg-slate-50 transition-colors">
-                                        <td className="py-3 px-5 text-xs text-slate-600">
-                                            {new Date(invoice.created_at).toLocaleDateString("en-IN", {
-                                                day: "numeric",
-                                                month: "short",
-                                                year: "numeric",
-                                            })}
-                                        </td>
-                                        <td className="py-3 px-5 text-xs text-slate-600">
-                                            {invoice.invoice_number}
-                                        </td>
-                                        <td className="py-3 px-5 text-xs font-semibold text-slate-800">
-                                            ₹{invoice.total_amount}
-                                        </td>
-                                        <td className="py-3 px-5">
-                                            <span
-                                                className={`text-xs px-2 py-0.5 rounded-full border font-medium ${getStatusBadge(
-                                                    invoice.status
-                                                )}`}
-                                            >
-                                                {invoice.status}
-                                            </span>
-                                        </td>
-                                        <td className="py-3 px-5">
-                                            <button
-                                                onClick={() => toast.info("Invoice download coming soon")}
-                                                className="text-indigo-600 text-xs hover:text-indigo-700 flex items-center gap-1"
-                                            >
-                                                <Download size={12} /> Download
-                                            </button>
-                                        </td>
-                                    </tr>
-                                ))
-                            ) : (
-                                <tr>
-                                    <td colSpan={5} className="py-12 text-center text-slate-400 text-sm">
-                                        No billing history found
-                                    </td>
-                                </tr>
-                            )}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
 
             {/* ── USER MANAGEMENT ── */}
             {showUserManagement && (

@@ -107,7 +107,7 @@ export default function Layout() {
         <div className={`flex items-center px-4 py-5 border-b border-white/10 ${sidebarCollapsed ? 'justify-center' : 'justify-between'}`}>
           <div className="flex-shrink-0 w-9 h-9 rounded-xl overflow-hidden shadow-lg border border-white/10 bg-indigo-600 flex items-center justify-center">
             <img
-              src="/logo.png"
+              src={logo}
               alt="VigoZen CRM"
               className="w-full h-full object-cover"
             />

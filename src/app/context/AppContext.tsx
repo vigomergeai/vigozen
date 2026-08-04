@@ -23,7 +23,7 @@ export interface UserProfile {
   id: string;
   email: string;
   name: string;
-  role: "super_admin" | "admin" | "manager" | "sales" | "viewer";
+  role: "super_admin" | "admin" | "manager" | "sales" | "viewer" | "user";
   employeeId: string | null;
   department: string;
   isActive: boolean;

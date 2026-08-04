@@ -3433,7 +3433,7 @@ app.post("/users/bulk/action", authenticateToken, async (req, res) => {
         break;
 
       case 'assign_role':
-        if (!value || !['super_admin', 'admin', 'manager', 'sales', 'viewer'].includes(value)) {
+        if (!value || !['super_admin', 'admin', 'manager', 'sales', 'viewer', 'user'].includes(value)) {
           return res.status(400).json({ error: "Invalid role" });
         }
         result = await pool.query(

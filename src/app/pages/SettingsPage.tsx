@@ -159,38 +159,68 @@ export default function SettingsPage() {
 
   // ── Billing Calculator State ──
   const activeUsers = Math.max(users?.filter(u => u.isActive).length || 0, 1);
-  const [billingPeriod, setBillingPeriod] = useState('monthly');
+  const [billingPeriod, setBillingPeriod] = useState('yearly');
   const [purchaseLoading, setPurchaseLoading] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [editingPayment, setEditingPayment] = useState<any>(null);
 
+  // Dynamic pricing configuration states (editable inputs in yellow cells)
+  const [starterPrice, setStarterPrice] = useState(600);
+  const [gstRate, setGstRate] = useState(18.0);
+  const [discounts, setDiscounts] = useState({
+    monthly: 0.0,
+    quarterly: 5.0,
+    half_yearly: 10.0,
+    yearly: 15.0
+  });
+  const [calcUsers, setCalcUsers] = useState(10);
+
+  useEffect(() => {
+    if (calcUsers > 50) {
+      setSelectedPlan('custom');
+    } else {
+      setSelectedPlan('starter');
+    }
+  }, [calcUsers, setSelectedPlan]);
+
   // Replace the hardcoded selectedPlanData (around line 190-200) with:
   const selectedPlanData = priceList.find(p => p.id === selectedPlan) || {
     id: 'starter',
     name: 'Starter Plan',
-    price: 600,
+    price: starterPrice,
     description: 'For growing teams and small businesses.',
     users: '1-50 Users'
   };
   // Selected period
   const selectedPeriod = ({
-    monthly: { id: 'monthly', label: 'Monthly', discount: 0, multiplier: 1 },
-    quarterly: { id: 'quarterly', label: 'Quarterly', discount: 5, multiplier: 3 },
-    half_yearly: { id: 'half_yearly', label: 'Half Yearly', discount: 10, multiplier: 6 },
-    yearly: { id: 'yearly', label: 'Yearly', discount: 15, multiplier: 12 },
-  } as any)[billingPeriod] || { id: 'monthly', label: 'Monthly', discount: 0, multiplier: 1 };
+    monthly: { id: 'monthly', label: 'Monthly', discount: discounts.monthly, multiplier: 1 },
+    quarterly: { id: 'quarterly', label: 'Quarterly', discount: discounts.quarterly, multiplier: 3 },
+    half_yearly: { id: 'half_yearly', label: 'Half Yearly', discount: discounts.half_yearly, multiplier: 6 },
+    yearly: { id: 'yearly', label: 'Yearly', discount: discounts.yearly, multiplier: 12 },
+  } as any)[billingPeriod] || { id: 'monthly', label: 'Monthly', discount: discounts.monthly, multiplier: 1 };
 
   // Pricing calculation
   const pricing = (() => {
-    const pricePerUser = 600;
-    const basePrice = pricePerUser * activeUsers * selectedPeriod.multiplier;
-    const discountAmount = basePrice * (selectedPeriod.discount / 100);
-    const discountedPrice = basePrice - discountAmount;
-    const gst = discountedPrice * 0.18;
-    const total = discountedPrice + gst;
-    const perMonth = total / selectedPeriod.multiplier;
-    return { basePrice, discountAmount, discountedPrice, gst, total, perMonth };
+    const pricePerUser = starterPrice;
+    const basePrice = calcUsers * pricePerUser; // Monthly base price
+    const discountPercent = selectedPeriod.discount;
+    const discountAmount = basePrice * (discountPercent / 100);
+    const priceAfterDiscount = basePrice - discountAmount;
+    const gstAmount = priceAfterDiscount * (gstRate / 100);
+    const monthsBilled = selectedPeriod.multiplier;
+    const total = (priceAfterDiscount + gstAmount) * monthsBilled;
+    const perMonth = total / monthsBilled;
+    return {
+      basePrice,
+      discountPercent,
+      discountAmount,
+      priceAfterDiscount,
+      gst: gstAmount,
+      monthsBilled,
+      total,
+      perMonth
+    };
   })();
 
   const handlePurchase = async () => {
@@ -1795,164 +1825,252 @@ export default function SettingsPage() {
                 </div>
 
                 {/* ===== RIGHT COLUMN (60% = 3/5) ===== */}
-                <div className="lg:col-span-3 space-y-4">
+                <div className="lg:col-span-3 space-y-6">
 
-                  {/* CRM Plans */}
-                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-                    <h3 className="text-sm font-semibold text-slate-800 mb-4">CRM Plans</h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {/* Starter Plan */}
-                      <div
-                        className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${selectedPlan === 'starter'
-                          ? 'border-indigo-500 bg-indigo-50 shadow-sm'
-                          : 'border-slate-200 hover:border-indigo-200'
-                          }`}
-                        onClick={() => setSelectedPlan('starter')}
-                      >
-                        <div className="flex items-start justify-between">
-                          <div>
-                            <span className={`text-sm font-semibold ${selectedPlan === 'starter' ? 'text-indigo-700' : 'text-slate-800'}`}>
-                              Starter Plan
-                            </span>
-                            <p className={`text-xl font-bold ${selectedPlan === 'starter' ? 'text-indigo-700' : 'text-slate-900'}`}>
-                              ₹600
-                              <span className="text-xs font-normal text-slate-400">/user/month</span>
-                            </p>
-                            <p className="text-xs text-slate-500 mt-0.5">For growing teams and small businesses.</p>
-                            <p className="text-[10px] text-slate-400 mt-0.5">1-50 Users</p>
-                          </div>
-                          {selectedPlan === 'starter' && (
-                            <CheckCircle size={18} className="text-indigo-600 flex-shrink-0 mt-1" />
-                          )}
-                        </div>
-                      </div>
+                  {/* Pricing and Rates Configuration */}
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 overflow-x-auto">
+                    <h3 className="text-sm font-semibold text-slate-800 mb-4">Pricing & Plan Configuration</h3>
+                    
+                    {/* Plan Details Table */}
+                    <table className="w-full text-xs border border-slate-200 rounded-lg overflow-hidden mb-4">
+                      <thead>
+                        <tr className="bg-[#1e3a8a] text-white">
+                          <th className="p-2.5 text-left font-semibold border border-slate-300">Plan</th>
+                          <th className="p-2.5 text-center font-semibold border border-slate-300 w-36">Price</th>
+                          <th className="p-2.5 text-center font-semibold border border-slate-300">Unit</th>
+                          <th className="p-2.5 text-center font-semibold border border-slate-300">User Range</th>
+                          <th className="p-2.5 text-left font-semibold border border-slate-300">Notes</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200">
+                        <tr className="hover:bg-slate-50/50">
+                          <td className="p-2.5 font-bold text-slate-800 border border-slate-200">Starter Plan</td>
+                          <td className="p-2.5 border border-slate-200 text-center">
+                            <div className="flex items-center justify-center bg-[#fef9c3] text-blue-750 font-bold px-1.5 py-1 rounded border border-yellow-300 w-24 mx-auto shadow-inner">
+                              <span className="mr-0.5 text-blue-700">₹</span>
+                              <input
+                                type="number"
+                                value={starterPrice}
+                                onChange={(e) => setStarterPrice(Math.max(0, Number(e.target.value)))}
+                                className="w-16 bg-transparent text-blue-700 font-bold text-center border-none p-0 focus:outline-none focus:ring-0"
+                              />
+                            </div>
+                          </td>
+                          <td className="p-2.5 text-slate-600 text-center border border-slate-200">₹/user/month</td>
+                          <td className="p-2.5 text-slate-600 text-center border border-slate-200 font-medium">1-50 Users</td>
+                          <td className="p-2.5 text-slate-600 border border-slate-200">For growing teams and small businesses.</td>
+                        </tr>
+                        <tr className="hover:bg-slate-50/50">
+                          <td className="p-2.5 font-bold text-slate-800 border border-slate-200">Custom Plan</td>
+                          <td className="p-2.5 text-center text-slate-700 border border-slate-200 font-medium bg-slate-50">Contact Sales</td>
+                          <td className="p-2.5 text-slate-500 text-center border border-slate-200">-</td>
+                          <td className="p-2.5 text-slate-600 text-center border border-slate-200 font-medium">50+ Users</td>
+                          <td className="p-2.5 text-slate-600 border border-slate-200">Contact Sales for custom pricing based on your business requirements.</td>
+                        </tr>
+                      </tbody>
+                    </table>
 
-                      {/* Custom Plan */}
-                      <div
-                        className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${selectedPlan === 'custom'
-                          ? 'border-indigo-500 bg-indigo-50 shadow-sm'
-                          : 'border-slate-200 hover:border-indigo-200'
-                          }`}
-                        onClick={() => setSelectedPlan('custom')}
-                      >
-                        <div className="flex items-start justify-between">
-                          <div>
-                            <span className={`text-sm font-semibold ${selectedPlan === 'custom' ? 'text-indigo-700' : 'text-slate-800'}`}>
-                              Custom Plan
-                            </span>
-                            <p className={`text-xl font-bold ${selectedPlan === 'custom' ? 'text-indigo-700' : 'text-slate-900'}`}>
-                              Custom Price
-                            </p>
-                            <p className="text-xs text-slate-500 mt-0.5">Contact Sales for custom pricing based on your business requirements.</p>
-                            <p className="text-[10px] text-slate-400 mt-0.5">50+ Users</p>
-                          </div>
-                          {selectedPlan === 'custom' && (
-                            <CheckCircle size={18} className="text-indigo-600 flex-shrink-0 mt-1" />
-                          )}
-                        </div>
+                    {/* GST Rate input */}
+                    <div className="flex items-center gap-3 mb-6 p-2 bg-slate-50 rounded-lg border border-slate-100 w-fit">
+                      <span className="text-xs font-bold text-slate-700">GST Rate</span>
+                      <div className="flex items-center bg-[#fef9c3] text-blue-700 font-bold px-2 py-1 rounded border border-yellow-300 w-24 shadow-inner">
+                        <input
+                          type="number"
+                          step="0.1"
+                          value={gstRate}
+                          onChange={(e) => setGstRate(Math.max(0, Number(e.target.value)))}
+                          className="w-12 bg-transparent text-blue-700 font-bold text-center border-none p-0 focus:outline-none focus:ring-0"
+                        />
+                        <span className="ml-0.5">%</span>
                       </div>
                     </div>
+
+                    {/* Billing Cycle Discounts Table */}
+                    <div className="mb-2">
+                      <table className="w-full text-xs border border-slate-200 rounded-lg overflow-hidden">
+                        <thead>
+                          <tr className="bg-[#1e3a8a] text-white">
+                            <th colSpan={3} className="p-2.5 text-center font-bold border border-slate-300 text-sm">Billing Cycle Discounts</th>
+                          </tr>
+                          <tr className="bg-slate-100 text-slate-750">
+                            <th className="p-2 text-left font-semibold border border-slate-300">Billing Cycle</th>
+                            <th className="p-2 text-center font-semibold border border-slate-300 w-36">Discount %</th>
+                            <th className="p-2 text-center font-semibold border border-slate-300">Months Billed</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200">
+                          <tr className="hover:bg-slate-50/50">
+                            <td className="p-2 font-medium text-slate-800 border border-slate-200">Monthly</td>
+                            <td className="p-1.5 border border-slate-200 text-center">
+                              <div className="flex items-center justify-center bg-[#fef9c3] text-blue-700 font-bold px-1.5 py-0.5 rounded border border-yellow-300 w-20 mx-auto shadow-inner">
+                                <input
+                                  type="number"
+                                  step="0.1"
+                                  value={discounts.monthly}
+                                  onChange={(e) => setDiscounts(prev => ({ ...prev, monthly: Math.max(0, Number(e.target.value)) }))}
+                                  className="w-12 bg-transparent text-blue-700 font-bold text-center border-none p-0 focus:outline-none focus:ring-0"
+                                />
+                                <span className="ml-0.5">%</span>
+                              </div>
+                            </td>
+                            <td className="p-2 text-center border border-slate-200 text-slate-600">1</td>
+                          </tr>
+                          <tr className="hover:bg-slate-50/50">
+                            <td className="p-2 font-medium text-slate-800 border border-slate-200">Quarterly</td>
+                            <td className="p-1.5 border border-slate-200 text-center">
+                              <div className="flex items-center justify-center bg-[#fef9c3] text-blue-700 font-bold px-1.5 py-0.5 rounded border border-yellow-300 w-20 mx-auto shadow-inner">
+                                <input
+                                  type="number"
+                                  step="0.1"
+                                  value={discounts.quarterly}
+                                  onChange={(e) => setDiscounts(prev => ({ ...prev, quarterly: Math.max(0, Number(e.target.value)) }))}
+                                  className="w-12 bg-transparent text-blue-700 font-bold text-center border-none p-0 focus:outline-none focus:ring-0"
+                                />
+                                <span className="ml-0.5">%</span>
+                              </div>
+                            </td>
+                            <td className="p-2 text-center border border-slate-200 text-slate-600">3</td>
+                          </tr>
+                          <tr className="hover:bg-slate-50/50">
+                            <td className="p-2 font-medium text-slate-800 border border-slate-200">Half Yearly</td>
+                            <td className="p-1.5 border border-slate-200 text-center">
+                              <div className="flex items-center justify-center bg-[#fef9c3] text-blue-700 font-bold px-1.5 py-0.5 rounded border border-yellow-300 w-20 mx-auto shadow-inner">
+                                <input
+                                  type="number"
+                                  step="0.1"
+                                  value={discounts.half_yearly}
+                                  onChange={(e) => setDiscounts(prev => ({ ...prev, half_yearly: Math.max(0, Number(e.target.value)) }))}
+                                  className="w-12 bg-transparent text-blue-700 font-bold text-center border-none p-0 focus:outline-none focus:ring-0"
+                                />
+                                <span className="ml-0.5">%</span>
+                              </div>
+                            </td>
+                            <td className="p-2 text-center border border-slate-200 text-slate-600">6</td>
+                          </tr>
+                          <tr className="hover:bg-slate-50/50">
+                            <td className="p-2 font-medium text-slate-800 border border-slate-200">Yearly</td>
+                            <td className="p-1.5 border border-slate-200 text-center">
+                              <div className="flex items-center justify-center bg-[#fef9c3] text-blue-700 font-bold px-1.5 py-0.5 rounded border border-yellow-300 w-20 mx-auto shadow-inner">
+                                <input
+                                  type="number"
+                                  step="0.1"
+                                  value={discounts.yearly}
+                                  onChange={(e) => setDiscounts(prev => ({ ...prev, yearly: Math.max(0, Number(e.target.value)) }))}
+                                  className="w-12 bg-transparent text-blue-700 font-bold text-center border-none p-0 focus:outline-none focus:ring-0"
+                                />
+                                <span className="ml-0.5">%</span>
+                              </div>
+                            </td>
+                            <td className="p-2 text-center border border-slate-200 text-slate-600">12</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <p className="text-[11px] text-slate-400 italic">Note: Yellow cells are editable inputs (price/user, GST rate, discount %).</p>
                   </div>
 
-                  {/* Billing Calculator */}
-                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-                    <h3 className="text-sm font-semibold text-slate-800 mb-4">Billing Calculator</h3>
-
-                    {/* Pay Period */}
-                    <div>
-                      <p className="text-xs text-slate-400 mb-2">Pay Period</p>
-                      <div className="flex flex-wrap gap-1.5 sm:gap-2">
-                        {[
-                          { id: 'monthly', label: 'Monthly', discount: 0 },
-                          { id: 'quarterly', label: 'Quarterly', discount: 5 },
-                          { id: 'half_yearly', label: 'Half Yearly', discount: 10 },
-                          { id: 'yearly', label: 'Yearly', discount: 15 },
-                        ].map((period) => {
-                          const isSelected = billingPeriod === period.id;
-                          return (
-                            <button
-                              key={period.id}
-                              onClick={() => setBillingPeriod(period.id)}
-                              className={`px-2 sm:px-4 py-1.5 sm:py-2 text-[10px] sm:text-xs rounded-lg border transition-all ${isSelected
-                                ? 'bg-indigo-600 text-white border-indigo-600'
-                                : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'
-                                }`}
+                  {/* Vigogen CRM — Billing Calculator */}
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 overflow-x-auto">
+                    <table className="w-full text-xs border border-slate-200 rounded-lg overflow-hidden">
+                      <thead>
+                        <tr className="bg-[#1e3a8a] text-white">
+                          <th colSpan={2} className="p-3 text-center font-bold border border-slate-300 text-base">
+                            Vigogen CRM — Billing Calculator
+                          </th>
+                        </tr>
+                        <tr className="bg-[#2b4c7e] text-white">
+                          <th colSpan={2} className="p-2 text-left font-bold border border-slate-300 text-sm">
+                            Inputs
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200">
+                        <tr>
+                          <td className="p-2.5 font-semibold text-slate-800 border border-slate-200 w-2/3">Total Users</td>
+                          <td className="p-1.5 border border-slate-200 text-center w-1/3">
+                            <div className="flex items-center justify-center bg-[#fef9c3] text-blue-700 font-bold px-1.5 py-0.5 rounded border border-yellow-300 w-20 mx-auto shadow-inner">
+                              <input
+                                type="number"
+                                value={calcUsers}
+                                onChange={(e) => setCalcUsers(Math.max(1, Number(e.target.value)))}
+                                className="w-16 bg-transparent text-blue-700 font-bold text-center border-none p-0 focus:outline-none focus:ring-0"
+                              />
+                            </div>
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="p-2.5 font-semibold text-slate-800 border border-slate-200">Price per User / Month (₹)</td>
+                          <td className="p-2.5 border border-slate-200 text-center font-semibold text-slate-700">₹{starterPrice}</td>
+                        </tr>
+                        <tr>
+                          <td className="p-2.5 font-semibold text-slate-800 border border-slate-200">Billing Cycle</td>
+                          <td className="p-1.5 border border-slate-200 text-center">
+                            <select
+                              value={billingPeriod}
+                              onChange={(e) => setBillingPeriod(e.target.value)}
+                              className="bg-[#fef9c3] text-blue-700 font-bold text-center border border-yellow-300 rounded px-2 py-0.5 focus:outline-none focus:ring-0 shadow-inner cursor-pointer"
                             >
-                              {period.label}
-                              {period.discount > 0 && (
-                                <span className={`ml-1 text-[7px] sm:text-[8px] font-medium ${isSelected ? 'text-indigo-200' : 'text-emerald-500'
-                                  }`}>
-                                  Save {period.discount}%
-                                </span>
-                              )}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    {/* Users (Automatic) */}
-                    <div className="mt-4">
-                      <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between">
-                        <div>
-                          <p className="text-xs font-medium text-slate-500">Active Users (Auto)</p>
-                          <p className="text-[10px] text-slate-400 mt-0.5">
-                            {users.filter(u => u.isActive).length} Active of {users.length} Total Users
-                          </p>
-                          <p className="text-[9px] text-indigo-500 font-medium mt-1">
-                            Managed automatically from User Management.
-                          </p>
-                        </div>
-                        <span className="text-lg font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100">
-                          {users.filter(u => u.isActive).length}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Price Breakdown */}
-                    <div className="mt-4 p-4 bg-slate-50 rounded-xl">
-                      <div className="space-y-1.5">
-                        <div className="flex justify-between text-sm">
-                          <span className="text-slate-500">Active Users</span>
-                          <span className="text-slate-700">
-                            {activeUsers} × ₹600{selectedPeriod.multiplier > 1 ? ` × ${selectedPeriod.multiplier} mo` : ""}
-                          </span>
-                        </div>
-                        <div className="flex justify-between text-sm border-t border-slate-200 pt-1.5">
-                          <span className="text-slate-500">Base Price</span>
-                          <span className="text-slate-700">₹{pricing.basePrice.toFixed(0)}</span>
-                        </div>
-                        {pricing.discountAmount > 0 && (
-                          <div className="flex justify-between text-sm">
-                            <span className="text-emerald-500">Discount ({selectedPeriod.discount}%)</span>
-                            <span className="text-emerald-500">-₹{pricing.discountAmount.toFixed(0)}</span>
-                          </div>
-                        )}
-                        <div className="flex justify-between text-sm">
-                          <span className="text-slate-500">GST (18%)</span>
-                          <span className="text-slate-700">₹{pricing.gst.toFixed(0)}</span>
-                        </div>
-                        <div className="flex justify-between text-sm">
-                          <span className="text-slate-500">Billing Cycle</span>
-                          <span className="text-slate-700">{selectedPeriod.label}</span>
-                        </div>
-                        <div className="border-t border-slate-200 pt-2 mt-2">
-                          <div className="flex justify-between">
-                            <span className="font-semibold text-slate-800">Total</span>
-                            <span className="text-xl font-bold text-indigo-600">₹{pricing.total.toFixed(0)}</span>
-                          </div>
-                          <p className="text-xs text-slate-400 text-right">
-                            {selectedPeriod.label} plan · ₹{pricing.perMonth.toFixed(0)}/month
-                          </p>
-                        </div>
-                      </div>
-                    </div>
+                              <option value="monthly">Monthly</option>
+                              <option value="quarterly">Quarterly</option>
+                              <option value="half_yearly">Half Yearly</option>
+                              <option value="yearly">Yearly</option>
+                            </select>
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="p-2.5 font-semibold text-slate-800 border border-slate-200">GST Rate</td>
+                          <td className="p-2.5 border border-slate-200 text-center font-semibold text-slate-700">{gstRate.toFixed(1)}%</td>
+                        </tr>
+                        
+                        <tr className="bg-[#2b4c7e] text-white">
+                          <th colSpan={2} className="p-2 text-left font-bold border border-slate-300 text-sm">
+                            Calculation
+                          </th>
+                        </tr>
+                        <tr>
+                          <td className="p-2.5 text-slate-700 font-medium border border-slate-200">Base Price (Active Users × Price/User)</td>
+                          <td className="p-2.5 border border-slate-200 text-right font-medium text-slate-900">₹{pricing.basePrice.toLocaleString()}</td>
+                        </tr>
+                        <tr>
+                          <td className="p-2.5 text-slate-700 font-medium border border-slate-200">Discount % (based on Billing Cycle)</td>
+                          <td className="p-2.5 border border-slate-200 text-right font-medium text-slate-900">{pricing.discountPercent.toFixed(1)}%</td>
+                        </tr>
+                        <tr>
+                          <td className="p-2.5 text-slate-700 font-medium border border-slate-200">Discount Amount</td>
+                          <td className="p-2.5 border border-slate-200 text-right font-medium text-slate-900">₹{pricing.discountAmount.toLocaleString()}</td>
+                        </tr>
+                        <tr>
+                          <td className="p-2.5 text-slate-700 font-medium border border-slate-200">Price After Discount</td>
+                          <td className="p-2.5 border border-slate-200 text-right font-medium text-slate-900">₹{pricing.priceAfterDiscount.toLocaleString()}</td>
+                        </tr>
+                        <tr>
+                          <td className="p-2.5 text-slate-700 font-medium border border-slate-200">GST Amount</td>
+                          <td className="p-2.5 border border-slate-200 text-right font-medium text-slate-900">₹{pricing.gst.toLocaleString()}</td>
+                        </tr>
+                        <tr>
+                          <td className="p-2.5 text-slate-700 font-medium border border-slate-200">Months Billed (this cycle)</td>
+                          <td className="p-2.5 border border-slate-200 text-right font-medium text-slate-900">{pricing.monthsBilled}</td>
+                        </tr>
+                        <tr className="bg-[#e6f4ea] text-emerald-800">
+                          <td className="p-2.5 font-bold border border-slate-200 text-sm">Total Payable (this billing cycle)</td>
+                          <td className="p-2.5 border border-slate-200 text-right font-bold text-[#065f46] text-base">
+                            ₹{pricing.total.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="p-2.5 text-slate-700 font-semibold border border-slate-200">Effective Monthly Cost</td>
+                          <td className="p-2.5 border border-slate-200 text-right font-bold text-slate-900 text-sm">
+                            ₹{pricing.perMonth.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
 
                     {/* Purchase Button */}
                     <button
                       onClick={handlePurchase}
                       disabled={purchaseLoading || selectedPlan === 'custom'}
-                      className="w-full mt-4 py-3 bg-indigo-600 text-white font-semibold rounded-xl hover:bg-indigo-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                      className="w-full mt-5 py-3 bg-indigo-600 text-white font-semibold rounded-xl hover:bg-indigo-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                     >
                       {purchaseLoading ? (
                         <>Processing...</>
@@ -1962,14 +2080,6 @@ export default function SettingsPage() {
                         <>Purchase Bundle ₹{pricing.total.toFixed(0)}</>
                       )}
                     </button>
-
-                    {/* Savings Note */}
-                    {selectedPeriod.discount > 0 && (
-                      <p className="text-xs text-emerald-600 text-center mt-2">
-                        Save {selectedPeriod.discount}% with {selectedPeriod.label} plan
-                      </p>
-                    )}
-
                   </div>
 
                   {/* Pay with PayU */}

@@ -9,6 +9,7 @@ import { Toaster } from "sonner";
 import { useApp } from "../context/AppContext";
 import NotificationDropdown from "../components/NotificationDropdown";
 import TrialExpiredModal from "../components/TrialExpiredModal";
+import logo from "../../assets/Media.png";
 
 const navItems = [
   { path: "/", label: "Dashboard", icon: LayoutDashboard, end: true },

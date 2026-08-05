@@ -180,7 +180,137 @@ const upload = multer({
     await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS auto_renew BOOLEAN DEFAULT true;`).catch(() => { });
     await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS active_users_count INTEGER DEFAULT 0;`).catch(() => { });
     await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS max_users INTEGER DEFAULT 50;`).catch(() => { });
+    await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS purchased_users INTEGER DEFAULT 10;`).catch(() => { });
+    await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS allowed_users INT DEFAULT 10;`).catch(() => { });
+    await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS trial_start TIMESTAMP;`).catch(() => { });
+    await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS trial_end TIMESTAMP;`).catch(() => { });
+    await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS is_trial_active BOOLEAN DEFAULT true;`).catch(() => { });
+    await pool.query(`UPDATE companies SET trial_start = NOW() WHERE trial_start IS NULL;`).catch(() => { });
+    await pool.query(`UPDATE companies SET trial_end = NOW() + INTERVAL '3 days' WHERE trial_end IS NULL;`).catch(() => { });
+    await pool.query(`UPDATE companies SET allowed_users = COALESCE(purchased_users, 10) WHERE allowed_users IS NULL OR allowed_users = 0;`).catch(() => { });
     await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`).catch(() => { });
+
+    // ── RBAC Schema Migration ──
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS manager_id UUID REFERENCES users(id);`).catch(() => { });
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS team_id UUID;`).catch(() => { });
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_token VARCHAR(255);`).catch(() => { });
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS department VARCHAR(50) DEFAULT 'Sales';`).catch(() => { });
+    await pool.query(`ALTER TABLE users ALTER COLUMN role SET DEFAULT 'Sales Executive';`).catch(() => { });
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS teams (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        team_name VARCHAR(255) NOT NULL,
+        team_leader_id UUID REFERENCES users(id),
+        manager_id UUID REFERENCES users(id),
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+    `).catch(() => { });
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS role_permissions (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
+        role VARCHAR(50) NOT NULL,
+        module VARCHAR(50) NOT NULL,
+        permission VARCHAR(20) NOT NULL
+      );
+    `).catch(() => { });
+
+    await pool.query(`ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS company_id UUID;`).catch(() => { });
+    await pool.query(`ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS user_role VARCHAR(50);`).catch(() => { });
+
+    // Seed default role permissions
+    const seedPermissions = async (compId) => {
+      const permissions = [
+        // Org Admin
+        { role: 'Org Admin', module: 'leads', permission: 'full' },
+        { role: 'Org Admin', module: 'deals', permission: 'full' },
+        { role: 'Org Admin', module: 'users', permission: 'full' },
+        { role: 'Org Admin', module: 'reports', permission: 'full' },
+        { role: 'Org Admin', module: 'settings', permission: 'full' },
+        { role: 'Org Admin', module: 'billing', permission: 'full' },
+        // Sales Manager
+        { role: 'Sales Manager', module: 'leads', permission: 'dept' },
+        { role: 'Sales Manager', module: 'deals', permission: 'dept' },
+        { role: 'Sales Manager', module: 'users', permission: 'dept' },
+        { role: 'Sales Manager', module: 'reports', permission: 'dept' },
+        { role: 'Sales Manager', module: 'settings', permission: 'none' },
+        { role: 'Sales Manager', module: 'billing', permission: 'none' },
+        // Team Leader
+        { role: 'Team Leader', module: 'leads', permission: 'team' },
+        { role: 'Team Leader', module: 'deals', permission: 'team' },
+        { role: 'Team Leader', module: 'users', permission: 'team' },
+        { role: 'Team Leader', module: 'reports', permission: 'team' },
+        { role: 'Team Leader', module: 'settings', permission: 'none' },
+        { role: 'Team Leader', module: 'billing', permission: 'none' },
+        // Sales Executive
+        { role: 'Sales Executive', module: 'leads', permission: 'own' },
+        { role: 'Sales Executive', module: 'deals', permission: 'own' },
+        { role: 'Sales Executive', module: 'users', permission: 'none' },
+        { role: 'Sales Executive', module: 'reports', permission: 'own' },
+        { role: 'Sales Executive', module: 'settings', permission: 'none' },
+        { role: 'Sales Executive', module: 'billing', permission: 'none' },
+        // Lead Manager
+        { role: 'Lead Manager', module: 'leads', permission: 'full' },
+        { role: 'Lead Manager', module: 'deals', permission: 'none' },
+        { role: 'Lead Manager', module: 'users', permission: 'none' },
+        { role: 'Lead Manager', module: 'reports', permission: 'full' },
+        { role: 'Lead Manager', module: 'settings', permission: 'none' },
+        { role: 'Lead Manager', module: 'billing', permission: 'none' }
+      ];
+
+      for (const p of permissions) {
+        if (compId) {
+          const check = await pool.query(
+            "SELECT 1 FROM role_permissions WHERE company_id = $1 AND role = $2 AND module = $3",
+            [compId, p.role, p.module]
+          );
+          if (check.rows.length === 0) {
+            await pool.query(
+              "INSERT INTO role_permissions (company_id, role, module, permission) VALUES ($1, $2, $3, $4)",
+              [compId, p.role, p.module, p.permission]
+            ).catch(() => {});
+          }
+        } else {
+          const check = await pool.query(
+            "SELECT 1 FROM role_permissions WHERE company_id IS NULL AND role = $1 AND module = $2",
+            [p.role, p.module]
+          );
+          if (check.rows.length === 0) {
+            await pool.query(
+              "INSERT INTO role_permissions (role, module, permission) VALUES ($1, $2, $3)",
+              [p.role, p.module, p.permission]
+            ).catch(() => {});
+          }
+        }
+      }
+    };
+
+    await seedPermissions(null);
+    const existingCompanies = await pool.query("SELECT id FROM companies");
+    for (const company of existingCompanies.rows) {
+      await seedPermissions(company.id);
+    }
+
+    // ── Pricing config table ──
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS pricing_config (
+        id SERIAL PRIMARY KEY,
+        starter_price_per_user INT DEFAULT 600,
+        gst_rate INT DEFAULT 18,
+        monthly_discount INT DEFAULT 0,
+        quarterly_discount INT DEFAULT 5,
+        half_yearly_discount INT DEFAULT 10,
+        yearly_discount INT DEFAULT 15,
+        updated_at TIMESTAMP DEFAULT NOW()
+      );
+    `).catch(() => { });
+    await pool.query(`
+      INSERT INTO pricing_config (starter_price_per_user, gst_rate, monthly_discount, quarterly_discount, half_yearly_discount, yearly_discount)
+      SELECT 600, 18, 0, 5, 10, 15 WHERE NOT EXISTS (SELECT 1 FROM pricing_config);
+    `).catch(() => { });
 
     // ── Payment methods table ──
     await pool.query(`
@@ -239,6 +369,8 @@ const upload = multer({
     await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS due_date TIMESTAMP;`).catch(() => { });
     await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS billing_period_start TIMESTAMP;`).catch(() => { });
     await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS billing_period_end TIMESTAMP;`).catch(() => { });
+    await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS purchased_users INTEGER;`).catch(() => { });
+    await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS plan VARCHAR(100);`).catch(() => { });
     await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`).catch(() => { });
 
     // ── Set trial for existing users ──
@@ -373,6 +505,147 @@ const requireRole = (allowedRoles) => {
     next();
   };
 };
+
+// Determine user's scope for a specific module (Static Fallback)
+const getPermissionScope = (role, module) => {
+  if (role === 'Super Admin') return 'full';
+  
+  const hierarchy = {
+    'Org Admin': { leads: 'full', deals: 'full', users: 'full', reports: 'full', settings: 'full', billing: 'full', tickets: 'full', activities: 'full' },
+    'Sales Manager': { leads: 'dept', deals: 'dept', users: 'dept', reports: 'dept', settings: 'none', billing: 'none', tickets: 'dept', activities: 'dept' },
+    'Team Leader': { leads: 'team', deals: 'team', users: 'team', reports: 'team', settings: 'none', billing: 'none', tickets: 'team', activities: 'team' },
+    'Sales Executive': { leads: 'own', deals: 'own', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own' },
+    'Lead Manager': { leads: 'full', deals: 'none', users: 'none', reports: 'full', settings: 'none', billing: 'none', tickets: 'full', activities: 'full' }
+  };
+  
+  return hierarchy[role]?.[module] || 'none';
+};
+
+// Middleware to attach permission scope to request
+const checkPermission = (module) => {
+  return async (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+    const { role, company_id, team_id, id: userId } = req.user;
+
+    req.teamId = team_id || null;
+    req.userId = userId;
+    req.companyId = company_id;
+
+    if (role === 'Super Admin') {
+      req.permissionScope = 'full';
+      return next();
+    }
+
+    let permissionScope = 'none';
+
+    try {
+      const result = await pool.query(
+        `SELECT permission FROM role_permissions 
+         WHERE role = $1 AND module = $2 AND (company_id = $3 OR company_id IS NULL)
+         ORDER BY company_id DESC NULLS LAST LIMIT 1`,
+        [role, module, company_id]
+      );
+      if (result.rows.length > 0) {
+        permissionScope = result.rows[0].permission;
+      } else {
+        permissionScope = getPermissionScope(role, module);
+      }
+    } catch (err) {
+      console.warn("DB permission check fallback:", err.message);
+      permissionScope = getPermissionScope(role, module);
+    }
+
+    req.permissionScope = permissionScope;
+
+    if (permissionScope === 'none') {
+      return res.status(403).json({ error: `Access denied to the ${module} module.` });
+    }
+
+    next();
+  };
+};
+
+// Get all subordinate user IDs (including the user themselves)
+const getSubordinateUserIds = async (userId, teamId) => {
+  const params = [userId];
+  let query = `
+    WITH RECURSIVE subordinates AS (
+       SELECT id FROM users WHERE id = $1
+       UNION ALL
+       SELECT u.id FROM users u
+       INNER JOIN subordinates s ON u.manager_id = s.id
+     )
+     SELECT id FROM subordinates
+  `;
+  if (teamId) {
+    query += ` UNION SELECT id FROM users WHERE team_id = $2`;
+    params.push(teamId);
+  }
+  try {
+    const result = await pool.query(query, params);
+    return result.rows.map(r => r.id);
+  } catch (err) {
+    console.error("getSubordinateUserIds error:", err);
+    return [userId]; // Fallback to just the user themselves on error
+  }
+};
+
+// Generate dynamic multi-tenant hierarchical query filters
+const getScopedQueryFilters = async (table, req) => {
+  const { role, company_id, id: userId, team_id } = req.user;
+  const scope = req.permissionScope;
+
+  if (role === 'Super Admin') {
+    return { joinClause: '', whereClause: '', params: [] };
+  }
+
+  let joinClause = '';
+  let clauses = [];
+  let params = [company_id];
+
+  if (table === 'activities') {
+    joinClause = 'INNER JOIN deals d ON a.deal_id = d.id';
+    clauses.push('d.company_id = $1');
+    
+    if (scope === 'own') {
+      clauses.push(`d.owner_id = $2`);
+      params.push(userId);
+    } else if (scope === 'team' || scope === 'dept') {
+      const subIds = await getSubordinateUserIds(userId, team_id);
+      clauses.push(`d.owner_id = ANY($2)`);
+      params.push(subIds);
+    }
+  } else if (table === 'contacts') {
+    clauses.push('company_id = $1');
+  } else {
+    clauses.push('company_id = $1');
+    if (scope === 'own') {
+      if (table === 'tickets') {
+        clauses.push(`(owner_id = $2 OR assigned_to = $2)`);
+      } else {
+        clauses.push(`owner_id = $2`);
+      }
+      params.push(userId);
+    } else if (scope === 'team' || scope === 'dept') {
+      const subIds = await getSubordinateUserIds(userId, team_id);
+      if (table === 'tickets') {
+        clauses.push(`(owner_id = ANY($2) OR assigned_to = ANY($2))`);
+      } else {
+        clauses.push(`owner_id = ANY($2)`);
+      }
+      params.push(subIds);
+    }
+  }
+
+  return {
+    joinClause,
+    whereClause: clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '',
+    params
+  };
+};
+
 // ── CORS CONFIGURATION ──
 // Allow requests from frontend origins. Supports crm.vigomerge.com, admin.vigomerge.com, localhost dev servers.
 app.use(cors({
@@ -441,24 +714,21 @@ app.get("/", (req, res) => {
 });
 
 // Leads
-app.get("/leads", authenticateToken, async (req, res) => {
+app.get("/leads", authenticateToken, checkPermission('leads'), async (req, res) => {
   try {
-    const result = await pool.query("SELECT * FROM leads ORDER BY created_at DESC");
+    const { whereClause, params } = await getScopedQueryFilters('leads', req);
+    const result = await pool.query(`SELECT * FROM leads ${whereClause} ORDER BY created_at DESC`, params);
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-
-
-
-
-
 // Deals
-app.get("/deals", authenticateToken, async (req, res) => {
+app.get("/deals", authenticateToken, checkPermission('deals'), async (req, res) => {
   try {
-    const result = await pool.query("SELECT * FROM deals ORDER BY created_at DESC");
+    const { whereClause, params } = await getScopedQueryFilters('deals', req);
+    const result = await pool.query(`SELECT * FROM deals ${whereClause} ORDER BY created_at DESC`, params);
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -466,9 +736,10 @@ app.get("/deals", authenticateToken, async (req, res) => {
 });
 
 // Contacts
-app.get("/contacts", authenticateToken, async (req, res) => {
+app.get("/contacts", authenticateToken, checkPermission('leads'), async (req, res) => {
   try {
-    const result = await pool.query("SELECT * FROM contacts ORDER BY created_at DESC");
+    const { whereClause, params } = await getScopedQueryFilters('contacts', req);
+    const result = await pool.query(`SELECT * FROM contacts ${whereClause} ORDER BY created_at DESC`, params);
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -476,9 +747,10 @@ app.get("/contacts", authenticateToken, async (req, res) => {
 });
 
 // Tickets
-app.get("/tickets", authenticateToken, async (req, res) => {
+app.get("/tickets", authenticateToken, checkPermission('leads'), async (req, res) => {
   try {
-    const result = await pool.query("SELECT * FROM tickets ORDER BY created_at DESC");
+    const { whereClause, params } = await getScopedQueryFilters('tickets', req);
+    const result = await pool.query(`SELECT * FROM tickets ${whereClause} ORDER BY created_at DESC`, params);
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -627,9 +899,13 @@ app.delete("/tickets/:id", authenticateToken, async (req, res) => {
   }
 });
 // Activities
-app.get("/activities", authenticateToken, async (req, res) => {
+app.get("/activities", authenticateToken, checkPermission('activities'), async (req, res) => {
   try {
-    const result = await pool.query("SELECT * FROM activities ORDER BY created_at DESC");
+    const { joinClause, whereClause, params } = await getScopedQueryFilters('activities', req);
+    const result = await pool.query(
+      `SELECT a.* FROM activities a ${joinClause} ${whereClause} ORDER BY a.created_at DESC`,
+      params
+    );
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -637,17 +913,27 @@ app.get("/activities", authenticateToken, async (req, res) => {
 });
 
 // Users
-app.get("/users", authenticateToken, async (req, res) => {
+app.get("/users", authenticateToken, checkPermission('users'), async (req, res) => {
   try {
-    const companyId = req.user.company_id;
-    let query = "SELECT * FROM users";
-    const params = [];
+    const { permissionScope, companyId, userId, teamId } = req;
+    let query = "SELECT id, name, email, role, department, manager_id, team_id, is_active, status, created_at FROM users";
+    let params = [];
 
-    if (companyId) {
-      query += " WHERE company_id = $1";
-      params.push(companyId);
+    if (permissionScope === 'full') {
+      if (req.user.role === 'Super Admin') {
+        query += " ORDER BY name ASC;";
+      } else {
+        query += " WHERE company_id = $1 ORDER BY name ASC;";
+        params.push(companyId);
+      }
+    } else if (permissionScope === 'dept' || permissionScope === 'team') {
+      const subIds = await getSubordinateUserIds(userId, teamId);
+      query += " WHERE company_id = $1 AND id = ANY($2) ORDER BY name ASC;";
+      params.push(companyId, subIds);
+    } else {
+      return res.status(403).json({ error: "Access denied to users module" });
     }
-    query += " ORDER BY name ASC;";
+
     const result = await pool.query(query, params);
     res.json(result.rows);
   } catch (err) {
@@ -819,46 +1105,108 @@ app.put("/users/:id", authenticateToken, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-// Create new user (admin only)
+// Simulated Invitation Email helper
+const sendInviteEmail = async (email, inviteToken) => {
+  console.log("-----------------------------------------");
+  console.log(`✉ INVITATION EMAIL SENT TO: ${email}`);
+  console.log(`Invite URL: http://localhost:5173/accept-invite?token=${inviteToken}`);
+  console.log("-----------------------------------------");
+};
+
+// Create new user (Hierarchical RBAC + Invitation based)
 app.post("/users", authenticateToken, async (req, res) => {
   try {
-    if (req.user.role !== "admin") {
-      return res.status(403).json({ error: "Admin access required" });
-    }
+    const creatorRole = req.user.role || 'Sales Executive';
+    const creatorId = req.user.id;
+    const companyId = req.user.company_id || null;
 
-    const { name, email, password, role, employeeId, department } = req.body;
+    // 1. Define Hierarchical Creation Rules
+    const canCreate = {
+      'Super Admin': ['Org Admin', 'admin'],
+      'Org Admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive'],
+      'admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive'],
+      'Sales Manager': ['Team Leader', 'Sales Executive'],
+      'Team Leader': ['Sales Executive']
+    };
+
+    const { name, email, role, employeeId, department, team_id, manager_id: bodyManagerId } = req.body;
+    const targetRole = role || 'Sales Executive';
+
+    // 2. Validate Creator Permissions
+    if (!canCreate[creatorRole] || !canCreate[creatorRole].includes(targetRole)) {
+      return res.status(403).json({ error: `You are not authorized to create a user with role "${targetRole}"` });
+    }
 
     const existing = await pool.query("SELECT id FROM users WHERE email=$1", [email]);
     if (existing.rows.length > 0) {
       return res.status(400).json({ error: "Email already registered" });
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const companyId = req.user?.company_id || null;
+    // 3. Resolve reporting manager
+    let manager_id = bodyManagerId || creatorId;
+    if (creatorRole === 'Super Admin') {
+      manager_id = null; // Top level has no manager
+    }
 
+    // 4. Handle auto-creation of team if role is 'Team Leader'
+    let newTeamId = team_id || null;
+    if (targetRole === 'Team Leader') {
+      const teamResult = await pool.query(
+        `INSERT INTO teams (company_id, team_name, team_leader_id, manager_id) 
+         VALUES ($1, $2, $3, $4) RETURNING id`,
+        [companyId, `${name}'s Team`, null, manager_id]
+      );
+      newTeamId = teamResult.rows[0].id;
+    }
+
+    // 5. Generate Invitation Token
+    const inviteToken = crypto.randomBytes(32).toString('hex');
+
+    // 6. Insert new user in 'invited' status
     const result = await pool.query(
-      `INSERT INTO users (name, email, password, role, employee_id, department, is_active, status, company_id, created_at)
-      VALUES ($1, $2, $3, $4, $5, $6, false, 'Inactive', $7, NOW())   -- ← is_active = false (inactive by default)
-      RETURNING id, name, email, role, employee_id AS "employeeId", department, is_active AS "isActive", status, company_id AS "companyId", created_at AS "createdAt"`,
-      [name, email, hashedPassword, role || "user", employeeId || null, department || "sales", companyId]
+      `INSERT INTO users (name, email, role, company_id, manager_id, team_id, is_active, status, invite_token, employee_id, department, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, false, 'invited', $7, $8, $9, NOW())
+       RETURNING id, name, email, role, employee_id AS "employeeId", department, is_active AS "isActive", status, company_id AS "companyId", created_at AS "createdAt"`,
+      [name, email, targetRole, companyId, manager_id, newTeamId, inviteToken, employeeId || null, department || "Sales"]
     );
 
     const newUser = result.rows[0];
+
+    // If Team Leader was created, update the team to set team_leader_id = newUser.id
+    if (targetRole === 'Team Leader' && newTeamId) {
+      await pool.query(
+        "UPDATE teams SET team_leader_id = $1 WHERE id = $2",
+        [newUser.id, newTeamId]
+      ).catch(err => console.error("Update team leader error:", err));
+    }
+
+    // 7. Trigger simulated invitation email
+    await sendInviteEmail(email, inviteToken);
 
     // Company-wide notification for new user
     if (companyId) {
       await notificationService.createCompanyNotification(
         companyId,
         'user_added',
-        "👤 New Team Member",
-        `${name} has joined the team as ${role || 'user'}`,
+        "👤 Team Member Invited",
+        `${name} has been invited to join the team as ${targetRole}`,
         `/users/${newUser.id}`,
         'medium',
-        { user_role: role, user_email: email }
-      );
+        { user_role: targetRole, user_email: email }
+      ).catch(err => console.error("Notification error:", err));
     }
 
-    res.json(result.rows[0]);
+    // Log administrative action to Audit Logs
+    await logAudit(
+      creatorId,
+      req.user.name || 'Admin',
+      'INVITE_USER',
+      'user',
+      newUser.id,
+      { email, role: targetRole, company_id: companyId }
+    );
+
+    res.json(newUser);
   } catch (err) {
     console.error("CREATE USER ERROR:", err);
     res.status(500).json({ error: err.message });
@@ -1028,6 +1376,25 @@ app.put("/users/:id/activate", authenticateToken, async (req, res) => {
 
     if (userCheck.rows[0].is_active) {
       return res.status(400).json({ error: "User is already active" });
+    }
+
+    // Check if activating would exceed the allowed seat limit
+    const activeUsersResult = await pool.query(
+      "SELECT COUNT(*) as count FROM users WHERE company_id = $1 AND is_active = true AND status = 'Active'",
+      [companyId]
+    );
+    const activeUsersCount = parseInt(activeUsersResult.rows[0].count);
+
+    const companyRes = await pool.query(
+      "SELECT allowed_users, purchased_users FROM companies WHERE id = $1",
+      [companyId]
+    );
+    if (companyRes.rows.length > 0) {
+      const company = companyRes.rows[0];
+      const allowedUsers = company.allowed_users || company.purchased_users || 10;
+      if (activeUsersCount >= allowedUsers) {
+        return res.status(400).json({ error: `User Limit Reached. Upgrade subscription to allow more than ${allowedUsers} active users.` });
+      }
     }
 
     // Activate user
@@ -2089,6 +2456,68 @@ app.post("/auth/signup", async (req, res) => {
   }
 });
 
+// Validate invitation token
+app.get("/auth/invite/validate", async (req, res) => {
+  try {
+    const { token } = req.query;
+    if (!token) {
+      return res.status(400).json({ error: "Token is required" });
+    }
+
+    const result = await pool.query(
+      "SELECT id, name, email, role, company_id FROM users WHERE invite_token = $1 AND status = 'invited'",
+      [token]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(400).json({ error: "Invalid or expired invitation token" });
+    }
+
+    res.json({ success: true, user: result.rows[0] });
+  } catch (err) {
+    console.error("Validate invite error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Accept invitation (set password)
+app.post("/auth/invite/accept", async (req, res) => {
+  try {
+    const { token, password } = req.body;
+    if (!token || !password) {
+      return res.status(400).json({ error: "Token and password are required" });
+    }
+
+    const check = await pool.query(
+      "SELECT id FROM users WHERE invite_token = $1 AND status = 'invited'",
+      [token]
+    );
+
+    if (check.rows.length === 0) {
+      return res.status(400).json({ error: "Invalid or expired invitation token" });
+    }
+
+    const userId = check.rows[0].id;
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    await pool.query(
+      `UPDATE users 
+       SET password = $1, 
+           is_active = true, 
+           status = 'Active', 
+           invite_token = NULL,
+           updated_at = NOW()
+       WHERE id = $2`,
+      [hashedPassword, userId]
+    );
+
+    res.json({ success: true, message: "Invitation accepted. Your account is now active!" });
+  } catch (err) {
+    console.error("Accept invite error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Login
 app.post("/auth/login", async (req, res) => {
   try {
@@ -2123,7 +2552,9 @@ app.post("/auth/login", async (req, res) => {
         id: user.id,
         email: user.email,
         company_id: user.company_id,
-        role: user.role
+        role: user.role || 'Sales Executive',
+        team_id: user.team_id || null,
+        manager_id: user.manager_id || null
       },
       process.env.JWT_SECRET || "your-super-secret-key-change-this-later-12345",
       {
@@ -3470,10 +3901,10 @@ app.post("/users/bulk/action", authenticateToken, async (req, res) => {
 });
 
 // ── Reports API ──
-app.get("/api/reports/summary", authenticateToken, async (req, res) => {
+app.get("/api/reports/summary", authenticateToken, checkPermission('reports'), async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-    const companyId = req.user.company_id;
+    const { permissionScope, companyId, userId, teamId } = req;
     const params = [];
     let paramIndex = 1;
 
@@ -3493,17 +3924,25 @@ app.get("/api/reports/summary", authenticateToken, async (req, res) => {
       companyFilter = ` AND company_id IS NULL`;
     }
 
+    let hierarchyFilter = '';
+    if (permissionScope !== 'full') {
+      const subIds = await getSubordinateUserIds(userId, teamId);
+      hierarchyFilter = ` AND owner_id = ANY($${paramIndex})`;
+      params.push(subIds);
+      paramIndex++;
+    }
+
     const query = `
       SELECT 
-        (SELECT COUNT(*) FROM leads WHERE 1=1 ${dateFilter} ${companyFilter}) as total_leads,
-        (SELECT COUNT(*) FROM deals WHERE 1=1 ${dateFilter} ${companyFilter}) as total_deals,
-        (SELECT COUNT(*) FROM deals WHERE LOWER(stage::text) = 'won' ${dateFilter} ${companyFilter}) as won_deals,
-        (SELECT COUNT(*) FROM deals WHERE stage::text IN ('New','Contacted','Qualified','Proposal','Negotiation') ${dateFilter} ${companyFilter}) as active_deals,
-        (SELECT COALESCE(SUM(value), 0) FROM deals WHERE LOWER(stage::text) = 'won' ${dateFilter} ${companyFilter}) as total_revenue,
+        (SELECT COUNT(*) FROM leads WHERE 1=1 ${dateFilter} ${companyFilter} ${hierarchyFilter}) as total_leads,
+        (SELECT COUNT(*) FROM deals WHERE 1=1 ${dateFilter} ${companyFilter} ${hierarchyFilter}) as total_deals,
+        (SELECT COUNT(*) FROM deals WHERE LOWER(stage::text) = 'won' ${dateFilter} ${companyFilter} ${hierarchyFilter}) as won_deals,
+        (SELECT COUNT(*) FROM deals WHERE stage::text IN ('New','Contacted','Qualified','Proposal','Negotiation') ${dateFilter} ${companyFilter} ${hierarchyFilter}) as active_deals,
+        (SELECT COALESCE(SUM(value), 0) FROM deals WHERE LOWER(stage::text) = 'won' ${dateFilter} ${companyFilter} ${hierarchyFilter}) as total_revenue,
         CASE 
-          WHEN (SELECT COUNT(*) FROM deals WHERE 1=1 ${dateFilter} ${companyFilter}) > 0 
-          THEN ROUND(((SELECT COUNT(*) FROM deals WHERE LOWER(stage::text) = 'won' ${dateFilter} ${companyFilter})::numeric / 
-                     (SELECT COUNT(*) FROM deals WHERE 1=1 ${dateFilter} ${companyFilter})::numeric * 100), 1)
+          WHEN (SELECT COUNT(*) FROM deals WHERE 1=1 ${dateFilter} ${companyFilter} ${hierarchyFilter}) > 0 
+          THEN ROUND(((SELECT COUNT(*) FROM deals WHERE LOWER(stage::text) = 'won' ${dateFilter} ${companyFilter} ${hierarchyFilter})::numeric / 
+                     (SELECT COUNT(*) FROM deals WHERE 1=1 ${dateFilter} ${companyFilter} ${hierarchyFilter})::numeric * 100), 1)
           ELSE 0 
         END as win_rate
     `;
@@ -3515,10 +3954,10 @@ app.get("/api/reports/summary", authenticateToken, async (req, res) => {
   }
 });
 
-app.get("/api/reports/employee-wise", authenticateToken, async (req, res) => {
+app.get("/api/reports/employee-wise", authenticateToken, checkPermission('reports'), async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-    const companyId = req.user.company_id;
+    const { permissionScope, companyId, userId, teamId } = req;
     const params = [];
     let paramIndex = 1;
 
@@ -3538,14 +3977,20 @@ app.get("/api/reports/employee-wise", authenticateToken, async (req, res) => {
       companyFilter = ` l.company_id IS NULL`;
     }
 
-    let whereClause = '';
-    if (dateFilter && companyFilter) {
-      whereClause = ` WHERE ${dateFilter} AND ${companyFilter}`;
-    } else if (dateFilter) {
-      whereClause = ` WHERE ${dateFilter}`;
-    } else if (companyFilter) {
-      whereClause = ` WHERE ${companyFilter}`;
+    let hierarchyFilter = '';
+    if (permissionScope !== 'full') {
+      const subIds = await getSubordinateUserIds(userId, teamId);
+      hierarchyFilter = ` l.owner_id = ANY($${paramIndex})`;
+      params.push(subIds);
+      paramIndex++;
     }
+
+    let clauses = [];
+    if (dateFilter) clauses.push(dateFilter);
+    if (companyFilter) clauses.push(companyFilter);
+    if (hierarchyFilter) clauses.push(hierarchyFilter);
+
+    const whereClause = clauses.length > 0 ? ` WHERE ${clauses.join(' AND ')}` : '';
 
     const query = `
       SELECT 
@@ -3573,10 +4018,10 @@ app.get("/api/reports/employee-wise", authenticateToken, async (req, res) => {
   }
 });
 
-app.get("/api/reports/status-wise", authenticateToken, async (req, res) => {
+app.get("/api/reports/status-wise", authenticateToken, checkPermission('reports'), async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-    const companyId = req.user.company_id;
+    const { permissionScope, companyId, userId, teamId } = req;
     const params = [];
     let paramIndex = 1;
 
@@ -3596,14 +4041,20 @@ app.get("/api/reports/status-wise", authenticateToken, async (req, res) => {
       companyFilter = ` company_id IS NULL`;
     }
 
-    let whereClause = '';
-    if (dateFilter && companyFilter) {
-      whereClause = ` WHERE ${dateFilter} AND ${companyFilter}`;
-    } else if (dateFilter) {
-      whereClause = ` WHERE ${dateFilter}`;
-    } else if (companyFilter) {
-      whereClause = ` WHERE ${companyFilter}`;
+    let hierarchyFilter = '';
+    if (permissionScope !== 'full') {
+      const subIds = await getSubordinateUserIds(userId, teamId);
+      hierarchyFilter = ` owner_id = ANY($${paramIndex})`;
+      params.push(subIds);
+      paramIndex++;
     }
+
+    let clauses = [];
+    if (dateFilter) clauses.push(dateFilter);
+    if (companyFilter) clauses.push(companyFilter);
+    if (hierarchyFilter) clauses.push(hierarchyFilter);
+
+    const whereClause = clauses.length > 0 ? ` WHERE ${clauses.join(' AND ')}` : '';
 
     const query = `
       SELECT stage, COUNT(*) as count, COALESCE(SUM(value), 0) as total_value
@@ -3620,10 +4071,10 @@ app.get("/api/reports/status-wise", authenticateToken, async (req, res) => {
   }
 });
 
-app.get("/api/reports/sales-wise", authenticateToken, async (req, res) => {
+app.get("/api/reports/sales-wise", authenticateToken, checkPermission('reports'), async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-    const companyId = req.user.company_id;
+    const { permissionScope, companyId, userId, teamId } = req;
     const params = [];
     let paramIndex = 1;
 
@@ -3643,13 +4094,21 @@ app.get("/api/reports/sales-wise", authenticateToken, async (req, res) => {
       companyFilter = ` AND company_id IS NULL`;
     }
 
+    let hierarchyFilter = '';
+    if (permissionScope !== 'full') {
+      const subIds = await getSubordinateUserIds(userId, teamId);
+      hierarchyFilter = ` AND owner_id = ANY($${paramIndex})`;
+      params.push(subIds);
+      paramIndex++;
+    }
+
     const query = `
       SELECT TO_CHAR(created_at, 'YYYY-"W"IW') as week,
              COUNT(*) as deals_count,
              COALESCE(SUM(value), 0) as total_value,
              COALESCE(AVG(value), 0) as avg_value
       FROM deals
-      WHERE LOWER(stage::text) = 'won' ${dateFilter} ${companyFilter}
+      WHERE LOWER(stage::text) = 'won' ${dateFilter} ${companyFilter} ${hierarchyFilter}
       GROUP BY TO_CHAR(created_at, 'YYYY-"W"IW')
       ORDER BY week ASC
     `;
@@ -4026,14 +4485,32 @@ app.post("/ai-insights/generate", authenticateToken, async (req, res) => {
 
 // ── COMPANY SUBSCRIPTION MANAGEMENT ──
 
+let globalPricingConfig = {
+  starter_price_per_user: 600,
+  gst_rate: 18,
+  monthly_discount: 0,
+  quarterly_discount: 5,
+  half_yearly_discount: 10,
+  yearly_discount: 15
+};
+
+// Initialize pricing config from DB
+(async () => {
+  try {
+    const res = await pool.query('SELECT * FROM pricing_config LIMIT 1');
+    if (res.rows.length > 0) {
+      globalPricingConfig = res.rows[0];
+    }
+  } catch (err) {
+    console.error('Failed to load pricing config from DB:', err);
+  }
+})();
+
 // Pricing calculation helper
 function calculatePricing({ planType, billingPeriod, activeUsers, pricePerUser }) {
-  const planPrices = {
-    'starter': 600,
-    'custom': 0
-  };
-
-  const basePricePerUser = planPrices[planType] !== undefined ? planPrices[planType] : (pricePerUser || 600);
+  const basePricePerUser = planType === 'starter' 
+    ? (globalPricingConfig.starter_price_per_user || 600) 
+    : (pricePerUser || 600);
 
   const periodMonths = {
     'monthly': 1,
@@ -4044,17 +4521,17 @@ function calculatePricing({ planType, billingPeriod, activeUsers, pricePerUser }
   const months = periodMonths[billingPeriod] || 1;
 
   const discounts = {
-    'monthly': 0,
-    'quarterly': 5,
-    'half_yearly': 10,
-    'yearly': 15
+    'monthly': globalPricingConfig.monthly_discount !== undefined ? globalPricingConfig.monthly_discount : 0,
+    'quarterly': globalPricingConfig.quarterly_discount !== undefined ? globalPricingConfig.quarterly_discount : 5,
+    'half_yearly': globalPricingConfig.half_yearly_discount !== undefined ? globalPricingConfig.half_yearly_discount : 10,
+    'yearly': globalPricingConfig.yearly_discount !== undefined ? globalPricingConfig.yearly_discount : 15
   };
   const discountPercent = discounts[billingPeriod] || 0;
 
   const basePrice = activeUsers * basePricePerUser * months;
   const discountAmount = basePrice * (discountPercent / 100);
   const subtotal = basePrice - discountAmount;
-  const gst = subtotal * 0.18;
+  const gst = subtotal * ((globalPricingConfig.gst_rate || 18) / 100);
   const total = subtotal + gst;
 
   return {
@@ -4080,7 +4557,7 @@ app.get("/api/company/subscription", authenticateToken, async (req, res) => {
 
     // Get company details
     const companyRes = await pool.query(
-      "SELECT id, name, plan_type, billing_period, subscription_status, subscription_start, subscription_end, auto_renew, price_per_user, active_users_count, last_billing_calculation FROM companies WHERE id = $1",
+      "SELECT id, name, plan_type, billing_period, subscription_status, subscription_start, subscription_end, auto_renew, price_per_user, active_users_count, last_billing_calculation, purchased_users, allowed_users, trial_start, trial_end FROM companies WHERE id = $1",
       [companyId]
     );
 
@@ -4089,6 +4566,14 @@ app.get("/api/company/subscription", authenticateToken, async (req, res) => {
     }
 
     const company = companyRes.rows[0];
+
+    // Compute dynamic trial active states
+    const now = new Date();
+    const trialEnd = company.trial_end ? new Date(company.trial_end) : null;
+    const trialStart = company.trial_start ? new Date(company.trial_start) : null;
+    const daysRemaining = trialEnd ? Math.max(0, Math.floor((trialEnd - now) / (1000 * 60 * 60 * 24))) : 0;
+    const isTrialActive = (company.subscription_status === 'trial' || company.subscription_status === 'trialing') && trialEnd && now < trialEnd;
+    const isSubActive = company.subscription_status === 'active' || company.subscription_status === 'paid';
 
     // Count active users (both is_active = true and status = 'Active')
     const activeUsersResult = await pool.query(
@@ -4105,11 +4590,11 @@ app.get("/api/company/subscription", authenticateToken, async (req, res) => {
     const totalUsers = parseInt(totalUsersResult.rows[0].count);
     const inactiveUsers = totalUsers - activeUsers;
 
-    // Calculate pricing based on plan and billing period
+    // Calculate pricing based on plan and billing period (using allowed_users/purchased_users if present)
     const pricing = calculatePricing({
       planType: company.plan_type,
       billingPeriod: company.billing_period,
-      activeUsers: activeUsers,
+      activeUsers: company.allowed_users || company.purchased_users || activeUsers || 10,
       pricePerUser: company.price_per_user || 600
     });
 
@@ -4130,8 +4615,18 @@ app.get("/api/company/subscription", authenticateToken, async (req, res) => {
         auto_renew: company.auto_renew,
         price_per_user: company.price_per_user || 600,
         active_users_count: activeUsers,
+        purchased_users: company.purchased_users || 10,
+        allowed_users: company.allowed_users || company.purchased_users || 10,
+        trial_start: company.trial_start,
+        trial_end: company.trial_end,
         last_billing_calculation: company.last_billing_calculation
       },
+      is_trial_active: isTrialActive,
+      is_subscription_active: isSubActive,
+      days_remaining: daysRemaining,
+      trial_start: trialStart ? trialStart.toISOString() : null,
+      trial_end: trialEnd ? trialEnd.toISOString() : null,
+      allowed_users: company.allowed_users || company.purchased_users || 10,
       active_users: activeUsers,
       pricing: pricing,
       users: {
@@ -4152,7 +4647,7 @@ app.get("/api/company/subscription/pricing", authenticateToken, async (req, res)
     const companyId = req.user.company_id;
 
     const companyRes = await pool.query(
-      "SELECT plan_type, billing_period, price_per_user FROM companies WHERE id = $1",
+      "SELECT plan_type, billing_period, price_per_user, purchased_users, allowed_users FROM companies WHERE id = $1",
       [companyId]
     );
 
@@ -4171,7 +4666,7 @@ app.get("/api/company/subscription/pricing", authenticateToken, async (req, res)
     const pricing = calculatePricing({
       planType: company.plan_type,
       billingPeriod: company.billing_period,
-      activeUsers,
+      activeUsers: company.allowed_users || company.purchased_users || activeUsers || 10,
       pricePerUser: company.price_per_user || 600
     });
 
@@ -4193,7 +4688,7 @@ app.put("/api/company/subscription", authenticateToken, async (req, res) => {
     }
 
     const companyId = req.user.company_id;
-    const { plan_type, billing_period, auto_renew } = req.body;
+    const { plan_type, billing_period, auto_renew, purchased_users, allowed_users } = req.body;
 
     // Validate
     if (plan_type && !['starter', 'custom'].includes(plan_type)) {
@@ -4217,6 +4712,8 @@ app.put("/api/company/subscription", authenticateToken, async (req, res) => {
            billing_period = COALESCE($2, billing_period),
            auto_renew = COALESCE($3, auto_renew),
            active_users_count = $5,
+           purchased_users = COALESCE($6, purchased_users),
+           allowed_users = COALESCE($7, allowed_users, $6, allowed_users),
            last_billing_calculation = NOW(),
            subscription_start = CASE WHEN $1 IS NOT NULL OR $2 IS NOT NULL THEN NOW() ELSE subscription_start END,
            subscription_end = CASE 
@@ -4229,7 +4726,7 @@ app.put("/api/company/subscription", authenticateToken, async (req, res) => {
            updated_at = NOW()
        WHERE id = $4
        RETURNING *`,
-      [plan_type, billing_period, auto_renew, companyId, activeUsers]
+      [plan_type, billing_period, auto_renew, companyId, activeUsers, purchased_users, allowed_users]
     );
 
     const company = result.rows[0];
@@ -4238,7 +4735,7 @@ app.put("/api/company/subscription", authenticateToken, async (req, res) => {
     const pricing = calculatePricing({
       planType: company.plan_type,
       billingPeriod: company.billing_period,
-      activeUsers,
+      activeUsers: company.allowed_users || company.purchased_users || activeUsers || 10,
       pricePerUser: company.price_per_user || 600
     });
 
@@ -4251,6 +4748,95 @@ app.put("/api/company/subscription", authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error("Update subscription error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/subscription/activate-test-mode - Activate subscription in Dev Test Mode
+app.post("/api/subscription/activate-test-mode", authenticateToken, async (req, res) => {
+  try {
+    const { invoice_id, plan, billing_cycle, allowed_users, status } = req.body;
+    const companyId = req.user.company_id;
+
+    // 1. Update the invoice to paid
+    if (invoice_id) {
+      await pool.query(
+        "UPDATE invoices SET status = 'paid', paid_at = NOW(), updated_at = NOW() WHERE id = $1 AND company_id = $2",
+        [invoice_id, companyId]
+      );
+    }
+
+    // 2. Determine end date duration
+    let duration = '1 month';
+    if (billing_cycle === 'quarterly') duration = '3 months';
+    else if (billing_cycle === 'half_yearly') duration = '6 months';
+    else if (billing_cycle === 'yearly') duration = '12 months';
+
+    // 3. Update company plan, allowed users, status
+    const result = await pool.query(
+      `UPDATE companies 
+       SET plan_type = $1, 
+           billing_period = $2, 
+           allowed_users = $3, 
+           purchased_users = $3,
+           subscription_status = $4, 
+           subscription_start = NOW(), 
+           subscription_end = NOW() + CAST($5 AS INTERVAL),
+           is_trial_active = false,
+           updated_at = NOW()
+       WHERE id = $6
+       RETURNING *`,
+      [plan || 'starter', billing_cycle || 'monthly', allowed_users || 10, status || 'active', duration, companyId]
+    );
+
+    res.json({
+      success: true,
+      message: "Subscription activated successfully (Test Mode)",
+      company: result.rows[0]
+    });
+  } catch (error) {
+    console.error("Activate test mode subscription error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/pricing-config
+app.get('/api/pricing-config', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM pricing_config LIMIT 1');
+    res.json(result.rows[0] || {});
+  } catch (error) {
+    console.error("Get pricing config error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT /api/pricing-config (Admin only)
+app.put('/api/pricing-config', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+    const { starter_price_per_user, gst_rate, monthly_discount, quarterly_discount, half_yearly_discount, yearly_discount } = req.body;
+    const result = await pool.query(
+      `UPDATE pricing_config 
+       SET starter_price_per_user = COALESCE($1, starter_price_per_user),
+           gst_rate = COALESCE($2, gst_rate),
+           monthly_discount = COALESCE($3, monthly_discount),
+           quarterly_discount = COALESCE($4, quarterly_discount),
+           half_yearly_discount = COALESCE($5, half_yearly_discount),
+           yearly_discount = COALESCE($6, yearly_discount),
+           updated_at = NOW()
+       WHERE id = 1
+       RETURNING *`,
+      [starter_price_per_user, gst_rate, monthly_discount, quarterly_discount, half_yearly_discount, yearly_discount]
+    );
+    
+    if (result.rows.length > 0) {
+      globalPricingConfig = result.rows[0];
+    }
+    
+    res.json({ success: true, config: globalPricingConfig });
+  } catch (error) {
+    console.error("Update pricing config error:", error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -4422,21 +5008,24 @@ app.get("/api/invoices", authenticateToken, async (req, res) => {
 // Generate invoice
 app.post("/api/invoices/generate", authenticateToken, async (req, res) => {
   try {
-    const { subscription_id, billing_period_start, billing_period_end } = req.body;
+    const { subscription_id, billing_period_start, billing_period_end, amount: bodyAmount, active_users: bodyUsers, plan: bodyPlan } = req.body;
     const companyId = req.user.company_id;
 
-    // Get subscription details
-    const subRes = await pool.query(
-      "SELECT * FROM subscriptions WHERE id = $1 AND company_id = $2",
-      [subscription_id, companyId]
-    );
+    let amount = bodyAmount || 0;
+    let purchasedUsers = bodyUsers || 10;
+    let plan = bodyPlan || 'starter';
 
-    if (subRes.rows.length === 0) {
-      return res.status(404).json({ error: "Subscription not found" });
+    if (subscription_id && subscription_id !== 'temp') {
+      const subRes = await pool.query(
+        "SELECT * FROM subscriptions WHERE id = $1 AND company_id = $2",
+        [subscription_id, companyId]
+      );
+      if (subRes.rows.length > 0) {
+        const subscription = subRes.rows[0];
+        amount = subscription.amount || amount;
+      }
     }
 
-    const subscription = subRes.rows[0];
-    const amount = subscription.amount || 0;
     const gst = amount * 0.18;
     const cgst = amount * 0.09;
     const sgst = amount * 0.09;
@@ -4447,11 +5036,11 @@ app.post("/api/invoices/generate", authenticateToken, async (req, res) => {
 
     const result = await pool.query(`
       INSERT INTO invoices 
-        (subscription_id, company_id, invoice_number, amount, gst_amount, cgst, sgst, total_amount, status, due_date, billing_period_start, billing_period_end)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', NOW() + INTERVAL '15 days', $9, $10)
+        (subscription_id, company_id, invoice_number, amount, gst_amount, cgst, sgst, total_amount, status, due_date, billing_period_start, billing_period_end, purchased_users, plan)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', NOW() + INTERVAL '15 days', $9, $10, $11, $12)
       RETURNING *
     `, [
-      subscription_id,
+      subscription_id && subscription_id !== 'temp' ? subscription_id : null,
       companyId,
       invoiceNumber,
       amount,
@@ -4460,7 +5049,9 @@ app.post("/api/invoices/generate", authenticateToken, async (req, res) => {
       sgst,
       total,
       billing_period_start || new Date().toISOString(),
-      billing_period_end || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+      billing_period_end || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      purchasedUsers,
+      plan
     ]);
 
     res.json(result.rows[0]);

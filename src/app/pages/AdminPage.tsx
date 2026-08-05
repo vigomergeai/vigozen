@@ -12,7 +12,19 @@ import { z } from 'zod'
 import { useApp } from "../context/AppContext";
 import type { UserProfile } from "../context/AppContext";
 import { useNavigate } from "react-router";
+import { usePermissions } from "../hooks/usePermissions";
 
+// All hierarchy roles available to create
+const ALL_HIERARCHY_ROLES = [
+  { value: "Org Admin", label: "Org Admin" },
+  { value: "Sales Manager", label: "Sales Manager" },
+  { value: "Team Leader", label: "Team Leader" },
+  { value: "Sales Executive", label: "Sales Executive" },
+  { value: "Lead Manager", label: "Lead Manager" },
+  { value: "admin", label: "Admin (Full)" },
+];
+
+// Legacy constant (kept for compatibility)
 const ROLE_OPTIONS = ["admin", "user"] as const;
 const DEPT_OPTIONS = [
   {
@@ -76,19 +88,23 @@ interface UserForm {
   email: string;
   password: string;
   confirmPassword: string;
-  role: "super_admin" | "admin" | "manager" | "sales" | "viewer" | "user";
+  role: string;
   employeeId: string;
   department: string;
 }
 
 const emptyForm: UserForm = {
   name: "", email: "", password: "", confirmPassword: "",
-  role: "sales", employeeId: "", department: "sales",
+  role: "Sales Executive", employeeId: "", department: "Sales",
 };
 
 export default function AdminPage() {
   const { role, users, usersLoading, loadUsers, createUser, updateUser, deleteUser, toggleUserAccess, resetUserPassword, activateUser, deactivateUser, userProfile, } = useApp();
   const navigate = useNavigate();
+  const { canCreate } = usePermissions();
+
+  // Filter role options based on the creator's permission level
+  const availableRoles = ALL_HIERARCHY_ROLES.filter(r => canCreate(r.value));
 
   const employeeOptions = [
     { id: "", label: "— No assignment —" },
@@ -242,16 +258,12 @@ export default function AdminPage() {
   };
 
   const handleCreate = async () => {
-    if (!form.name.trim() || !form.email.trim() || !form.password) {
-      setFormError("Name, email, and password are required");
+    if (!form.name.trim() || !form.email.trim()) {
+      setFormError("Name and email are required");
       return;
     }
-    if (form.password !== form.confirmPassword) {
-      setFormError("Passwords do not match");
-      return;
-    }
-    if (form.password.length < 6) {
-      setFormError("Password must be at least 6 characters");
+    if (!form.role) {
+      setFormError("Please select a role for the new user");
       return;
     }
     setSaving(true);
@@ -259,7 +271,6 @@ export default function AdminPage() {
     const result = await createUser({
       name: form.name.trim(),
       email: form.email.trim(),
-      password: form.password,
       role: form.role,
       employeeId: form.employeeId || undefined,
       department: form.department,
@@ -268,8 +279,9 @@ export default function AdminPage() {
     if (result) {
       setShowCreateModal(false);
       setForm(emptyForm);
+      toast.success(`Invitation sent to ${form.email}`);
     } else {
-      setFormError("Failed to create user. Email may already be registered.");
+      setFormError("Failed to invite user. Email may already be registered.");
     }
   };
 
@@ -288,7 +300,7 @@ export default function AdminPage() {
 
     await updateUser(editUser.id, {
       name: form.name.trim(),
-      role: form.role,
+      role: form.role as any,
       employeeId: form.employeeId || null,
       department: form.department,
     });
@@ -1043,47 +1055,10 @@ export default function AdminPage() {
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1.5">
-                    Password *
-                  </label>
-                  <div className="relative">
-                    <input
-                      type={showPass ? "text" : "password"}
-                      value={form.password}
-                      onChange={(e) =>
-                        setForm((f) => ({ ...f, password: e.target.value }))
-                      }
-                      placeholder="Min 6 chars"
-                      className="w-full px-3 py-2 pr-9 text-sm border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPass((s) => !s)}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400"
-                    >
-                      <EyeOff size={13} />
-                    </button>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1.5">
-                    Confirm Password *
-                  </label>
-                  <input
-                    type="password"
-                    value={form.confirmPassword}
-                    onChange={(e) =>
-                      setForm((f) => ({
-                        ...f,
-                        confirmPassword: e.target.value,
-                      }))
-                    }
-                    placeholder="Repeat password"
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                  />
-                </div>
+              {/* Invite info notice */}
+              <div className="flex items-start gap-2 p-3 bg-indigo-50 border border-indigo-200 rounded-xl text-xs text-indigo-700">
+                <Shield size={14} className="flex-shrink-0 mt-0.5" />
+                <span>An <strong>invitation link</strong> will be sent to this email. The user will set their own password when they accept the invite.</span>
               </div>
               <div className="grid grid-cols-3 gap-4">
                 <div>
@@ -1093,12 +1068,17 @@ export default function AdminPage() {
                   <select
                     value={form.role}
                     onChange={(e) =>
-                      setForm((f) => ({ ...f, role: e.target.value as any }))
+                      setForm((f) => ({ ...f, role: e.target.value }))
                     }
                     className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none"
                   >
-                    <option value="user">User</option>
-                    <option value="admin">Admin</option>
+                    {availableRoles.length > 0 ? (
+                      availableRoles.map(r => (
+                        <option key={r.value} value={r.value}>{r.label}</option>
+                      ))
+                    ) : (
+                      <option value="Sales Executive">Sales Executive</option>
+                    )}
                   </select>
                 </div>
                 <div>

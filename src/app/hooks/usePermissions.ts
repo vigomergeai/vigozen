@@ -6,7 +6,7 @@ export const usePermissions = () => {
 
   const canView = (module: string): boolean => {
     // Super Admin and Org Admin get full access
-    if (role === 'Super Admin' || role === 'Org Admin' || role === 'admin') {
+    if (role === 'Super Admin' || role === 'Org Admin' || role === 'admin' || (role as string) === 'admin') {
       return true;
     }
 

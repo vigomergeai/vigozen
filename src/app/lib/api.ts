@@ -51,7 +51,7 @@ async function request<T = any>(
 
     if (!res.ok) {
       const errText = await res.text();
-      
+
       // Auto logout if token is invalid or unauthorized
       if (res.status === 401 || (res.status === 403 && (errText.includes("Invalid token") || errText.includes("invalid signature") || errText.includes("jwt expired") || errText.includes("token")))) {
         if (typeof window !== "undefined") {
@@ -61,7 +61,7 @@ async function request<T = any>(
           localStorage.removeItem("userName");
           localStorage.removeItem("userSettings");
           sessionStorage.removeItem("vigo_token");
-          
+
           if (!window.location.pathname.includes("/login")) {
             window.location.href = "/login";
           }
@@ -246,11 +246,15 @@ export const api = {
     delete: (id: string, token: string) => request("DELETE", `/user-sessions/${id}`, undefined, token),
   },
   invoices: {
-    list: (userId: string, token: string) => request("GET", `/invoices/${userId}`, undefined, token),
+    list: (userId: string, token: string) =>
+      request("GET", `/invoices/${userId}`, undefined, token),
+
     download: (invoiceId: string, token: string) =>
       request("GET", `/api/invoices/download/${invoiceId}`, undefined, token),
-  },
 
+    generate: (data: any, token: string) =>
+      request("POST", "/api/invoices/generate", data, token),
+  },
   comments: {
     /**
      * Fetch all comments for a lead
@@ -348,6 +352,15 @@ export const api = {
      */
     getHistory: (userId: string, token?: string) =>
       request("GET", `/payments/history/${userId}`, undefined, token),
+  },
+
+  // ── Pricing Configuration ──
+  pricingConfig: {
+    get: (token: string) =>
+      request("GET", "/api/pricing-config", undefined, token),
+
+    update: (data: any, token: string) =>
+      request("PUT", "/api/pricing-config", data, token),
   },
 
   subscription: {

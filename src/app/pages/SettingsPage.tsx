@@ -65,7 +65,6 @@ export default function SettingsPage() {
     saveSettings, resetDatabase, userSettings, loading, session, userProfile,
     addIntegration, updateIntegration, subscription,
     employees,
-    // ✅ ADD THESE
     companySubscription,
     companySubscriptionLoading,
     fetchCompanySubscription,
@@ -80,6 +79,9 @@ export default function SettingsPage() {
     deactivateUser,
     users,
     loadUsers,
+    // ── NEW ──
+    pricingConfig,
+    fetchPricingConfig,
   } = useApp();
   const navigate = useNavigate();  // ← ADD THIS
   const [plans, setPlans] = useState<PriceItem[]>(mockPriceList);
@@ -96,10 +98,6 @@ export default function SettingsPage() {
   const [pendingPlan, setPendingPlan] = useState<typeof priceList[0] | null>(null);
   const [selectedPlanBeforeChange, setSelectedPlanBeforeChange] = useState<string | null>(null);
   const [billingHistory, setBillingHistory] = useState<any[]>([]);
-  const [userCount, setUserCount] = useState(10);
-  const [bundlePrice, setBundlePrice] = useState(1000);
-  const [payPeriod, setPayPeriod] = useState<'monthly' | 'yearly'>('monthly');
-  const PRICE_PER_USER = 1300;
   const [notifications, setNotifications] = useState({
     emailLeads: true, emailDeals: true, emailReports: false,
     pushLeads: true, pushDeals: false, pushTeam: true,
@@ -158,7 +156,8 @@ export default function SettingsPage() {
   });
 
   // ── Billing Calculator State ──
-  const activeUsers = Math.max(users?.filter(u => u.isActive).length || 0, 1);
+  const activeUsers = companySubscription?.users?.active ?? users?.filter(u => u.isActive).length ?? 0;
+  const pricePerUser = pricingConfig?.starter_price_per_user || 600;
   const [billingPeriod, setBillingPeriod] = useState('yearly');
   const [purchaseLoading, setPurchaseLoading] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -166,60 +165,82 @@ export default function SettingsPage() {
   const [editingPayment, setEditingPayment] = useState<any>(null);
 
   // Dynamic pricing configuration states (editable inputs in yellow cells)
-  const [starterPrice, setStarterPrice] = useState(600);
-  const [gstRate, setGstRate] = useState(18.0);
-  const [discounts, setDiscounts] = useState({
-    monthly: 0.0,
-    quarterly: 5.0,
-    half_yearly: 10.0,
-    yearly: 15.0
-  });
-  const [calcUsers, setCalcUsers] = useState(10);
 
-  useEffect(() => {
-    if (calcUsers > 50) {
-      setSelectedPlan('custom');
-    } else {
-      setSelectedPlan('starter');
-    }
-  }, [calcUsers, setSelectedPlan]);
+
 
   // Replace the hardcoded selectedPlanData (around line 190-200) with:
-  const selectedPlanData = priceList.find(p => p.id === selectedPlan) || {
-    id: 'starter',
-    name: 'Starter Plan',
-    price: starterPrice,
-    description: 'For growing teams and small businesses.',
-    users: '1-50 Users'
-  };
+  const selectedPlanData = (() => {
+    if (selectedPlan === 'starter') {
+      return {
+        id: 'starter',
+        name: 'Starter Plan',
+        price: pricingConfig?.starter_price_per_user || 600,
+        description: 'For growing teams and small businesses.',
+        users: '1-50 Users'
+      };
+    }
+    return {
+      id: 'custom',
+      name: 'Custom Plan',
+      price: null,
+      description: 'Contact Sales for custom pricing based on your business requirements.',
+      users: '50+ Users'
+    };
+  })();
   // Selected period
   const selectedPeriod = ({
-    monthly: { id: 'monthly', label: 'Monthly', discount: discounts.monthly, multiplier: 1 },
-    quarterly: { id: 'quarterly', label: 'Quarterly', discount: discounts.quarterly, multiplier: 3 },
-    half_yearly: { id: 'half_yearly', label: 'Half Yearly', discount: discounts.half_yearly, multiplier: 6 },
-    yearly: { id: 'yearly', label: 'Yearly', discount: discounts.yearly, multiplier: 12 },
-  } as any)[billingPeriod] || { id: 'monthly', label: 'Monthly', discount: discounts.monthly, multiplier: 1 };
-
+    monthly: {
+      id: 'monthly',
+      label: 'Monthly',
+      discount: pricingConfig?.monthly_discount || 0,
+      multiplier: 1
+    },
+    quarterly: {
+      id: 'quarterly',
+      label: 'Quarterly',
+      discount: pricingConfig?.quarterly_discount || 5,
+      multiplier: 3
+    },
+    half_yearly: {
+      id: 'half_yearly',
+      label: 'Half Yearly',
+      discount: pricingConfig?.half_yearly_discount || 10,
+      multiplier: 6
+    },
+    yearly: {
+      id: 'yearly',
+      label: 'Yearly',
+      discount: pricingConfig?.yearly_discount || 15,
+      multiplier: 12
+    },
+  } as any)[billingPeriod] || {
+    id: 'monthly',
+    label: 'Monthly',
+    discount: 0,
+    multiplier: 1
+  };
   // Pricing calculation
   const pricing = (() => {
-    const pricePerUser = starterPrice;
-    const basePrice = calcUsers * pricePerUser; // Monthly base price
-    const discountPercent = selectedPeriod.discount;
-    const discountAmount = basePrice * (discountPercent / 100);
+    const pricePerUser = pricingConfig?.starter_price_per_user || 600;
+    const gstRate = pricingConfig?.gst_rate || 18;
+
+    const basePrice = activeUsers * pricePerUser * selectedPeriod.multiplier;
+    const discountAmount = basePrice * (selectedPeriod.discount / 100);
     const priceAfterDiscount = basePrice - discountAmount;
     const gstAmount = priceAfterDiscount * (gstRate / 100);
-    const monthsBilled = selectedPeriod.multiplier;
-    const total = (priceAfterDiscount + gstAmount) * monthsBilled;
-    const perMonth = total / monthsBilled;
+    const total = priceAfterDiscount + gstAmount;
+    const perMonth = total / selectedPeriod.multiplier;
+
     return {
       basePrice,
-      discountPercent,
       discountAmount,
       priceAfterDiscount,
       gst: gstAmount,
-      monthsBilled,
       total,
-      perMonth
+      perMonth,
+      gstRate,
+      monthsBilled: selectedPeriod.multiplier,
+      discountPercent: selectedPeriod.discount
     };
   })();
 
@@ -228,16 +249,33 @@ export default function SettingsPage() {
       toast.info("Please contact our sales team for custom pricing");
       return;
     }
+
     setPurchaseLoading(true);
     try {
       const token = localStorage.getItem('token') || session?.access_token;
       if (!token) throw new Error("Not logged in");
 
-      // Direct payment only - no invoice generation
+      // Step 1: Generate invoice FIRST
+      const invoiceData = {
+        subscription_id: (companySubscription?.company as any)?.id || 'temp',
+        billing_period_start: new Date().toISOString(),
+        billing_period_end: new Date(
+          Date.now() + (billingPeriod === 'yearly' ? 365 : billingPeriod === 'quarterly' ? 90 : 30) * 24 * 60 * 60 * 1000
+        ).toISOString(),
+        amount: pricing.total,
+        active_users: activeUsers,
+        plan: selectedPlan,
+        billing_period: billingPeriod
+      };
+
+      const invoiceResponse = await api.invoices.generate(invoiceData, token);
+      console.log('Invoice generated:', invoiceResponse);
+
+      // Step 2: Create payment order
       const response = await api.payments.createOrder(
         pricing.total,
         "INR",
-        `plan_${selectedPlan}_${Date.now()}`,
+        `invoice_${invoiceResponse?.id || Date.now()}`,
         token
       );
 
@@ -249,7 +287,7 @@ export default function SettingsPage() {
       toast.success(`Order ${response.txnid} created!`);
       submitToPayU(response.payuUrl, response.payuData);
 
-      // Refresh data after payment
+      // Step 3: Refresh data after payment
       await fetchInvoices();
       await fetchCompanySubscription();
 
@@ -336,6 +374,13 @@ export default function SettingsPage() {
     fetchPlans();
   }, [userProfile?.id]);
 
+  // ── Fetch pricing config ──
+  useEffect(() => {
+    if (userProfile?.id) {
+      fetchPricingConfig();
+    }
+  }, [userProfile?.id]);
+
   const [profile, setProfile] = useState({
     name: userProfile?.name || currentUser.name,
     email: userProfile?.email || currentUser.email,
@@ -346,14 +391,7 @@ export default function SettingsPage() {
     language: userProfile?.language || "English",
   });
   const getPlanAmount = (plan: string): number => {
-    const planMap: Record<string, number> = {
-      'starter': 600,
-      'professional': 600,
-      'enterprise': 600,
-      'pro': 600,
-      'business': 600,
-    };
-    return planMap[plan] || 600;
+    return pricingConfig?.starter_price_per_user || 600;
   };
   // ── Fetch Ad Connections ──
   const fetchAdConnections = async () => {
@@ -525,35 +563,12 @@ export default function SettingsPage() {
     return planMap[plan] || 'plan_xxxxxxxxxx';
   };
 
-  // ── ADD THIS HANDLER ──
-  //const handleUserCountChange = (count: number) => {
-  //setUserCount(count);
-  //setBundlePrice(calculatePrice(count));
-  //};
-
-  const handleUserCountChange = (count: number) => {
-    setUserCount(count);
-    setBundlePrice(calculatePrice(count, payPeriod));
-  };
-
-  //const calculatePrice = (count: number): number => {
-  //return count * 100; // ₹100 per user
-  // };
-  const calculatePrice = (count: number, period: 'monthly' | 'yearly' = payPeriod): number => {
-    const monthly = count * PRICE_PER_USER;
-    return period === 'yearly' ? Math.round(monthly * 12 * 0.665) : monthly;
-  };
-
   // Capitalize plan type for display
   const formatPlanType = (planType: string | undefined): string => {
     if (!planType) return 'Professional';
     return planType.charAt(0).toUpperCase() + planType.slice(1);
   };
 
-  // Calculate total monthly cost based on active users and price per user
-  const calculateTotal = (): number => {
-    return activeUsers * 600;
-  };
 
   const submitToPayU = (payuUrl: string, payuData: Record<string, any>) => {
     const form = document.createElement('form');
@@ -596,27 +611,6 @@ export default function SettingsPage() {
       </div>
     );
   }
-
-  // ── Purchase Bundle Handler ──
-  const handlePurchaseBundle = async () => {
-    try {
-      const token = localStorage.getItem('token') || session?.access_token;
-      if (!token) throw new Error("Not logged in");
-
-      const response = await api.payments.createOrder(bundlePrice, "INR", `bundle_${userCount}`, token);
-
-      if (!response?.success || !response?.payuData || !response?.payuUrl) {
-        toast.error("Could not create payment order. Please try again.");
-        return;
-      }
-
-      toast.success(`Order ${response.txnid} created!`);
-      submitToPayU(response.payuUrl, response.payuData);
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to create payment');
-      console.error(error);
-    }
-  };
 
   const handleAddPaymentMethod = async () => {
     try {
@@ -1722,7 +1716,9 @@ export default function SettingsPage() {
                         </button>
                       </div>
                       <div className="text-left sm:text-right">
-                        <span className="text-2xl sm:text-3xl font-bold text-slate-900">₹{Math.round(calculateTotal())}</span>
+                        <span className="text-2xl sm:text-3xl font-bold text-slate-900">
+                          ₹{(activeUsers * pricePerUser).toLocaleString()}
+                        </span>
                         <span className="text-sm text-slate-400">/month</span>
                       </div>
                     </div>
@@ -1756,321 +1752,232 @@ export default function SettingsPage() {
                     </button>
                   </div>
 
-                  {/* Billing History */}
-                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                    <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-                      <h3 className="font-semibold text-slate-800 text-sm">Billing History</h3>
-                      <button
-                        onClick={fetchInvoices}
-                        className="p-1.5 hover:bg-slate-50 rounded-lg transition-colors"
-                        title="Refresh"
-                      >
-                        <RefreshCw size={12} className="text-slate-400" />
-                      </button>
-                    </div>
+                  {/* ── NEXT INVOICE ── */}
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
+                    <p className="text-[10px] text-slate-400 uppercase tracking-wider">Next Invoice</p>
+                    <p className="text-xl font-bold text-slate-900 mt-1">
+                      ₹{pricing.total.toLocaleString()}
+                    </p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      Due on {new Date(Date.now() + (selectedPeriod.multiplier * 30) * 24 * 60 * 60 * 1000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                    </p>
+                  </div>
 
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-xs text-left border-collapse">
-                        <thead className="bg-slate-50">
-                          <tr>
-                            <th className="py-2 px-3 text-[10px] text-slate-500 font-medium">Date</th>
-                            <th className="py-2 px-3 text-[10px] text-slate-500 font-medium">Invoice #</th>
-                            <th className="py-2 px-3 text-[10px] text-slate-500 font-medium">Amount</th>
-                            <th className="py-2 px-3 text-[10px] text-slate-500 font-medium">Status</th>
-                            <th className="py-2 px-3 text-[10px] text-slate-500 font-medium">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {invoices.length > 0 ? (
-                            invoices.map((invoice) => (
-                              <tr key={invoice.id} className="hover:bg-slate-50/50 transition-colors">
-                                <td className="py-2.5 px-3 text-[10px] text-slate-600">
-                                  {new Date(invoice.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
-                                </td>
-                                <td className="py-2.5 px-3 text-[10px] text-slate-600">{invoice.invoice_number}</td>
-                                <td className="py-2.5 px-3 text-[10px] font-semibold text-slate-800">₹{invoice.total_amount}</td>
-                                <td className="py-2.5 px-3">
-                                  <span className={`text-[8px] px-1.5 py-0.5 rounded-full border font-medium ${invoice.status === 'paid' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
-                                    invoice.status === 'pending' ? 'bg-amber-50 text-amber-700 border-amber-100' :
-                                      'bg-red-50 text-red-700 border-red-100'
-                                    }`}>
-                                    {invoice.status || 'Pending'}
-                                  </span>
-                                </td>
-                                <td className="py-2.5 px-3">
-                                  <button
-                                    onClick={() => handleDownloadInvoice(invoice.id)}
-                                    className="text-indigo-600 text-[10px] hover:text-indigo-700"
-                                  >
-                                    Download
-                                  </button>
-                                </td>
-                              </tr>
-                            ))
-                          ) : (
-                            <tr>
-                              <td colSpan={5} className="py-8 text-center text-slate-400">
-                                <div className="flex flex-col items-center gap-1.5">
-                                  <FileText size={20} className="text-slate-300" />
-                                  <p className="text-[11px] text-slate-400">No invoices available.</p>
-                                  <p className="text-[9px] text-slate-300">Invoices will appear after purchase.</p>
-                                </div>
-                              </td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
+                  {/* ── PAYMENT METHOD ── */}
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
+                    <p className="text-[10px] text-slate-400 uppercase tracking-wider">Payment Method</p>
+                    {paymentMethods.length > 0 ? (
+                      <>
+                        <div className="flex items-center gap-2 mt-1">
+                          <div className="w-8 h-6 bg-gradient-to-r from-indigo-600 to-purple-600 rounded flex items-center justify-center text-white text-[8px] font-bold">
+                            {paymentMethods[0].brand?.slice(0, 4) || 'VISA'}
+                          </div>
+                          <div>
+                            <p className="text-xs font-medium text-slate-800">•••• •••• •••• {paymentMethods[0].last4}</p>
+                            <p className="text-[10px] text-slate-400">Expires: {paymentMethods[0].expiry}</p>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-2 mt-1.5">
+                          <button className="text-[10px] text-indigo-600 hover:text-indigo-700">Update</button>
+                          <button className="text-[10px] text-red-500 hover:text-red-600">Remove</button>
+                        </div>
+                      </>
+                    ) : (
+                      <button className="text-xs text-indigo-600 hover:text-indigo-700 mt-1 flex items-center gap-1">
+                        <Plus size={14} className="inline-block" /> Add Payment Method
+                      </button>
+                    )}
                   </div>
                 </div>
 
                 {/* ===== RIGHT COLUMN (60% = 3/5) ===== */}
                 <div className="lg:col-span-3 space-y-6">
 
-                  {/* Pricing and Rates Configuration */}
-                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 overflow-x-auto">
-                    <h3 className="text-sm font-semibold text-slate-800 mb-4">Pricing & Plan Configuration</h3>
-                    
-                    {/* Plan Details Table */}
-                    <table className="w-full text-xs border border-slate-200 rounded-lg overflow-hidden mb-4">
-                      <thead>
-                        <tr className="bg-[#1e3a8a] text-white">
-                          <th className="p-2.5 text-left font-semibold border border-slate-300">Plan</th>
-                          <th className="p-2.5 text-center font-semibold border border-slate-300 w-36">Price</th>
-                          <th className="p-2.5 text-center font-semibold border border-slate-300">Unit</th>
-                          <th className="p-2.5 text-center font-semibold border border-slate-300">User Range</th>
-                          <th className="p-2.5 text-left font-semibold border border-slate-300">Notes</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-200">
-                        <tr className="hover:bg-slate-50/50">
-                          <td className="p-2.5 font-bold text-slate-800 border border-slate-200">Starter Plan</td>
-                          <td className="p-2.5 border border-slate-200 text-center">
-                            <div className="flex items-center justify-center bg-[#fef9c3] text-blue-750 font-bold px-1.5 py-1 rounded border border-yellow-300 w-24 mx-auto shadow-inner">
-                              <span className="mr-0.5 text-blue-700">₹</span>
-                              <input
-                                type="number"
-                                value={starterPrice}
-                                onChange={(e) => setStarterPrice(Math.max(0, Number(e.target.value)))}
-                                className="w-16 bg-transparent text-blue-700 font-bold text-center border-none p-0 focus:outline-none focus:ring-0"
-                              />
-                            </div>
-                          </td>
-                          <td className="p-2.5 text-slate-600 text-center border border-slate-200">₹/user/month</td>
-                          <td className="p-2.5 text-slate-600 text-center border border-slate-200 font-medium">1-50 Users</td>
-                          <td className="p-2.5 text-slate-600 border border-slate-200">For growing teams and small businesses.</td>
-                        </tr>
-                        <tr className="hover:bg-slate-50/50">
-                          <td className="p-2.5 font-bold text-slate-800 border border-slate-200">Custom Plan</td>
-                          <td className="p-2.5 text-center text-slate-700 border border-slate-200 font-medium bg-slate-50">Contact Sales</td>
-                          <td className="p-2.5 text-slate-500 text-center border border-slate-200">-</td>
-                          <td className="p-2.5 text-slate-600 text-center border border-slate-200 font-medium">50+ Users</td>
-                          <td className="p-2.5 text-slate-600 border border-slate-200">Contact Sales for custom pricing based on your business requirements.</td>
-                        </tr>
-                      </tbody>
-                    </table>
+                  {/* ── CRM PLANS ── */}
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+                    <h3 className="text-sm font-semibold text-slate-800 mb-4">CRM Plans</h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {/* Starter Plan */}
+                      <div
+                        className={`p-5 rounded-xl border-2 cursor-pointer transition-all ${selectedPlan === 'starter'
+                          ? 'border-indigo-500 bg-indigo-50 shadow-sm'
+                          : 'border-slate-200 hover:border-indigo-200'
+                          }`}
+                        onClick={() => setSelectedPlan('starter')}
+                      >
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <span className={`text-sm font-semibold ${selectedPlan === 'starter' ? 'text-indigo-700' : 'text-slate-800'}`}>
+                              Standard Plan
+                            </span>
+                            <p className={`text-xl font-bold mt-1.5 ${selectedPlan === 'starter' ? 'text-indigo-700' : 'text-slate-900'}`}>
+                              ₹{pricePerUser}
+                              <span className="text-xs font-normal text-slate-400">/user/month</span>
+                            </p>
+                            <p className="text-xs text-slate-500 mt-1">For growing teams and advanced CRM features.</p>
+                            <p className="text-[10px] text-slate-400 mt-1">1-50 Users</p>
+                          </div>
+                          {selectedPlan === 'starter' && (
+                            <CheckCircle size={18} className="text-indigo-600 flex-shrink-0 mt-1" />
+                          )}
+                        </div>
+                      </div>
 
-                    {/* GST Rate input */}
-                    <div className="flex items-center gap-3 mb-6 p-2 bg-slate-50 rounded-lg border border-slate-100 w-fit">
-                      <span className="text-xs font-bold text-slate-700">GST Rate</span>
-                      <div className="flex items-center bg-[#fef9c3] text-blue-700 font-bold px-2 py-1 rounded border border-yellow-300 w-24 shadow-inner">
-                        <input
-                          type="number"
-                          step="0.1"
-                          value={gstRate}
-                          onChange={(e) => setGstRate(Math.max(0, Number(e.target.value)))}
-                          className="w-12 bg-transparent text-blue-700 font-bold text-center border-none p-0 focus:outline-none focus:ring-0"
-                        />
-                        <span className="ml-0.5">%</span>
+                      {/* Custom Plan */}
+                      <div
+                        className={`p-5 rounded-xl border-2 cursor-pointer transition-all ${selectedPlan === 'custom'
+                          ? 'border-indigo-500 bg-indigo-50 shadow-sm'
+                          : 'border-slate-200 hover:border-indigo-200'
+                          }`}
+                        onClick={() => setSelectedPlan('custom')}
+                      >
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <span className={`text-sm font-semibold ${selectedPlan === 'custom' ? 'text-indigo-700' : 'text-slate-800'}`}>
+                              Customize Plan
+                            </span>
+                            <p className={`text-xl font-bold mt-1.5 ${selectedPlan === 'custom' ? 'text-indigo-700' : 'text-slate-900'}`}>
+                              Custom Price
+                            </p>
+                            <p className="text-xs text-slate-500 mt-1">Tailored solutions for your unique business needs.</p>
+                            <p className="text-[10px] text-slate-400 mt-1">50+ Users</p>
+                          </div>
+                          {selectedPlan === 'custom' && (
+                            <CheckCircle size={18} className="text-indigo-600 flex-shrink-0 mt-1" />
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ── BILLING CALCULATOR ── */}
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+                    <h3 className="text-sm font-semibold text-slate-800 mb-4">Billing Calculator</h3>
+
+                    {/* Pay Period */}
+                    <div className="mb-4">
+                      <p className="text-xs text-slate-400 mb-2">Pay Period</p>
+                      <div className="flex flex-wrap gap-2">
+                        {[
+                          { id: 'monthly', label: 'Monthly', discount: pricingConfig?.monthly_discount || 0 },
+                          { id: 'quarterly', label: 'Quarterly', discount: pricingConfig?.quarterly_discount || 5 },
+                          { id: 'half_yearly', label: 'Half Yearly', discount: pricingConfig?.half_yearly_discount || 10 },
+                          { id: 'yearly', label: 'Yearly', discount: pricingConfig?.yearly_discount || 15 },
+                        ].map((period) => {
+                          const isSelected = billingPeriod === period.id;
+                          return (
+                            <button
+                              key={period.id}
+                              onClick={() => setBillingPeriod(period.id)}
+                              className={`px-4 py-2 text-xs rounded-lg border transition-all ${isSelected
+                                ? 'bg-indigo-600 text-white border-indigo-600'
+                                : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'
+                                }`}
+                            >
+                              {period.label}
+                              {period.discount > 0 && (
+                                <span className={`ml-1 text-[8px] font-medium ${isSelected ? 'text-indigo-200' : 'text-emerald-600'
+                                  }`}>
+                                  Save {period.discount}%
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
 
-                    {/* Billing Cycle Discounts Table */}
-                    <div className="mb-2">
-                      <table className="w-full text-xs border border-slate-200 rounded-lg overflow-hidden">
-                        <thead>
-                          <tr className="bg-[#1e3a8a] text-white">
-                            <th colSpan={3} className="p-2.5 text-center font-bold border border-slate-300 text-sm">Billing Cycle Discounts</th>
-                          </tr>
-                          <tr className="bg-slate-100 text-slate-750">
-                            <th className="p-2 text-left font-semibold border border-slate-300">Billing Cycle</th>
-                            <th className="p-2 text-center font-semibold border border-slate-300 w-36">Discount %</th>
-                            <th className="p-2 text-center font-semibold border border-slate-300">Months Billed</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-200">
-                          <tr className="hover:bg-slate-50/50">
-                            <td className="p-2 font-medium text-slate-800 border border-slate-200">Monthly</td>
-                            <td className="p-1.5 border border-slate-200 text-center">
-                              <div className="flex items-center justify-center bg-[#fef9c3] text-blue-700 font-bold px-1.5 py-0.5 rounded border border-yellow-300 w-20 mx-auto shadow-inner">
-                                <input
-                                  type="number"
-                                  step="0.1"
-                                  value={discounts.monthly}
-                                  onChange={(e) => setDiscounts(prev => ({ ...prev, monthly: Math.max(0, Number(e.target.value)) }))}
-                                  className="w-12 bg-transparent text-blue-700 font-bold text-center border-none p-0 focus:outline-none focus:ring-0"
-                                />
-                                <span className="ml-0.5">%</span>
-                              </div>
-                            </td>
-                            <td className="p-2 text-center border border-slate-200 text-slate-600">1</td>
-                          </tr>
-                          <tr className="hover:bg-slate-50/50">
-                            <td className="p-2 font-medium text-slate-800 border border-slate-200">Quarterly</td>
-                            <td className="p-1.5 border border-slate-200 text-center">
-                              <div className="flex items-center justify-center bg-[#fef9c3] text-blue-700 font-bold px-1.5 py-0.5 rounded border border-yellow-300 w-20 mx-auto shadow-inner">
-                                <input
-                                  type="number"
-                                  step="0.1"
-                                  value={discounts.quarterly}
-                                  onChange={(e) => setDiscounts(prev => ({ ...prev, quarterly: Math.max(0, Number(e.target.value)) }))}
-                                  className="w-12 bg-transparent text-blue-700 font-bold text-center border-none p-0 focus:outline-none focus:ring-0"
-                                />
-                                <span className="ml-0.5">%</span>
-                              </div>
-                            </td>
-                            <td className="p-2 text-center border border-slate-200 text-slate-600">3</td>
-                          </tr>
-                          <tr className="hover:bg-slate-50/50">
-                            <td className="p-2 font-medium text-slate-800 border border-slate-200">Half Yearly</td>
-                            <td className="p-1.5 border border-slate-200 text-center">
-                              <div className="flex items-center justify-center bg-[#fef9c3] text-blue-700 font-bold px-1.5 py-0.5 rounded border border-yellow-300 w-20 mx-auto shadow-inner">
-                                <input
-                                  type="number"
-                                  step="0.1"
-                                  value={discounts.half_yearly}
-                                  onChange={(e) => setDiscounts(prev => ({ ...prev, half_yearly: Math.max(0, Number(e.target.value)) }))}
-                                  className="w-12 bg-transparent text-blue-700 font-bold text-center border-none p-0 focus:outline-none focus:ring-0"
-                                />
-                                <span className="ml-0.5">%</span>
-                              </div>
-                            </td>
-                            <td className="p-2 text-center border border-slate-200 text-slate-600">6</td>
-                          </tr>
-                          <tr className="hover:bg-slate-50/50">
-                            <td className="p-2 font-medium text-slate-800 border border-slate-200">Yearly</td>
-                            <td className="p-1.5 border border-slate-200 text-center">
-                              <div className="flex items-center justify-center bg-[#fef9c3] text-blue-700 font-bold px-1.5 py-0.5 rounded border border-yellow-300 w-20 mx-auto shadow-inner">
-                                <input
-                                  type="number"
-                                  step="0.1"
-                                  value={discounts.yearly}
-                                  onChange={(e) => setDiscounts(prev => ({ ...prev, yearly: Math.max(0, Number(e.target.value)) }))}
-                                  className="w-12 bg-transparent text-blue-700 font-bold text-center border-none p-0 focus:outline-none focus:ring-0"
-                                />
-                                <span className="ml-0.5">%</span>
-                              </div>
-                            </td>
-                            <td className="p-2 text-center border border-slate-200 text-slate-600">12</td>
-                          </tr>
-                        </tbody>
-                      </table>
+                    {/* Active Users */}
+                    <div className="mb-4 p-3 bg-slate-50 rounded-xl border border-slate-100">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-xs font-medium text-slate-500">Active Users (Auto)</p>
+                          <p className="text-[9px] text-indigo-500 font-medium mt-1">
+                            Managed automatically from User Management.
+                          </p>
+                        </div>
+                        <span className="text-lg font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100">
+                          {activeUsers}
+                        </span>
+                      </div>
                     </div>
-                    <p className="text-[11px] text-slate-400 italic">Note: Yellow cells are editable inputs (price/user, GST rate, discount %).</p>
-                  </div>
 
-                  {/* Vigogen CRM — Billing Calculator */}
-                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 overflow-x-auto">
-                    <table className="w-full text-xs border border-slate-200 rounded-lg overflow-hidden">
-                      <thead>
-                        <tr className="bg-[#1e3a8a] text-white">
-                          <th colSpan={2} className="p-3 text-center font-bold border border-slate-300 text-base">
-                            Vigogen CRM — Billing Calculator
-                          </th>
-                        </tr>
-                        <tr className="bg-[#2b4c7e] text-white">
-                          <th colSpan={2} className="p-2 text-left font-bold border border-slate-300 text-sm">
-                            Inputs
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-200">
-                        <tr>
-                          <td className="p-2.5 font-semibold text-slate-800 border border-slate-200 w-2/3">Total Users</td>
-                          <td className="p-1.5 border border-slate-200 text-center w-1/3">
-                            <div className="flex items-center justify-center bg-[#fef9c3] text-blue-700 font-bold px-1.5 py-0.5 rounded border border-yellow-300 w-20 mx-auto shadow-inner">
-                              <input
-                                type="number"
-                                value={calcUsers}
-                                onChange={(e) => setCalcUsers(Math.max(1, Number(e.target.value)))}
-                                className="w-16 bg-transparent text-blue-700 font-bold text-center border-none p-0 focus:outline-none focus:ring-0"
-                              />
-                            </div>
-                          </td>
-                        </tr>
-                        <tr>
-                          <td className="p-2.5 font-semibold text-slate-800 border border-slate-200">Price per User / Month (₹)</td>
-                          <td className="p-2.5 border border-slate-200 text-center font-semibold text-slate-700">₹{starterPrice}</td>
-                        </tr>
-                        <tr>
-                          <td className="p-2.5 font-semibold text-slate-800 border border-slate-200">Billing Cycle</td>
-                          <td className="p-1.5 border border-slate-200 text-center">
-                            <select
-                              value={billingPeriod}
-                              onChange={(e) => setBillingPeriod(e.target.value)}
-                              className="bg-[#fef9c3] text-blue-700 font-bold text-center border border-yellow-300 rounded px-2 py-0.5 focus:outline-none focus:ring-0 shadow-inner cursor-pointer"
-                            >
-                              <option value="monthly">Monthly</option>
-                              <option value="quarterly">Quarterly</option>
-                              <option value="half_yearly">Half Yearly</option>
-                              <option value="yearly">Yearly</option>
-                            </select>
-                          </td>
-                        </tr>
-                        <tr>
-                          <td className="p-2.5 font-semibold text-slate-800 border border-slate-200">GST Rate</td>
-                          <td className="p-2.5 border border-slate-200 text-center font-semibold text-slate-700">{gstRate.toFixed(1)}%</td>
-                        </tr>
-                        
-                        <tr className="bg-[#2b4c7e] text-white">
-                          <th colSpan={2} className="p-2 text-left font-bold border border-slate-300 text-sm">
-                            Calculation
-                          </th>
-                        </tr>
-                        <tr>
-                          <td className="p-2.5 text-slate-700 font-medium border border-slate-200">Base Price (Active Users × Price/User)</td>
-                          <td className="p-2.5 border border-slate-200 text-right font-medium text-slate-900">₹{pricing.basePrice.toLocaleString()}</td>
-                        </tr>
-                        <tr>
-                          <td className="p-2.5 text-slate-700 font-medium border border-slate-200">Discount % (based on Billing Cycle)</td>
-                          <td className="p-2.5 border border-slate-200 text-right font-medium text-slate-900">{pricing.discountPercent.toFixed(1)}%</td>
-                        </tr>
-                        <tr>
-                          <td className="p-2.5 text-slate-700 font-medium border border-slate-200">Discount Amount</td>
-                          <td className="p-2.5 border border-slate-200 text-right font-medium text-slate-900">₹{pricing.discountAmount.toLocaleString()}</td>
-                        </tr>
-                        <tr>
-                          <td className="p-2.5 text-slate-700 font-medium border border-slate-200">Price After Discount</td>
-                          <td className="p-2.5 border border-slate-200 text-right font-medium text-slate-900">₹{pricing.priceAfterDiscount.toLocaleString()}</td>
-                        </tr>
-                        <tr>
-                          <td className="p-2.5 text-slate-700 font-medium border border-slate-200">GST Amount</td>
-                          <td className="p-2.5 border border-slate-200 text-right font-medium text-slate-900">₹{pricing.gst.toLocaleString()}</td>
-                        </tr>
-                        <tr>
-                          <td className="p-2.5 text-slate-700 font-medium border border-slate-200">Months Billed (this cycle)</td>
-                          <td className="p-2.5 border border-slate-200 text-right font-medium text-slate-900">{pricing.monthsBilled}</td>
-                        </tr>
-                        <tr className="bg-[#e6f4ea] text-emerald-800">
-                          <td className="p-2.5 font-bold border border-slate-200 text-sm">Total Payable (this billing cycle)</td>
-                          <td className="p-2.5 border border-slate-200 text-right font-bold text-[#065f46] text-base">
-                            ₹{pricing.total.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                          </td>
-                        </tr>
-                        <tr>
-                          <td className="p-2.5 text-slate-700 font-semibold border border-slate-200">Effective Monthly Cost</td>
-                          <td className="p-2.5 border border-slate-200 text-right font-bold text-slate-900 text-sm">
-                            ₹{pricing.perMonth.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                          </td>
-                        </tr>
-                      </tbody>
-                    </table>
+                    {/* Billing Breakdown Section */}
+                    <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
+                      <div className="space-y-2">
+
+                        {/* 1. Active Users */}
+                        <div className="flex justify-between text-sm">
+                          <span className="text-slate-500">Active Users</span>
+                          <span className="text-slate-700">
+                            {activeUsers} × ₹{pricePerUser}{selectedPeriod.multiplier > 1 ? ` × ${selectedPeriod.multiplier}` : ''}
+                          </span>
+                        </div>
+
+                        {/* 2. Base Price */}
+                        <div className="flex justify-between text-sm border-t border-slate-200 pt-2">
+                          <span className="text-slate-500">Base Price</span>
+                          <span className="text-slate-700">₹{pricing.basePrice.toLocaleString()}</span>
+                        </div>
+
+                        {/* 3. NEW: Discount Percentage & Amount */}
+                        {pricing.discountAmount > 0 && (
+                          <div className="flex justify-between text-sm">
+                            <span className="text-emerald-600 font-medium">Discount ({pricing.discountPercent}%)</span>
+                            <span className="text-emerald-600 font-medium">-₹{pricing.discountAmount.toLocaleString()}</span>
+                          </div>
+                        )}
+
+                        {/* 4. NEW: Price After Discount (Before GST) */}
+                        <div className="flex justify-between text-sm">
+                          <span className="text-slate-500">Price After Discount</span>
+                          <span className="text-slate-700 font-medium">₹{pricing.priceAfterDiscount.toLocaleString()}</span>
+                        </div>
+
+                        {/* 5. GST Row (Dynamic label) */}
+                        <div className="flex justify-between text-sm">
+                          <span className="text-slate-500">GST ({pricing.gstRate}%)</span>
+                          <span className="text-slate-700">₹{pricing.gst.toLocaleString()}</span>
+                        </div>
+
+                        {/* 6. NEW: Months Billed */}
+                        <div className="flex justify-between text-sm">
+                          <span className="text-slate-500">Months Billed</span>
+                          <span className="text-slate-700 font-medium">{pricing.monthsBilled}</span>
+                        </div>
+
+                        {/* 7. Total Row */}
+                        <div className="border-t border-slate-200 pt-2 mt-2">
+                          <div className="flex justify-between">
+                            <span className="font-semibold text-slate-800 text-base">Total</span>
+                            <span className="text-xl font-bold text-indigo-600">₹{pricing.total.toLocaleString()}</span>
+                          </div>
+                        </div>
+
+                        {/* 8. NEW: Effective Monthly Cost */}
+                        <div className="flex justify-between text-xs pt-1 border-t border-dashed border-slate-200 mt-1">
+                          <span className="text-slate-400">Effective Monthly Cost</span>
+                          <span className="text-slate-500 font-medium">₹{Math.round(pricing.perMonth).toLocaleString()}/month</span>
+                        </div>
+
+                      </div>
+                    </div>
+
+                    {/* Savings Banner */}
+                    {selectedPeriod.discount > 0 && (
+                      <div className="mt-4 p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
+                        <p className="text-xs text-emerald-700 text-center">
+                          Save {selectedPeriod.discount}% on {selectedPeriod.label} subscription
+                          {selectedPeriod.discount >= 10 && ' and earn up to 12% as wallet credit. (T&C)'}
+                        </p>
+                      </div>
+                    )}
 
                     {/* Purchase Button */}
                     <button
                       onClick={handlePurchase}
                       disabled={purchaseLoading || selectedPlan === 'custom'}
-                      className="w-full mt-5 py-3 bg-indigo-600 text-white font-semibold rounded-xl hover:bg-indigo-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                      className="w-full mt-4 py-3 bg-indigo-600 text-white font-semibold rounded-xl hover:bg-indigo-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                     >
                       {purchaseLoading ? (
                         <>Processing...</>
@@ -2103,7 +2010,71 @@ export default function SettingsPage() {
               </div>
 
               {/* ── BILLING HISTORY (Full Width) ── */}
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+                  <h3 className="font-semibold text-slate-800 text-sm">Billing History</h3>
+                  <button
+                    onClick={fetchInvoices}
+                    className="p-1.5 hover:bg-slate-50 rounded-lg transition-colors"
+                    title="Refresh"
+                  >
+                    <RefreshCw size={12} className="text-slate-400" />
+                  </button>
+                </div>
 
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs text-left border-collapse">
+                    <thead className="bg-slate-50">
+                      <tr>
+                        <th className="py-2 px-3 text-[10px] text-slate-500 font-medium">Date</th>
+                        <th className="py-2 px-3 text-[10px] text-slate-500 font-medium">Invoice #</th>
+                        <th className="py-2 px-3 text-[10px] text-slate-500 font-medium">Amount</th>
+                        <th className="py-2 px-3 text-[10px] text-slate-500 font-medium">Status</th>
+                        <th className="py-2 px-3 text-[10px] text-slate-500 font-medium">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {invoices.length > 0 ? (
+                        invoices.map((invoice) => (
+                          <tr key={invoice.id} className="hover:bg-slate-50/50 transition-colors">
+                            <td className="py-2.5 px-3 text-[10px] text-slate-600">
+                              {new Date(invoice.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                            </td>
+                            <td className="py-2.5 px-3 text-[10px] text-slate-600">{invoice.invoice_number}</td>
+                            <td className="py-2.5 px-3 text-[10px] font-semibold text-slate-800">₹{invoice.total_amount}</td>
+                            <td className="py-2.5 px-3">
+                              <span className={`text-[8px] px-1.5 py-0.5 rounded-full border font-medium ${invoice.status === 'paid' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
+                                invoice.status === 'pending' ? 'bg-amber-50 text-amber-700 border-amber-100' :
+                                  'bg-red-50 text-red-700 border-red-100'
+                                }`}>
+                                {invoice.status || 'Pending'}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <button
+                                onClick={() => handleDownloadInvoice(invoice.id)}
+                                className="text-indigo-600 text-[10px] hover:text-indigo-700"
+                              >
+                                Download
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={5} className="py-8 text-center text-slate-400">
+                            <div className="flex flex-col items-center gap-1.5">
+                              <FileText size={20} className="text-slate-300" />
+                              <p className="text-[11px] text-slate-400">No invoices available.</p>
+                              <p className="text-[9px] text-slate-300">Invoices will appear after purchase.</p>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
 
               {/* ── CANCEL SUBSCRIPTION MODAL ── */}
               {showCancelModal && (
@@ -2353,8 +2324,8 @@ export default function SettingsPage() {
                         ₹{companySubscription.pricing?.total?.toLocaleString() || 0}
                       </div>
                       <div className="text-sm text-slate-500">
-                        ₹{companySubscription.pricing?.base_price || 0} × {companySubscription.active_users || 0} users
-                        {companySubscription.pricing?.discount > 0 && ` (${companySubscription.pricing.discount}% off)`}
+                        ₹{companySubscription.pricing?.basePrice || 0} × {companySubscription.active_users || 0} users
+                        {companySubscription.pricing?.discountPercent && companySubscription.pricing.discountPercent > 0 ? ` (${companySubscription.pricing.discountPercent}% off)` : ""}
                       </div>
                     </div>
                   </div>

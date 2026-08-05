@@ -51,7 +51,7 @@ async function request<T = any>(
 
     if (!res.ok) {
       const errText = await res.text();
-      
+
       // Auto logout if token is invalid or unauthorized
       if (res.status === 401 || (res.status === 403 && (errText.includes("Invalid token") || errText.includes("invalid signature") || errText.includes("jwt expired") || errText.includes("token")))) {
         if (typeof window !== "undefined") {
@@ -61,7 +61,7 @@ async function request<T = any>(
           localStorage.removeItem("userName");
           localStorage.removeItem("userSettings");
           sessionStorage.removeItem("vigo_token");
-          
+
           if (!window.location.pathname.includes("/login")) {
             window.location.href = "/login";
           }
@@ -131,6 +131,8 @@ export const api = {
     profile: (token: string) => request("GET", "/profile", undefined, token),
     setup2FA: (token: string) => request("POST", "/auth/2fa/setup", undefined, token),
     verify2FA: (otpCode: string, token: string) => request("POST", "/auth/2fa/verify", { token: otpCode }, token),
+    validateInvite: (token: string) => request("GET", `/auth/invite/validate?token=${token}`),
+    acceptInvite: (data: { token: string; password: string }) => request("POST", "/auth/invite/accept", data),
   },
   users: {
     list: (token: string) => request("GET", "/users", undefined, token),
@@ -249,11 +251,15 @@ export const api = {
     delete: (id: string, token: string) => request("DELETE", `/user-sessions/${id}`, undefined, token),
   },
   invoices: {
-    list: (userId: string, token: string) => request("GET", `/invoices/${userId}`, undefined, token),
+    list: (userId: string, token: string) =>
+      request("GET", `/invoices/${userId}`, undefined, token),
+
     download: (invoiceId: string, token: string) =>
       request("GET", `/api/invoices/download/${invoiceId}`, undefined, token),
-  },
 
+    generate: (data: any, token: string) =>
+      request("POST", "/api/invoices/generate", data, token),
+  },
   comments: {
     /**
      * Fetch all comments for a lead
@@ -353,6 +359,15 @@ export const api = {
       request("GET", `/payments/history/${userId}`, undefined, token),
   },
 
+  // ── Pricing Configuration ──
+  pricingConfig: {
+    get: (token: string) =>
+      request("GET", "/api/pricing-config", undefined, token),
+
+    update: (data: any, token: string) =>
+      request("PUT", "/api/pricing-config", data, token),
+  },
+
   subscription: {
     status: (token?: string) => request("GET", "/subscription/status", undefined, token),
     trial: {
@@ -362,7 +377,8 @@ export const api = {
     create: (data: { plan_type: string }, token?: string) => request("POST", "/subscription/create", data, token),
     paymentSuccess: (data: { plan_type: string; payment_id: string; amount: number }, token?: string) =>
       request("POST", "/subscription/payment-success", data, token),
-    cancel: (token?: string) => request("POST", "/subscription/cancel", undefined, token), // ← ADD THIS LINE
+    cancel: (token?: string) => request("POST", "/subscription/cancel", undefined, token),
+    activateTestMode: (data: any, token: string) => request("POST", "/api/subscription/activate-test-mode", data, token), // ← ADD THIS LINE
   },
 
   // ── Company Subscription Management ──

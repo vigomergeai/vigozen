@@ -93,25 +93,53 @@ export interface SubscriptionStatus {
   is_subscription_active: boolean;
   is_trialing?: boolean;  // ← ADD THIS for compatibility
 }
+interface PricingConfig {
+  starter_price_per_user: number;
+  gst_rate: number;
+  monthly_discount: number;
+  quarterly_discount: number;
+  half_yearly_discount: number;
+  yearly_discount: number;
+  billing_cycles?: {
+    monthly: { months: number; label: string; discount: number };
+    quarterly: { months: number; label: string; discount: number };
+    half_yearly: { months: number; label: string; discount: number };
+    yearly: { months: number; label: string; discount: number };
+  };
+}
 export interface CompanySubscription {
   company: {
     plan_type: string;
     billing_period: string;
     subscription_status: string;
-    subscription_start: string;
-    subscription_end: string;
+    subscription_start: string | null;
+    subscription_end: string | null;
     auto_renew: boolean;
+    price_per_user: number;
   };
   active_users: number;
   pricing: {
-    base_price: number;
+    activeUsers: number;
+    pricePerUser: number;
+    months: number;
+    basePrice: number;
+    discountPercent: number;
+    discountAmount: number;
     subtotal: number;
-    discount: number;
-    discounted_subtotal: number;
     gst: number;
     total: number;
+    perMonth: number;
+    billingCycle: string;
+    planType: string;
     currency: string;
+    gstRate: number;
   };
+  users: {
+    total: number;
+    active: number;
+    inactive: number;
+  };
+  config: PricingConfig;
 }
 
 export interface Invoice {
@@ -180,7 +208,7 @@ interface AppContextType {
   usersLoading: boolean;
   createUser: (data: {
     email: string;
-    password: string;
+    password?: string;
     name: string;
     role?: string;
     employeeId?: string;
@@ -266,6 +294,9 @@ interface AppContextType {
   invoices: Invoice[];
   fetchInvoices: () => Promise<void>;
 
+  pricingConfig: PricingConfig | null;
+  fetchPricingConfig: () => Promise<void>;
+
   activateUser: (userId: string) => Promise<void>;
   deactivateUser: (userId: string) => Promise<void>;
 }
@@ -327,7 +358,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [companySubscriptionLoading, setCompanySubscriptionLoading] = useState(false);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
+  // ── Pricing Config State ──
+  const [pricingConfig, setPricingConfig] = useState<PricingConfig | null>(null);
 
+  // ── Fetch Pricing Config ──
+  const fetchPricingConfig = useCallback(async () => {
+    try {
+      const token = getToken();
+      if (!token) return;
+
+      const config = await api.pricingConfig.get(token);
+      setPricingConfig(config);
+    } catch (error) {
+      console.error('Failed to fetch pricing config:', error);
+    }
+  }, []);
 
 
   const toDbStatus: Record<LeadStatus, string> = {
@@ -766,6 +811,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  useEffect(() => {
+    if (userProfile?.id && role === "admin") {
+      fetchCompanySubscription();
+      fetchPaymentMethods();
+      fetchInvoices();
+      loadUsers();
+      fetchPricingConfig();
+    }
+  }, [userProfile?.id, role]);
+
   //useEffect(() => { refreshData(); }, []);
   useEffect(() => {
     if (session && userProfile?.id) {
@@ -836,7 +891,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const createUser = async (data: {
-    email: string; password: string; name: string;
+    email: string; password?: string; name: string;
     role?: string; employeeId?: string; department?: string;
   }): Promise<UserProfile | null> => {
     const token = getToken();
@@ -844,6 +899,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toast.error("Unauthorized");
       return null;
     }
+
+    // --- LOCK CHECK ───
+    const activeUsers = users.filter(u => u.isActive).length;
+    const allowedUsers = (companySubscription as any)?.allowed_users || (companySubscription?.company as any)?.allowed_users || 10;
+    if (activeUsers >= allowedUsers) {
+      toast.error("User Limit Reached. Upgrade your subscription to add more users.");
+      return null;
+    }
+
     try {
       const newProfile = await api.users.create(data, token);
       setUsers(prev => [...prev, newProfile]);
@@ -2044,6 +2108,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       deletePaymentMethod,
       invoices,
       fetchInvoices,
+      pricingConfig,
+      fetchPricingConfig,
     }}>
       {children}
     </AppContext.Provider>

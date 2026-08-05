@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { api } from "../lib/api";
+import { api, getApiBaseUrl } from "../lib/api";
 import { toast } from "sonner";
 import {
   Users, Shield, Plus, Edit, Trash2, Key, Search, RefreshCw,
@@ -13,7 +13,7 @@ import { useApp } from "../context/AppContext";
 import type { UserProfile } from "../context/AppContext";
 import { useNavigate } from "react-router";
 
-const ROLE_OPTIONS = ["super_admin", "admin", "manager", "sales", "viewer"] as const;
+const ROLE_OPTIONS = ["admin", "user"] as const;
 const DEPT_OPTIONS = [
   {
     value: "sales",
@@ -76,7 +76,7 @@ interface UserForm {
   email: string;
   password: string;
   confirmPassword: string;
-  role: "super_admin" | "admin" | "manager" | "sales" | "viewer";
+  role: "super_admin" | "admin" | "manager" | "sales" | "viewer" | "user";
   employeeId: string;
   department: string;
 }
@@ -107,7 +107,7 @@ export default function AdminPage() {
     if (!token) return;
     setSubLoading(true);
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/users`, {
+      const res = await fetch(`${getApiBaseUrl()}/users`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
@@ -603,6 +603,20 @@ export default function AdminPage() {
                         key={user.id}
                         className="hover:bg-slate-50 transition-colors"
                       >
+                        <td className="py-3 px-3">
+                          <input
+                            type="checkbox"
+                            className="rounded"
+                            checked={selectedUsers.includes(user.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedUsers([...selectedUsers, user.id]);
+                              } else {
+                                setSelectedUsers(selectedUsers.filter(id => id !== user.id));
+                              }
+                            }}
+                          />
+                        </td>
                         <td className="py-3 px-4">
                           <div className="flex items-center gap-3">
                             <div
@@ -638,9 +652,14 @@ export default function AdminPage() {
                         </td>
                         <td className="py-3 px-3 text-xs text-slate-500">
                           {user.employeeId ? (
-                            <span className="bg-indigo-50 text-indigo-600 border border-indigo-200 px-2 py-0.5 rounded-full">
-                              {user.employeeId}
-                            </span>
+                            (() => {
+                              const emp = users.find(u => u.id === user.employeeId);
+                              return (
+                                <span className="bg-indigo-50 text-indigo-600 border border-indigo-200 px-2 py-0.5 rounded-full" title={emp ? emp.email : user.employeeId}>
+                                  {emp ? emp.name : `${user.employeeId.slice(0, 8)}...`}
+                                </span>
+                              );
+                            })()
                           ) : (
                             <span className="text-slate-300">—</span>
                           )}
@@ -669,32 +688,30 @@ export default function AdminPage() {
                             : "Never"}
                         </td>
                         <td className="py-3 px-4">
-                          <td className="py-3 px-4">
-                            <div className="flex items-center gap-1">
-                              {/* Activate/Deactivate Button */}
-                              {user.id !== userProfile?.id && (
-                                <button
-                                  onClick={() => user.isActive ? deactivateUser(user.id) : activateUser(user.id)}
-                                  className={`p-1.5 rounded-lg transition-colors ${user.isActive
-                                    ? "text-red-400 hover:text-red-600 hover:bg-red-50"
-                                    : "text-emerald-400 hover:text-emerald-600 hover:bg-emerald-50"
-                                    }`}
-                                  title={user.isActive ? "Deactivate User" : "Activate User"}
-                                >
-                                  {user.isActive ? <UserX size={13} /> : <UserCheck size={13} />}
-                                </button>
-                              )}
-                              <button onClick={() => openEdit(user)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors" title="Edit">
-                                <Edit size={13} />
+                          <div className="flex items-center gap-1">
+                            {/* Activate/Deactivate Button */}
+                            {user.id !== userProfile?.id && (
+                              <button
+                                onClick={() => user.isActive ? deactivateUser(user.id) : activateUser(user.id)}
+                                className={`p-1.5 rounded-lg transition-colors ${user.isActive
+                                  ? "text-red-400 hover:text-red-600 hover:bg-red-50"
+                                  : "text-emerald-400 hover:text-emerald-600 hover:bg-emerald-50"
+                                  }`}
+                                title={user.isActive ? "Deactivate User" : "Activate User"}
+                              >
+                                {user.isActive ? <UserX size={13} /> : <UserCheck size={13} />}
                               </button>
-                              <button onClick={() => setShowPasswordModal(user)} className="p-1.5 rounded-lg hover:bg-amber-50 text-slate-400 hover:text-amber-600 transition-colors" title="Reset Password">
-                                <Key size={13} />
-                              </button>
-                              <button onClick={() => setDeleteConfirm(user)} className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500 transition-colors" title="Delete">
-                                <Trash2 size={13} />
-                              </button>
-                            </div>
-                          </td>
+                            )}
+                            <button onClick={() => openEdit(user)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors" title="Edit">
+                              <Edit size={13} />
+                            </button>
+                            <button onClick={() => setShowPasswordModal(user)} className="p-1.5 rounded-lg hover:bg-amber-50 text-slate-400 hover:text-amber-600 transition-colors" title="Reset Password">
+                              <Key size={13} />
+                            </button>
+                            <button onClick={() => setDeleteConfirm(user)} className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500 transition-colors" title="Delete">
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -866,7 +883,7 @@ export default function AdminPage() {
                               setSubscriptions(prev => prev.map(u => u.id === user.id ? updatedUser : u));
 
                               try {
-                                const response = await fetch(`${import.meta.env.VITE_API_URL}/users/${user.id}/subscription`, {
+                                const response = await fetch(`${getApiBaseUrl()}/users/${user.id}/subscription`, {
                                   method: 'PUT',
                                   headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
                                   body: JSON.stringify({ subscription_status: newStatus }),

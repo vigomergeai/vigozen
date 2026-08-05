@@ -624,6 +624,35 @@ const handleDisconnectAd = async (id: string, platformName: string) => {
             </div>
           )}
 
+          {deleteConfirm && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+              <div className="absolute inset-0 bg-black/40" onClick={() => setDeleteConfirm(null)} />
+              <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden p-6 space-y-4">
+                <div className="flex items-center gap-3 text-red-600">
+                  <AlertTriangle size={24} />
+                  <h3 className="text-lg font-semibold text-slate-800">Confirm Delete Ticket</h3>
+                </div>
+                <p className="text-sm text-slate-500">
+                  Are you sure you want to delete this ticket? This action cannot be undone and will permanently remove the ticket from Vigozen CRM.
+                </p>
+                <div className="flex gap-3 pt-2">
+                  <button 
+                    onClick={() => setDeleteConfirm(null)} 
+                    className="flex-1 py-2.5 text-sm border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    onClick={() => handleDelete(deleteConfirm)} 
+                    className="flex-1 py-2.5 text-sm bg-red-600 hover:bg-red-700 text-white rounded-xl transition-colors font-medium"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="flex items-center justify-between">
             <h3 className="text-slate-800 font-semibold">
               {isAdmin ? `All Support Tickets (${tickets.length})` : `My Support Tickets (${tickets.length})`}

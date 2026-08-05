@@ -51,6 +51,23 @@ async function request<T = any>(
 
     if (!res.ok) {
       const errText = await res.text();
+      
+      // Auto logout if token is invalid or unauthorized
+      if (res.status === 401 || (res.status === 403 && (errText.includes("Invalid token") || errText.includes("invalid signature") || errText.includes("jwt expired") || errText.includes("token")))) {
+        if (typeof window !== "undefined") {
+          localStorage.removeItem("token");
+          localStorage.removeItem("user");
+          localStorage.removeItem("userProfile");
+          localStorage.removeItem("userName");
+          localStorage.removeItem("userSettings");
+          sessionStorage.removeItem("vigo_token");
+          
+          if (!window.location.pathname.includes("/login")) {
+            window.location.href = "/login";
+          }
+        }
+      }
+
       throw new Error(`API ${method} ${path} failed (${res.status}): ${errText}`);
     }
 

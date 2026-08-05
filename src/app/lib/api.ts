@@ -128,6 +128,8 @@ export const api = {
     profile: (token: string) => request("GET", "/profile", undefined, token),
     setup2FA: (token: string) => request("POST", "/auth/2fa/setup", undefined, token),
     verify2FA: (otpCode: string, token: string) => request("POST", "/auth/2fa/verify", { token: otpCode }, token),
+    validateInvite: (token: string) => request("GET", `/auth/invite/validate?token=${token}`),
+    acceptInvite: (data: { token: string; password: string }) => request("POST", "/auth/invite/accept", data),
   },
   users: {
     list: (token: string) => request("GET", "/users", undefined, token),
@@ -372,7 +374,8 @@ export const api = {
     create: (data: { plan_type: string }, token?: string) => request("POST", "/subscription/create", data, token),
     paymentSuccess: (data: { plan_type: string; payment_id: string; amount: number }, token?: string) =>
       request("POST", "/subscription/payment-success", data, token),
-    cancel: (token?: string) => request("POST", "/subscription/cancel", undefined, token), // ← ADD THIS LINE
+    cancel: (token?: string) => request("POST", "/subscription/cancel", undefined, token),
+    activateTestMode: (data: any, token: string) => request("POST", "/api/subscription/activate-test-mode", data, token), // ← ADD THIS LINE
   },
 
   // ── Company Subscription Management ──

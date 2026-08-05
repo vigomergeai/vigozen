@@ -3,21 +3,22 @@ import { NavLink, Outlet, useNavigate } from "react-router";
 import {
   LayoutDashboard, Users, TrendingUp, BarChart3, HelpCircle, Settings,
   Bell, Search, ChevronLeft, ChevronRight, Zap, Bot, LogOut, Menu, X,
-  ChevronDown, Shield, User, Sun, Moon, RefreshCw, Crown, UserCog, Database
+  ChevronDown, Shield, User, Sun, Moon, RefreshCw, Crown, UserCog, Database, Lock
 } from "lucide-react";
 import { Toaster } from "sonner";
 import { useApp } from "../context/AppContext";
 import NotificationDropdown from "../components/NotificationDropdown";
 import TrialExpiredModal from "../components/TrialExpiredModal";
 import logo from "../../assets/Media.png";
+import { usePermissions } from "../hooks/usePermissions";
 
 const navItems = [
-  { path: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
-  { path: "/leads", label: "Leads", icon: Users },
-  { path: "/sales", label: "Sales", icon: TrendingUp },
-  { path: "/analysis", label: "Reports", icon: BarChart3 },
-  { path: "/help", label: "Help & Support", icon: HelpCircle },
-  { path: "/settings", label: "Settings", icon: Settings },
+  { path: "/", label: "Dashboard", icon: LayoutDashboard, end: true, module: "leads" },
+  { path: "/leads", label: "Leads", icon: Users, module: "leads" },
+  { path: "/sales", label: "Sales", icon: TrendingUp, module: "deals" },
+  { path: "/analysis", label: "Reports", icon: BarChart3, module: "reports" },
+  { path: "/help", label: "Help & Support", icon: HelpCircle, module: "leads" },
+  { path: "/settings", label: "Settings", icon: Settings, module: "settings" },
 ];
 
 export default function Layout() {
@@ -29,7 +30,10 @@ export default function Layout() {
     backendOnline, logout, activities,
     unreadCount,
     subscription,
+    companySubscription,
   } = useApp();
+
+  const { canView } = usePermissions();
 
 
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -41,14 +45,25 @@ export default function Layout() {
 
   // ── Route protection for expired trials ──
   useEffect(() => {
-    if (subscription && !subscription.is_trial_active && !subscription.is_subscription_active) {
+    if (role !== 'admin' && subscription && !subscription.is_trial_active && !subscription.is_subscription_active) {
       const currentPath = window.location.pathname;
       const allowedPaths = ['/billing', '/login', '/signup', '/payment-success', '/payment-failure'];
       if (!allowedPaths.includes(currentPath)) {
         setShowTrialModal(true);
       }
     }
-  }, [subscription]);
+  }, [subscription, role]);
+
+  const isRestrictedPath = (pathname: string) => {
+    const restricted = ['/leads', '/sales', '/analysis', '/admin', '/integrations'];
+    return pathname === '/' || restricted.some(p => pathname.startsWith(p));
+  };
+
+  const isTrialExpired = role !== 'admin' && companySubscription && 
+    !(companySubscription as any)?.is_trial_active && 
+    !(companySubscription as any)?.is_subscription_active && 
+    !subscription?.is_subscription_active && 
+    !subscription?.is_trial_active;
 
 
   const handleSearch = (query: string) => {
@@ -154,7 +169,7 @@ export default function Layout() {
 
         {/* Nav */}
         <nav className="flex-1 px-3 py-2 space-y-0.5 overflow-y-auto">
-          {navItems.map(({ path, label, icon: Icon, end }) => (
+          {navItems.filter(item => canView(item.module)).map(({ path, label, icon: Icon, end }) => (
             <NavLink
               key={path}
               to={path}
@@ -188,7 +203,7 @@ export default function Layout() {
           ))}
 
           {/* Admin Panel link */}
-          {role === "admin" && (
+          {canView('users') && (
             <NavLink
               to="/admin"
               onClick={() => setMobileOpen(false)}
@@ -462,7 +477,25 @@ export default function Layout() {
         {/* Page content */}
         <main className="flex-1 overflow-y-auto bg-white dark:bg-slate-900 ">
           <div onClick={() => { setShowNotifications(false); setShowUserMenu(false); }}>
-            <Outlet />
+            {isTrialExpired && isRestrictedPath(window.location.pathname) ? (
+              <div className="min-h-[70vh] flex flex-col items-center justify-center p-6 text-center">
+                <Lock size={64} className="text-red-500 mb-4 animate-bounce" />
+                <h1 className="text-3xl font-bold text-slate-800 dark:text-slate-100 mb-2">Your Trial Has Expired</h1>
+                <p className="text-slate-500 dark:text-slate-400 mb-6 max-w-md">
+                  Your free trial period has ended. Please purchase a subscription to continue using premium CRM features, leads tracking, and sales analytics.
+                </p>
+                <div className="flex gap-4">
+                  <button onClick={() => navigate('/settings?tab=pricing')} className="px-6 py-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 font-semibold transition-colors">
+                    View Pricing Plans
+                  </button>
+                  <button onClick={() => navigate('/help')} className="px-6 py-3 border border-slate-200 dark:border-slate-700 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 dark:text-slate-200 font-semibold transition-colors">
+                    Contact Support
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <Outlet />
+            )}
           </div>
         </main>
       </div>

@@ -208,7 +208,7 @@ interface AppContextType {
   usersLoading: boolean;
   createUser: (data: {
     email: string;
-    password: string;
+    password?: string;
     name: string;
     role?: string;
     employeeId?: string;
@@ -891,7 +891,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const createUser = async (data: {
-    email: string; password: string; name: string;
+    email: string; password?: string; name: string;
     role?: string; employeeId?: string; department?: string;
   }): Promise<UserProfile | null> => {
     const token = getToken();
@@ -899,6 +899,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toast.error("Unauthorized");
       return null;
     }
+
+    // --- LOCK CHECK ───
+    const activeUsers = users.filter(u => u.isActive).length;
+    const allowedUsers = (companySubscription as any)?.allowed_users || (companySubscription?.company as any)?.allowed_users || 10;
+    if (activeUsers >= allowedUsers) {
+      toast.error("User Limit Reached. Upgrade your subscription to add more users.");
+      return null;
+    }
+
     try {
       const newProfile = await api.users.create(data, token);
       setUsers(prev => [...prev, newProfile]);

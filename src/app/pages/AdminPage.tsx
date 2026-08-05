@@ -141,7 +141,7 @@ export default function AdminPage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    if (role !== "admin") { navigate("/"); return; }
+    if (role === "Sales Executive" || role === "Lead Manager") { navigate("/"); return; }
     loadUsers();
   }, [role]);
 

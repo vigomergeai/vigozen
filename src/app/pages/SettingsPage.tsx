@@ -156,17 +156,30 @@ export default function SettingsPage() {
   });
 
   // ── Billing Calculator State ──
+  const [purchasedUsers, setPurchasedUsers] = useState(10);
   const activeUsers = companySubscription?.users?.active ?? users?.filter(u => u.isActive).length ?? 0;
+  const allowedUsers = (companySubscription as any)?.allowed_users || (companySubscription?.company as any)?.allowed_users || 10;
   const pricePerUser = pricingConfig?.starter_price_per_user || 600;
   const [billingPeriod, setBillingPeriod] = useState('yearly');
   const [purchaseLoading, setPurchaseLoading] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [editingPayment, setEditingPayment] = useState<any>(null);
+  const [additionalUsers, setAdditionalUsers] = useState(5); // default +5
 
-  // Dynamic pricing configuration states (editable inputs in yellow cells)
+  useEffect(() => {
+    if ((companySubscription?.company as any)?.purchased_users) {
+      setPurchasedUsers((companySubscription.company as any).purchased_users);
+    }
+  }, [companySubscription]);
 
-
+  const handlePurchasedUsersChange = (delta: number) => {
+    const newCount = purchasedUsers + delta;
+    if (newCount >= 1 && newCount <= 100) {
+      setPurchasedUsers(newCount);
+    }
+  };
 
   // Replace the hardcoded selectedPlanData (around line 190-200) with:
   const selectedPlanData = (() => {
@@ -224,7 +237,7 @@ export default function SettingsPage() {
     const pricePerUser = pricingConfig?.starter_price_per_user || 600;
     const gstRate = pricingConfig?.gst_rate || 18;
 
-    const basePrice = activeUsers * pricePerUser * selectedPeriod.multiplier;
+    const basePrice = purchasedUsers * pricePerUser * selectedPeriod.multiplier;
     const discountAmount = basePrice * (selectedPeriod.discount / 100);
     const priceAfterDiscount = basePrice - discountAmount;
     const gstAmount = priceAfterDiscount * (gstRate / 100);
@@ -244,7 +257,19 @@ export default function SettingsPage() {
     };
   })();
 
-  const handlePurchase = async () => {
+  // Calculate ADD-ON price
+  const addOnPricing = (() => {
+    const addOnBase = additionalUsers * pricePerUser * selectedPeriod.multiplier;
+    const addOnDiscount = addOnBase * (selectedPeriod.discount / 100);
+    const addOnAfterDiscount = addOnBase - addOnDiscount;
+    const addOnGst = addOnAfterDiscount * ((pricingConfig?.gst_rate || 18) / 100);
+    return {
+      total: addOnAfterDiscount + addOnGst,
+      perUserPerMonth: pricePerUser
+    };
+  })();
+
+  const handlePurchase = async (isUpgrade = false) => {
     if (selectedPlan === 'custom') {
       toast.info("Please contact our sales team for custom pricing");
       return;
@@ -255,44 +280,50 @@ export default function SettingsPage() {
       const token = localStorage.getItem('token') || session?.access_token;
       if (!token) throw new Error("Not logged in");
 
-      // Step 1: Generate invoice FIRST
+      // 1. GENERATE THE INVOICE (Always happens)
       const invoiceData = {
         subscription_id: (companySubscription?.company as any)?.id || 'temp',
-        billing_period_start: new Date().toISOString(),
-        billing_period_end: new Date(
-          Date.now() + (billingPeriod === 'yearly' ? 365 : billingPeriod === 'quarterly' ? 90 : 30) * 24 * 60 * 60 * 1000
-        ).toISOString(),
-        amount: pricing.total,
-        active_users: activeUsers,
+        amount: isUpgrade ? addOnPricing.total : pricing.total,
+        active_users: isUpgrade ? additionalUsers : purchasedUsers,
         plan: selectedPlan,
-        billing_period: billingPeriod
+        billing_period: billingPeriod,
+        is_upgrade: isUpgrade // Flag to tell backend to add seats, not replace plan
       };
-
       const invoiceResponse = await api.invoices.generate(invoiceData, token);
       console.log('Invoice generated:', invoiceResponse);
 
-      // Step 2: Create payment order
-      const response = await api.payments.createOrder(
-        pricing.total,
-        "INR",
-        `invoice_${invoiceResponse?.id || Date.now()}`,
-        token
-      );
+      // =====================================================
+      // 2. PAYMENT GATEWAY (DISABLED FOR TESTING PHASE)
+      // =====================================================
+      // Uncomment these lines when PayU is live:
+      // const payuResponse = await api.payments.createOrder(invoiceResponse.total, "INR", `invoice_${invoiceResponse.id}`, token);
+      // if (payuResponse.success) submitToPayU(payuResponse.payuUrl, payuResponse.payuData);
+      // return; // STOP execution here in real mode
 
-      if (!response?.success || !response?.payuData || !response?.payuUrl) {
-        toast.error("Could not create payment order. Please try again.");
-        return;
-      }
+      // =====================================================
+      // 3. TEST MODE SIMULATION (Run only in dev)
+      // =====================================================
+      console.log("🧪 TEST MODE: Simulating successful payment for invoice:", invoiceResponse.id);
 
-      toast.success(`Order ${response.txnid} created!`);
-      submitToPayU(response.payuUrl, response.payuData);
+      // Simulate backend activating the subscription
+      await api.subscription.activateTestMode({
+        invoice_id: invoiceResponse.id,
+        plan: selectedPlan,
+        billing_cycle: billingPeriod,
+        allowed_users: isUpgrade ? (allowedUsers + additionalUsers) : purchasedUsers,
+        status: "active"
+      }, token);
 
-      // Step 3: Refresh data after payment
+      toast.success(`✅ Subscription Activated (Test Mode)! ${isUpgrade ? 'Users added.' : ''}`);
+
+      // 4. Refresh UI Data
       await fetchInvoices();
       await fetchCompanySubscription();
+      setShowPaymentModal(false);
+      setShowUpgradeModal(false);
 
     } catch (error: any) {
-      toast.error(error.message || 'Failed to create payment');
+      toast.error(error.message || 'Transaction failed (Test Mode)');
       console.error(error);
     } finally {
       setPurchaseLoading(false);
@@ -1698,30 +1729,54 @@ export default function SettingsPage() {
                   {/* Current Plan Summary */}
                   <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
                     <p className="text-xs text-slate-400 uppercase tracking-wider">Current Plan</p>
-                    <div className="flex flex-col sm:flex-row sm:items-start justify-between mt-2 gap-3 sm:gap-0">
-                      <div className="w-full sm:w-auto">
-                        <h3 className="text-lg sm:text-xl font-bold text-slate-900">
-                          {formatPlanType(companySubscription?.company?.plan_type)}
-                        </h3>
-                        <p className="text-xs sm:text-sm text-slate-500">
-                          Renews on: {companySubscription?.company?.subscription_end
-                            ? new Date(companySubscription.company.subscription_end).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
-                            : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+
+                    {(companySubscription as any)?.is_trial_active ? (
+                      // --- TRIAL ACTIVE UI ---
+                      <div className="mt-2">
+                        <h3 className="text-lg sm:text-xl font-bold text-slate-900">Starter Trial</h3>
+                        <div className="flex items-center gap-2 mt-1">
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700 border border-emerald-200">
+                            <span className="w-2 h-2 bg-emerald-500 rounded-full mr-1.5" />
+                            Free Trial Active
+                          </span>
+                          <span className="text-xs text-slate-500">Day {3 - ((companySubscription as any).days_remaining || 0)} of 3</span>
+                        </div>
+
+                        {/* Progress Bar */}
+                        <div className="w-full bg-slate-100 rounded-full h-2 mt-3">
+                          <div className="bg-emerald-500 rounded-full h-2" style={{ width: `${((3 - ((companySubscription as any).days_remaining || 0)) / 3) * 100}%` }} />
+                        </div>
+                        <p className="text-[10px] text-slate-500 mt-1">
+                          {((companySubscription as any).days_remaining || 0) > 0 ? `${(companySubscription as any).days_remaining} Days Remaining` : 'Ends today!'}
                         </p>
-                        <button
-                          onClick={() => setShowCancelModal(true)}
-                          className="text-xs text-red-500 hover:text-red-600 mt-1"
-                        >
-                          Cancel subscription
-                        </button>
+                        <p className="text-xs text-slate-500 mt-2">
+                          Trial Ends: {(companySubscription as any).trial_end ? new Date((companySubscription as any).trial_end).toLocaleDateString() : 'N/A'}
+                        </p>
                       </div>
-                      <div className="text-left sm:text-right">
-                        <span className="text-2xl sm:text-3xl font-bold text-slate-900">
-                          ₹{(activeUsers * pricePerUser).toLocaleString()}
-                        </span>
-                        <span className="text-sm text-slate-400">/month</span>
+                    ) : (
+                      // --- PAID SUBSCRIPTION UI ---
+                      <div className="flex flex-col sm:flex-row sm:items-start justify-between mt-2 gap-3 sm:gap-0">
+                        <div className="w-full sm:w-auto">
+                          <h3 className="text-lg sm:text-xl font-bold text-slate-900">
+                            {formatPlanType(companySubscription?.company?.plan_type)}
+                          </h3>
+                          <div className="text-xs text-slate-600 mt-1 space-y-0.5">
+                            <p>Purchased Users: <span className="font-semibold">{purchasedUsers}</span></p>
+                            <p>Billing: <span className="font-semibold capitalize">{selectedPeriod.label}</span></p>
+                          </div>
+                          <p className="text-xs text-slate-500 mt-2">
+                            Next Renewal: {companySubscription?.company?.subscription_end ? new Date(companySubscription.company.subscription_end).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'N/A'}
+                          </p>
+                          <button onClick={() => setShowCancelModal(true)} className="text-xs text-red-500 hover:text-red-600 mt-2">Cancel subscription</button>
+                        </div>
+                        <div className="text-left sm:text-right mt-2 sm:mt-0">
+                          <span className="text-2xl sm:text-3xl font-bold text-slate-900">
+                            ₹{(purchasedUsers * pricePerUser).toLocaleString()}
+                          </span>
+                          <span className="text-sm text-slate-400">/month</span>
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
 
                   {/* Contacts */}
@@ -1739,15 +1794,33 @@ export default function SettingsPage() {
                   <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-3 sm:p-4">
                     <div className="flex items-center justify-between">
                       <span className="text-xs sm:text-sm font-medium text-slate-700">Team Members</span>
-                      <span className="text-[10px] sm:text-xs text-slate-500">{users?.filter(u => u.isActive).length || 0} / Unlimited</span>
+                      <span className="text-[10px] sm:text-xs text-slate-500">
+                        {activeUsers} / {allowedUsers} Purchased
+                      </span>
                     </div>
-                    <div className="w-full bg-slate-100 rounded-full h-1 mt-1 sm:mt-2">
-                      <div className="bg-indigo-500 rounded-full h-1" style={{ width: `${Math.min(((users?.filter(u => u.isActive).length || 0) / 50) * 100, 100)}%` }} />
+
+                    {/* Progress Bar */}
+                    <div className="w-full bg-slate-100 rounded-full h-1.5 mt-2 relative">
+                      <div className="bg-indigo-500 rounded-full h-1.5 transition-all" style={{ width: `${Math.min((activeUsers / allowedUsers) * 100, 100)}%` }} />
                     </div>
-                    <button
-                      onClick={() => navigate('/admin')}
-                      className="text-[10px] sm:text-xs text-indigo-600 hover:text-indigo-700 mt-1.5 sm:mt-2 flex items-center gap-1"
-                    >
+                    <p className="text-[9px] text-slate-400 mt-1">
+                      {allowedUsers > 0 ? ((activeUsers / allowedUsers) * 100).toFixed(0) : 0}% of seats used
+                    </p>
+
+                    {/* Limit Reached Warning */}
+                    {activeUsers >= allowedUsers && (
+                      <div className="mt-2 p-1.5 bg-amber-50 border border-amber-200 rounded flex justify-between items-center">
+                        <span className="text-[10px] text-amber-700 font-medium">⚠ User Limit Reached</span>
+                        <button
+                          onClick={() => setShowUpgradeModal(true)}
+                          className="text-[10px] bg-amber-600 text-white px-2 py-0.5 rounded hover:bg-amber-700"
+                        >
+                          Upgrade
+                        </button>
+                      </div>
+                    )}
+
+                    <button onClick={() => navigate('/admin')} className="text-[10px] sm:text-xs text-indigo-600 hover:text-indigo-700 mt-2 flex items-center gap-1">
                       Manage team <ChevronRight size={13} className="inline-block" />
                     </button>
                   </div>
@@ -1763,35 +1836,75 @@ export default function SettingsPage() {
                     </p>
                   </div>
 
-                  {/* ── PAYMENT METHOD ── */}
-                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
-                    <p className="text-[10px] text-slate-400 uppercase tracking-wider">Payment Method</p>
-                    {paymentMethods.length > 0 ? (
-                      <>
-                        <div className="flex items-center gap-2 mt-1">
-                          <div className="w-8 h-6 bg-gradient-to-r from-indigo-600 to-purple-600 rounded flex items-center justify-center text-white text-[8px] font-bold">
-                            {paymentMethods[0].brand?.slice(0, 4) || 'VISA'}
-                          </div>
-                          <div>
-                            <p className="text-xs font-medium text-slate-800">•••• •••• •••• {paymentMethods[0].last4}</p>
-                            <p className="text-[10px] text-slate-400">Expires: {paymentMethods[0].expiry}</p>
-                          </div>
-                        </div>
-                        <div className="flex flex-wrap gap-2 mt-1.5">
-                          <button className="text-[10px] text-indigo-600 hover:text-indigo-700">Update</button>
-                          <button className="text-[10px] text-red-500 hover:text-red-600">Remove</button>
-                        </div>
-                      </>
-                    ) : (
-                      <button className="text-xs text-indigo-600 hover:text-indigo-700 mt-1 flex items-center gap-1">
-                        <Plus size={14} className="inline-block" /> Add Payment Method
+                  {/* Billing History Panel (Replaced Payment Method Card) */}
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 overflow-hidden">
+                    <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-3">
+                      <span className="text-xs font-semibold text-slate-800 tracking-wider uppercase">Billing History</span>
+                      <button
+                        onClick={fetchInvoices}
+                        className="p-1 hover:bg-slate-50 rounded-lg transition-colors"
+                        title="Refresh"
+                      >
+                        <RefreshCw size={12} className="text-slate-400" />
                       </button>
-                    )}
+                    </div>
+
+                    <div className="space-y-3 max-h-[250px] overflow-y-auto pr-1">
+                      {invoices.length > 0 ? (
+                        invoices.map((invoice) => (
+                          <div key={invoice.id} className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-100 hover:border-indigo-100 transition-all">
+                            <div className="space-y-0.5">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-xs font-bold text-slate-800">₹{invoice.total_amount}</span>
+                                <span className={`text-[8px] px-1.5 py-0.5 rounded-full border font-medium ${invoice.status === 'paid'
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-100'
+                                  : invoice.status === 'pending'
+                                    ? 'bg-amber-50 text-amber-700 border-amber-100'
+                                    : 'bg-red-50 text-red-700 border-red-100'
+                                  }`}>
+                                  {invoice.status || 'Pending'}
+                                </span>
+                              </div>
+                              <p className="text-[9px] text-slate-500">
+                                {invoice.invoice_number} · {new Date(invoice.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                              </p>
+                              <p className="text-[9px] text-indigo-500">
+                                {(invoice as any).plan || 'starter'} / {(invoice as any).purchased_users || 'N/A'} Users
+                              </p>
+                            </div>
+                            <button
+                              onClick={() => handleDownloadInvoice(invoice.id)}
+                              className="p-1.5 hover:bg-white text-indigo-600 rounded-lg border border-transparent hover:border-slate-200 transition-colors"
+                              title="Download Invoice"
+                            >
+                              <FileText size={14} />
+                            </button>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="py-8 text-center text-slate-400">
+                          <FileText size={20} className="text-slate-300 mx-auto mb-1.5" />
+                          <p className="text-[10px] font-medium text-slate-400">No invoices available.</p>
+                          <p className="text-[9px] text-slate-300 mt-0.5">Invoices appear after purchase.</p>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
 
                 {/* ===== RIGHT COLUMN (60% = 3/5) ===== */}
                 <div className="lg:col-span-3 space-y-6">
+
+                  {/* ── TRIAL BANNER ── */}
+                  {(companySubscription as any)?.is_trial_active && (
+                    <div className="mb-4 p-3 bg-emerald-50 border border-emerald-200 rounded-lg flex items-center gap-3">
+                      <span className="text-lg">🎉</span>
+                      <div>
+                        <p className="text-xs font-semibold text-emerald-800">Free Trial Active</p>
+                        <p className="text-[10px] text-emerald-700">All CRM features are unlocked. {(companySubscription as any).days_remaining} Days Remaining.</p>
+                      </div>
+                    </div>
+                  )}
 
                   {/* ── CRM PLANS ── */}
                   <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
@@ -1850,229 +1963,177 @@ export default function SettingsPage() {
                     </div>
                   </div>
 
-                  {/* ── BILLING CALCULATOR ── */}
-                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-                    <h3 className="text-sm font-semibold text-slate-800 mb-4">Billing Calculator</h3>
+                  {/* ── PAY PERIOD SELECTOR ── */}
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 mb-4">
+                    <p className="text-xs text-slate-400 mb-2">Pay Period</p>
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        { id: 'monthly', label: 'Monthly', discount: pricingConfig?.monthly_discount || 0 },
+                        { id: 'quarterly', label: 'Quarterly', discount: pricingConfig?.quarterly_discount || 5 },
+                        { id: 'half_yearly', label: 'Half Yearly', discount: pricingConfig?.half_yearly_discount || 10 },
+                        { id: 'yearly', label: 'Yearly', discount: pricingConfig?.yearly_discount || 15 },
+                      ].map((period) => {
+                        const isSelected = billingPeriod === period.id;
+                        return (
+                          <button
+                            key={period.id}
+                            onClick={() => setBillingPeriod(period.id)}
+                            className={`px-4 py-2 text-xs rounded-lg border transition-all ${isSelected
+                              ? 'bg-indigo-600 text-white border-indigo-600'
+                              : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'
+                              }`}
+                          >
+                            {period.label}
+                            {period.discount > 0 && (
+                              <span className={`ml-1 text-[8px] font-medium ${isSelected ? 'text-indigo-200' : 'text-emerald-600'
+                                }`}>
+                                Save {period.discount}%
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
 
-                    {/* Pay Period */}
-                    <div className="mb-4">
-                      <p className="text-xs text-slate-400 mb-2">Pay Period</p>
-                      <div className="flex flex-wrap gap-2">
-                        {[
-                          { id: 'monthly', label: 'Monthly', discount: pricingConfig?.monthly_discount || 0 },
-                          { id: 'quarterly', label: 'Quarterly', discount: pricingConfig?.quarterly_discount || 5 },
-                          { id: 'half_yearly', label: 'Half Yearly', discount: pricingConfig?.half_yearly_discount || 10 },
-                          { id: 'yearly', label: 'Yearly', discount: pricingConfig?.yearly_discount || 15 },
-                        ].map((period) => {
-                          const isSelected = billingPeriod === period.id;
-                          return (
+                  {/* ── MERGED SUBSCRIPTION SUMMARY & CALCULATOR ── */}
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+
+                    {/* 1. HEADER */}
+                    <div className="px-5 py-4 border-b border-slate-100">
+                      <h3 className="text-sm font-semibold text-slate-800">Subscription Summary</h3>
+                    </div>
+
+                    <div className="p-5 space-y-5">
+
+                      {/* ── SECTION 1: SEATS & USAGE ── */}
+                      <div className="flex flex-col gap-3">
+
+                        {/* Purchased Users Selector */}
+                        <div className="flex items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-100">
+                          <div>
+                            <span className="text-sm font-medium text-slate-700">Purchased Users</span>
+                            <p className="text-[10px] text-slate-400">Select the number of seats you need.</p>
+                          </div>
+                          <div className="flex items-center gap-3">
                             <button
-                              key={period.id}
-                              onClick={() => setBillingPeriod(period.id)}
-                              className={`px-4 py-2 text-xs rounded-lg border transition-all ${isSelected
-                                ? 'bg-indigo-600 text-white border-indigo-600'
-                                : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'
-                                }`}
-                            >
-                              {period.label}
-                              {period.discount > 0 && (
-                                <span className={`ml-1 text-[8px] font-medium ${isSelected ? 'text-indigo-200' : 'text-emerald-600'
-                                  }`}>
-                                  Save {period.discount}%
-                                </span>
-                              )}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    {/* Active Users */}
-                    <div className="mb-4 p-3 bg-slate-50 rounded-xl border border-slate-100">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="text-xs font-medium text-slate-500">Active Users (Auto)</p>
-                          <p className="text-[9px] text-indigo-500 font-medium mt-1">
-                            Managed automatically from User Management.
-                          </p>
-                        </div>
-                        <span className="text-lg font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100">
-                          {activeUsers}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Billing Breakdown Section */}
-                    <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
-                      <div className="space-y-2">
-
-                        {/* 1. Active Users */}
-                        <div className="flex justify-between text-sm">
-                          <span className="text-slate-500">Active Users</span>
-                          <span className="text-slate-700">
-                            {activeUsers} × ₹{pricePerUser}{selectedPeriod.multiplier > 1 ? ` × ${selectedPeriod.multiplier}` : ''}
-                          </span>
+                              onClick={() => handlePurchasedUsersChange(-5)}
+                              className="w-8 h-8 rounded-lg bg-slate-200 hover:bg-slate-300 flex items-center justify-center text-slate-700 transition-colors font-bold"
+                            >−</button>
+                            <span className="text-xl font-bold text-indigo-600 w-12 text-center">{purchasedUsers}</span>
+                            <button
+                              onClick={() => handlePurchasedUsersChange(5)}
+                              className="w-8 h-8 rounded-lg bg-slate-200 hover:bg-slate-300 flex items-center justify-center text-slate-700 transition-colors font-bold"
+                            >+</button>
+                          </div>
                         </div>
 
-                        {/* 2. Base Price */}
-                        <div className="flex justify-between text-sm border-t border-slate-200 pt-2">
-                          <span className="text-slate-500">Base Price</span>
-                          <span className="text-slate-700">₹{pricing.basePrice.toLocaleString()}</span>
+                        {/* Current Active Users (Read-Only) */}
+                        <div className="flex items-center justify-between px-1">
+                          <span className="text-xs text-slate-500">Current Active Users (Auto)</span>
+                          <span className="text-sm font-semibold text-slate-700">{activeUsers} Active</span>
                         </div>
 
-                        {/* 3. NEW: Discount Percentage & Amount */}
-                        {pricing.discountAmount > 0 && (
-                          <div className="flex justify-between text-sm">
-                            <span className="text-emerald-600 font-medium">Discount ({pricing.discountPercent}%)</span>
-                            <span className="text-emerald-600 font-medium">-₹{pricing.discountAmount.toLocaleString()}</span>
+                        {/* User Limit Warning */}
+                        {activeUsers >= purchasedUsers && (companySubscription as any)?.is_subscription_active && (
+                          <div className="p-2 bg-amber-50 border border-amber-200 rounded-lg flex items-center justify-between">
+                            <p className="text-[10px] text-amber-700 font-medium">⚠ User Limit Reached ({activeUsers}/{purchasedUsers})</p>
+                            <button onClick={() => navigate('/admin')} className="text-[10px] bg-amber-600 text-white px-2 py-0.5 rounded hover:bg-amber-700">Upgrade</button>
                           </div>
                         )}
 
-                        {/* 4. NEW: Price After Discount (Before GST) */}
-                        <div className="flex justify-between text-sm">
-                          <span className="text-slate-500">Price After Discount</span>
-                          <span className="text-slate-700 font-medium">₹{pricing.priceAfterDiscount.toLocaleString()}</span>
+                      </div>
+
+                      <div className="border-t border-slate-200 my-1"></div>
+
+                      {/* ── SECTION 2: SUBSCRIPTION DETAILS ── */}
+                      <div className="grid grid-cols-2 gap-y-2 text-sm">
+                        <span className="text-slate-500">Plan</span>
+                        <span className="text-slate-800 font-medium text-right">{formatPlanType(companySubscription?.company?.plan_type)}</span>
+
+                        <span className="text-slate-500">Billing Cycle</span>
+                        <span className="text-slate-800 font-medium text-right capitalize">{selectedPeriod.label}</span>
+
+                        <span className="text-slate-500">Price / User</span>
+                        <span className="text-slate-800 font-medium text-right">₹{pricePerUser}</span>
+
+                        <span className="text-slate-500">Months Billed</span>
+                        <span className="text-slate-800 font-medium text-right">{pricing.monthsBilled}</span>
+                      </div>
+
+                      <div className="border-t border-slate-200 my-1"></div>
+
+                      {/* ── SECTION 3: MATH BREAKDOWN ── */}
+                      <div className="space-y-1.5 text-sm">
+                        {/* 1. Base Price */}
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Base Price ({purchasedUsers} × ₹{pricePerUser} × {pricing.monthsBilled})</span>
+                          <span className="text-slate-800">₹{pricing.basePrice.toLocaleString()}</span>
                         </div>
 
-                        {/* 5. GST Row (Dynamic label) */}
-                        <div className="flex justify-between text-sm">
-                          <span className="text-slate-500">GST ({pricing.gstRate}%)</span>
-                          <span className="text-slate-700">₹{pricing.gst.toLocaleString()}</span>
-                        </div>
-
-                        {/* 6. NEW: Months Billed */}
-                        <div className="flex justify-between text-sm">
-                          <span className="text-slate-500">Months Billed</span>
-                          <span className="text-slate-700 font-medium">{pricing.monthsBilled}</span>
-                        </div>
-
-                        {/* 7. Total Row */}
-                        <div className="border-t border-slate-200 pt-2 mt-2">
+                        {/* 2. Discount */}
+                        {pricing.discountAmount > 0 && (
                           <div className="flex justify-between">
-                            <span className="font-semibold text-slate-800 text-base">Total</span>
-                            <span className="text-xl font-bold text-indigo-600">₹{pricing.total.toLocaleString()}</span>
+                            <span className="text-emerald-600">Discount ({pricing.discountPercent}%)</span>
+                            <span className="text-emerald-600">-₹{pricing.discountAmount.toLocaleString()}</span>
+                          </div>
+                        )}
+
+                        {/* 3. Price After Discount */}
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Price After Discount</span>
+                          <span className="text-slate-800 font-medium">₹{pricing.priceAfterDiscount.toLocaleString()}</span>
+                        </div>
+
+                        {/* 4. GST */}
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">GST ({pricing.gstRate}%)</span>
+                          <span className="text-slate-800">₹{pricing.gst.toLocaleString()}</span>
+                        </div>
+                      </div>
+
+                      <div className="border-t-2 border-slate-300 my-1"></div>
+
+                      {/* ── SECTION 4: FINAL TOTALS ── */}
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <span className="text-base font-bold text-slate-900">Total Payable</span>
+                          <span className="text-2xl font-bold text-indigo-600">₹{pricing.total.toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-xs text-slate-400 border-t border-dashed border-slate-200 pt-1.5">
+                          <span>Effective Monthly Cost</span>
+                          <span className="font-medium text-slate-600">₹{Math.round(pricing.perMonth).toLocaleString()}/month</span>
+                        </div>
+                      </div>
+
+                      {/* ── SECTION 5: SAVINGS BANNER & BUTTON ── */}
+                      {pricing.discountPercent > 0 && (
+                        <div className="pt-2">
+                          <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg flex items-center gap-2 mb-4">
+                            <span className="text-xs text-emerald-700 font-medium">
+                              Save {pricing.discountPercent}% with {selectedPeriod.label} Subscription
+                            </span>
                           </div>
                         </div>
-
-                        {/* 8. NEW: Effective Monthly Cost */}
-                        <div className="flex justify-between text-xs pt-1 border-t border-dashed border-slate-200 mt-1">
-                          <span className="text-slate-400">Effective Monthly Cost</span>
-                          <span className="text-slate-500 font-medium">₹{Math.round(pricing.perMonth).toLocaleString()}/month</span>
-                        </div>
-
-                      </div>
-                    </div>
-
-                    {/* Savings Banner */}
-                    {selectedPeriod.discount > 0 && (
-                      <div className="mt-4 p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
-                        <p className="text-xs text-emerald-700 text-center">
-                          Save {selectedPeriod.discount}% on {selectedPeriod.label} subscription
-                          {selectedPeriod.discount >= 10 && ' and earn up to 12% as wallet credit. (T&C)'}
-                        </p>
-                      </div>
-                    )}
-
-                    {/* Purchase Button */}
-                    <button
-                      onClick={handlePurchase}
-                      disabled={purchaseLoading || selectedPlan === 'custom'}
-                      className="w-full mt-4 py-3 bg-indigo-600 text-white font-semibold rounded-xl hover:bg-indigo-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
-                    >
-                      {purchaseLoading ? (
-                        <>Processing...</>
-                      ) : selectedPlan === 'custom' ? (
-                        <>Contact Sales for Custom Pricing</>
-                      ) : (
-                        <>Purchase Bundle ₹{pricing.total.toFixed(0)}</>
                       )}
-                    </button>
-                  </div>
 
-                  {/* Pay with PayU */}
-                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <h4 className="text-sm font-semibold text-slate-800">Pay with PayU</h4>
-                        <p className="text-xs text-slate-400">Click below to complete your payment securely via PayU</p>
-                      </div>
+                      {/* Action Button */}
                       <button
-                        onClick={handlePurchase}
+                        onClick={() => setShowPaymentModal(true)}
                         disabled={purchaseLoading || selectedPlan === 'custom'}
-                        className="px-6 py-2.5 bg-emerald-600 text-white text-sm font-medium rounded-xl hover:bg-emerald-700 transition-colors flex items-center gap-2 disabled:opacity-50"
+                        className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-2 shadow-sm"
                       >
-                        {purchaseLoading ? 'Processing...' : selectedPlan === 'custom' ? 'Contact Sales' : `Pay ₹${pricing.total.toFixed(0)}`}
+                        {purchaseLoading ? (
+                          <>Processing...</>
+                        ) : selectedPlan === 'custom' ? (
+                          <>Contact Sales for Custom Pricing</>
+                        ) : (
+                          <>Activate Subscription ₹{pricing.total.toFixed(0)}</>
+                        )}
                       </button>
+
                     </div>
-                    <p className="text-[10px] text-slate-400 mt-3"> Secure payment via PayU Payment Gateway</p>
                   </div>
-                </div>
-              </div>
-
-              {/* ── BILLING HISTORY (Full Width) ── */}
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-                  <h3 className="font-semibold text-slate-800 text-sm">Billing History</h3>
-                  <button
-                    onClick={fetchInvoices}
-                    className="p-1.5 hover:bg-slate-50 rounded-lg transition-colors"
-                    title="Refresh"
-                  >
-                    <RefreshCw size={12} className="text-slate-400" />
-                  </button>
-                </div>
-
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs text-left border-collapse">
-                    <thead className="bg-slate-50">
-                      <tr>
-                        <th className="py-2 px-3 text-[10px] text-slate-500 font-medium">Date</th>
-                        <th className="py-2 px-3 text-[10px] text-slate-500 font-medium">Invoice #</th>
-                        <th className="py-2 px-3 text-[10px] text-slate-500 font-medium">Amount</th>
-                        <th className="py-2 px-3 text-[10px] text-slate-500 font-medium">Status</th>
-                        <th className="py-2 px-3 text-[10px] text-slate-500 font-medium">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {invoices.length > 0 ? (
-                        invoices.map((invoice) => (
-                          <tr key={invoice.id} className="hover:bg-slate-50/50 transition-colors">
-                            <td className="py-2.5 px-3 text-[10px] text-slate-600">
-                              {new Date(invoice.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
-                            </td>
-                            <td className="py-2.5 px-3 text-[10px] text-slate-600">{invoice.invoice_number}</td>
-                            <td className="py-2.5 px-3 text-[10px] font-semibold text-slate-800">₹{invoice.total_amount}</td>
-                            <td className="py-2.5 px-3">
-                              <span className={`text-[8px] px-1.5 py-0.5 rounded-full border font-medium ${invoice.status === 'paid' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
-                                invoice.status === 'pending' ? 'bg-amber-50 text-amber-700 border-amber-100' :
-                                  'bg-red-50 text-red-700 border-red-100'
-                                }`}>
-                                {invoice.status || 'Pending'}
-                              </span>
-                            </td>
-                            <td className="py-2.5 px-3">
-                              <button
-                                onClick={() => handleDownloadInvoice(invoice.id)}
-                                className="text-indigo-600 text-[10px] hover:text-indigo-700"
-                              >
-                                Download
-                              </button>
-                            </td>
-                          </tr>
-                        ))
-                      ) : (
-                        <tr>
-                          <td colSpan={5} className="py-8 text-center text-slate-400">
-                            <div className="flex flex-col items-center gap-1.5">
-                              <FileText size={20} className="text-slate-300" />
-                              <p className="text-[11px] text-slate-400">No invoices available.</p>
-                              <p className="text-[9px] text-slate-300">Invoices will appear after purchase.</p>
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
                 </div>
               </div>
 
@@ -2114,6 +2175,80 @@ export default function SettingsPage() {
                           Confirm Cancel
                         </button>
                       </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ── PURCHASE CONFIRMATION MODAL ── */}
+              {showPaymentModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+                  <div className="bg-white rounded-2xl shadow-2xl w-[90%] max-w-md overflow-hidden">
+                    <div className="p-6 text-center">
+                      <div className="w-12 h-12 rounded-full bg-indigo-50 flex items-center justify-center mx-auto mb-4">
+                        <CreditCard size={24} className="text-indigo-600" />
+                      </div>
+                      <h3 className="text-lg font-bold text-slate-800 mb-2">Confirm Purchase</h3>
+
+                      <div className="bg-slate-50 rounded-lg p-4 text-left text-xs space-y-2 mb-6">
+                        <div className="flex justify-between"><span className="text-slate-500">Plan</span><span className="font-medium text-slate-800">Starter Plan</span></div>
+                        <div className="flex justify-between"><span className="text-slate-500">Billing</span><span className="font-medium text-slate-800 capitalize">{selectedPeriod.label}</span></div>
+                        <div className="flex justify-between"><span className="text-slate-500">Purchased Users</span><span className="font-medium text-slate-800">{purchasedUsers}</span></div>
+                        <div className="border-t border-slate-200 pt-2 mt-2 flex justify-between">
+                          <span className="font-bold text-slate-800">Total</span>
+                          <span className="font-bold text-indigo-600">₹{pricing.total.toFixed(0)}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-3">
+                        <button onClick={() => setShowPaymentModal(false)} className="flex-1 py-2.5 text-sm border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50">Cancel</button>
+                        <button onClick={() => { setShowPaymentModal(false); handlePurchase(); }} disabled={purchaseLoading} className="flex-1 py-2.5 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-50">
+                          {purchaseLoading ? 'Processing...' : 'Confirm Purchase'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ── UPGRADE MODAL JSX ── */}
+              {showUpgradeModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                  <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+                    <h3 className="text-lg font-bold text-slate-800 mb-2">Need More Users?</h3>
+
+                    <div className="bg-slate-50 p-3 rounded-xl text-xs space-y-1 mb-4">
+                      <div className="flex justify-between"><span>Current Plan</span><span className="font-medium">{formatPlanType(companySubscription?.company?.plan_type)}</span></div>
+                      <div className="flex justify-between"><span>Current Users</span><span className="font-medium">{activeUsers} / {allowedUsers}</span></div>
+                    </div>
+
+                    <div className="flex justify-between items-center mb-4">
+                      <span className="text-sm font-medium text-slate-600">Add Users:</span>
+                      <div className="flex items-center gap-3">
+                        <button onClick={() => setAdditionalUsers(Math.max(1, additionalUsers - 5))} className="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 font-bold">-</button>
+                        <span className="text-lg font-bold w-10 text-center">{additionalUsers}</span>
+                        <button onClick={() => setAdditionalUsers(additionalUsers + 5)} className="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 font-bold">+</button>
+                      </div>
+                    </div>
+
+                    <div className="border-t border-slate-200 pt-3 mb-4">
+                      <div className="flex justify-between text-xs text-slate-500">
+                        <span>{additionalUsers} × ₹{addOnPricing.perUserPerMonth} × {selectedPeriod.multiplier} mo</span>
+                      </div>
+                      <div className="flex justify-between text-lg font-bold mt-1">
+                        <span>Additional Cost:</span>
+                        <span className="text-indigo-600">₹{addOnPricing.total.toFixed(0)}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-3">
+                      <button onClick={() => setShowUpgradeModal(false)} className="flex-1 py-2.5 border border-slate-200 rounded-xl text-sm hover:bg-slate-50">Cancel</button>
+                      <button
+                        onClick={() => handlePurchase(true)} // Points to upgrade purchase flow
+                        className="flex-1 py-2.5 bg-indigo-600 text-white rounded-xl text-sm hover:bg-indigo-700 transition-colors"
+                      >
+                        Upgrade Users
+                      </button>
                     </div>
                   </div>
                 </div>

@@ -254,9 +254,9 @@ const upload = multer({
         { role: 'Sales Executive', module: 'billing', permission: 'none' },
         // Lead Manager
         { role: 'Lead Manager', module: 'leads', permission: 'full' },
-        { role: 'Lead Manager', module: 'deals', permission: 'none' },
-        { role: 'Lead Manager', module: 'users', permission: 'none' },
-        { role: 'Lead Manager', module: 'reports', permission: 'full' },
+        { role: 'Lead Manager', module: 'deals', permission: 'view' },
+        { role: 'Lead Manager', module: 'reports', permission: 'own' },
+        { role: 'Sales Manager', module: 'users', permission: 'team' },
         { role: 'Lead Manager', module: 'settings', permission: 'none' },
         { role: 'Lead Manager', module: 'billing', permission: 'none' }
       ];
@@ -513,11 +513,14 @@ const getPermissionScope = (role, module) => {
   if (isAdminRole(role)) return 'full';
 
   const hierarchy = {
-    'Org Admin': { leads: 'full', deals: 'full', users: 'full', reports: 'full', settings: 'full', billing: 'full', tickets: 'full', activities: 'full' },
-    'Sales Manager': { leads: 'dept', deals: 'dept', users: 'dept', reports: 'dept', settings: 'none', billing: 'none', tickets: 'dept', activities: 'dept' },
-    'Team Leader': { leads: 'team', deals: 'team', users: 'team', reports: 'team', settings: 'none', billing: 'none', tickets: 'team', activities: 'team' },
-    'Sales Executive': { leads: 'own', deals: 'own', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own' },
-    'Lead Manager': { leads: 'full', deals: 'none', users: 'none', reports: 'full', settings: 'none', billing: 'none', tickets: 'full', activities: 'full' }
+    'Org Admin': { leads: 'full', deals: 'full', users: 'full', reports: 'full', settings: 'full', billing: 'full', tickets: 'full', activities: 'full', tasks: 'full', calendar: 'full' },
+    'Sales Manager': { leads: 'dept', deals: 'dept', users: 'dept', reports: 'dept', settings: 'none', billing: 'none', tickets: 'dept', activities: 'dept', tasks: 'dept', calendar: 'dept' },
+    'Team Leader': { leads: 'team', deals: 'team', users: 'team', reports: 'team', settings: 'none', billing: 'none', tickets: 'team', activities: 'team', tasks: 'team', calendar: 'team' },
+    'Sales Executive': { leads: 'own', deals: 'own', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own', tasks: 'own', calendar: 'own' },
+    'Lead Manager': { leads: 'full', deals: 'view', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'full', activities: 'full', tasks: 'full', calendar: 'full' },
+    'Lead Executive': { leads: 'own', deals: 'own', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own', tasks: 'own', calendar: 'own' },
+    'Telecaller': { leads: 'own', deals: 'none', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own', tasks: 'own', calendar: 'own' },
+    'Lead Qualifier': { leads: 'own', deals: 'none', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own', tasks: 'own', calendar: 'own' }
   };
 
   return hierarchy[role]?.[module] || 'none';
@@ -634,6 +637,10 @@ const getScopedQueryFilters = async (table, req) => {
     if (scope === 'own') {
       if (table === 'tickets') {
         clauses.push(`(owner_id = $2 OR assigned_to = $2)`);
+      } else if (table === 'tasks') {
+        clauses.push(`(assigned_to = $2 OR assigned_by = $2)`);
+      } else if (table === 'calendar') {
+        clauses.push(`created_by = $2`);
       } else {
         clauses.push(`owner_id = $2`);
       }
@@ -642,6 +649,10 @@ const getScopedQueryFilters = async (table, req) => {
       const subIds = await getSubordinateUserIds(userId, team_id);
       if (table === 'tickets') {
         clauses.push(`(owner_id = ANY($2) OR assigned_to = ANY($2))`);
+      } else if (table === 'tasks') {
+        clauses.push(`(assigned_to = ANY($2) OR assigned_by = ANY($2))`);
+      } else if (table === 'calendar') {
+        clauses.push(`created_by = ANY($2)`);
       } else {
         clauses.push(`owner_id = ANY($2)`);
       }
@@ -781,10 +792,13 @@ app.post("/tickets", authenticateToken, async (req, res) => {
       assigned_to_name,
     } = req.body;
 
+    const companyId = req.user?.company_id || null;
+
     const result = await pool.query(
       `
       INSERT INTO tickets (
         id,
+        company_id,
         title,
         category,
         priority,
@@ -800,13 +814,14 @@ app.post("/tickets", authenticateToken, async (req, res) => {
       )
       VALUES (
         gen_random_uuid(),
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
         NOW(),
         NOW()
       )
       RETURNING *;
       `,
       [
+        companyId,
         title,
         category,
         priority,
@@ -821,7 +836,6 @@ app.post("/tickets", authenticateToken, async (req, res) => {
     );
 
     const ticket = result.rows[0];
-    const companyId = req.user?.company_id || null;
 
     // Company-wide notification for new ticket
     await notificationService.createCompanyNotification(
@@ -918,6 +932,315 @@ app.get("/activities", authenticateToken, checkPermission('activities'), async (
     );
     res.json(result.rows);
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// ── TASKS CRUD OPERATIONS ──
+
+// GET all tasks (with scoping)
+app.get("/tasks", authenticateToken, checkPermission('tasks'), async (req, res) => {
+  try {
+    const { whereClause, params } = await getScopedQueryFilters('tasks', req);
+    const result = await pool.query(
+      `SELECT t.*, 
+        assigned_to_user.name as assigned_to_name,
+        assigned_by_user.name as assigned_by_name
+       FROM tasks t
+       LEFT JOIN users assigned_to_user ON t.assigned_to = assigned_to_user.id
+       LEFT JOIN users assigned_by_user ON t.assigned_by = assigned_by_user.id
+       ${whereClause} 
+       ORDER BY t.due_date ASC NULLS LAST, t.created_at DESC`,
+      params
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("GET TASKS ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET a single task
+app.get("/tasks/:id", authenticateToken, checkPermission('tasks'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(
+      `SELECT t.*, 
+        assigned_to_user.name as assigned_to_name,
+        assigned_by_user.name as assigned_by_name
+       FROM tasks t
+       LEFT JOIN users assigned_to_user ON t.assigned_to = assigned_to_user.id
+       LEFT JOIN users assigned_by_user ON t.assigned_by = assigned_by_user.id
+       WHERE t.id = $1 AND t.company_id = $2`,
+      [id, req.user.company_id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Task not found" });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("GET TASK ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST create task
+app.post("/tasks", authenticateToken, async (req, res) => {
+  try {
+    const { title, description, assigned_to, due_date, priority, status } = req.body;
+    const companyId = req.user.company_id;
+    const assignedBy = req.user.id;
+
+    if (!title) {
+      return res.status(400).json({ error: "Title is required" });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO tasks (
+        id, company_id, title, description, assigned_to, assigned_by,
+        due_date, priority, status, created_at, updated_at
+      ) VALUES (
+        gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW()
+      ) RETURNING *`,
+      [companyId, title, description, assigned_to || null, assignedBy, due_date || null, priority || 'medium', status || 'pending']
+    );
+
+    // ── Notification for assigned user ──
+    if (assigned_to) {
+      await notificationService.createNotification(
+        assigned_to,
+        'task_assigned',
+        "New Task Assigned",
+        `You have been assigned: "${title}"`,
+        `/tasks/${result.rows[0].id}`,
+        'medium',
+        { task_title: title, task_priority: priority }
+      ).catch(err => console.error("Task notification error:", err));
+    }
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error("CREATE TASK ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT update task
+app.put("/tasks/:id", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, description, assigned_to, due_date, priority, status } = req.body;
+    const companyId = req.user.company_id;
+
+    // Check if task exists and belongs to company
+    const existing = await pool.query(
+      "SELECT * FROM tasks WHERE id = $1 AND company_id = $2",
+      [id, companyId]
+    );
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ error: "Task not found" });
+    }
+
+    const result = await pool.query(
+      `UPDATE tasks 
+       SET title = COALESCE($1, title),
+           description = COALESCE($2, description),
+           assigned_to = COALESCE($3, assigned_to),
+           due_date = COALESCE($4, due_date),
+           priority = COALESCE($5, priority),
+           status = COALESCE($6, status),
+           updated_at = NOW()
+       WHERE id = $7 AND company_id = $8
+       RETURNING *`,
+      [title, description, assigned_to, due_date, priority, status, id, companyId]
+    );
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("UPDATE TASK ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE task
+app.delete("/tasks/:id", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const companyId = req.user.company_id;
+
+    const result = await pool.query(
+      "DELETE FROM tasks WHERE id = $1 AND company_id = $2 RETURNING *",
+      [id, companyId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Task not found" });
+    }
+    res.json({ success: true, deleted: result.rows[0] });
+  } catch (err) {
+    console.error("DELETE TASK ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── CALENDAR CRUD OPERATIONS ──
+
+// GET all calendar events (with scoping)
+app.get("/calendar", authenticateToken, checkPermission('calendar'), async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    const { whereClause, params } = await getScopedQueryFilters('calendar', req);
+
+    let dateFilter = '';
+    if (startDate && endDate) {
+      dateFilter = ` AND event_date BETWEEN $${params.length + 1} AND $${params.length + 2}`;
+      params.push(startDate, endDate);
+    }
+
+    const result = await pool.query(
+      `SELECT c.*, 
+        u.name as created_by_name
+       FROM calendar_events c
+       LEFT JOIN users u ON c.created_by = u.id
+       ${whereClause} ${dateFilter}
+       ORDER BY c.event_date ASC, c.start_time ASC`,
+      params
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("GET CALENDAR EVENTS ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET a single calendar event
+app.get("/calendar/:id", authenticateToken, checkPermission('calendar'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(
+      `SELECT c.*, 
+        u.name as created_by_name
+       FROM calendar_events c
+       LEFT JOIN users u ON c.created_by = u.id
+       WHERE c.id = $1 AND c.company_id = $2`,
+      [id, req.user.company_id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Calendar event not found" });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("GET CALENDAR EVENT ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST create calendar event
+app.post("/calendar", authenticateToken, async (req, res) => {
+  try {
+    const {
+      title, description, event_date, start_time, end_time,
+      location, attendees, all_day, color
+    } = req.body;
+    const companyId = req.user.company_id;
+    const createdBy = req.user.id;
+
+    if (!title) {
+      return res.status(400).json({ error: "Title is required" });
+    }
+    if (!event_date) {
+      return res.status(400).json({ error: "Event date is required" });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO calendar_events (
+        id, company_id, title, description, event_date, start_time, end_time,
+        created_by, location, attendees, all_day, color, created_at, updated_at
+      ) VALUES (
+        gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW()
+      ) RETURNING *`,
+      [
+        companyId,
+        title,
+        description || null,
+        event_date,
+        start_time || null,
+        end_time || null,
+        createdBy,
+        location || null,
+        attendees || [],
+        all_day || false,
+        color || '#4F46E5'
+      ]
+    );
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error("CREATE CALENDAR EVENT ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT update calendar event
+app.put("/calendar/:id", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      title, description, event_date, start_time, end_time,
+      location, attendees, all_day, color
+    } = req.body;
+    const companyId = req.user.company_id;
+
+    const existing = await pool.query(
+      "SELECT * FROM calendar_events WHERE id = $1 AND company_id = $2",
+      [id, companyId]
+    );
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ error: "Calendar event not found" });
+    }
+
+    const result = await pool.query(
+      `UPDATE calendar_events 
+       SET title = COALESCE($1, title),
+           description = COALESCE($2, description),
+           event_date = COALESCE($3, event_date),
+           start_time = COALESCE($4, start_time),
+           end_time = COALESCE($5, end_time),
+           location = COALESCE($6, location),
+           attendees = COALESCE($7, attendees),
+           all_day = COALESCE($8, all_day),
+           color = COALESCE($9, color),
+           updated_at = NOW()
+       WHERE id = $10 AND company_id = $11
+       RETURNING *`,
+      [title, description, event_date, start_time, end_time, location, attendees, all_day, color, id, companyId]
+    );
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("UPDATE CALENDAR EVENT ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE calendar event
+app.delete("/calendar/:id", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const companyId = req.user.company_id;
+
+    const result = await pool.query(
+      "DELETE FROM calendar_events WHERE id = $1 AND company_id = $2 RETURNING *",
+      [id, companyId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Calendar event not found" });
+    }
+    res.json({ success: true, deleted: result.rows[0] });
+  } catch (err) {
+    console.error("DELETE CALENDAR EVENT ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1136,7 +1459,8 @@ app.post("/users", authenticateToken, async (req, res) => {
       'Org Admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive'],
       'admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive'],
       'Sales Manager': ['Team Leader', 'Sales Executive'],
-      'Team Leader': ['Sales Executive']
+      'Team Leader': ['Sales Executive'],
+      'Lead Manager': ['Lead Executive', 'Telecaller', 'Lead Qualifier']  // ← ADD THIS
     };
 
     const { name, email, role, employeeId, department, team_id, manager_id: bodyManagerId } = req.body;
@@ -1161,10 +1485,14 @@ app.post("/users", authenticateToken, async (req, res) => {
     // 4. Handle auto-creation of team if role is 'Team Leader'
     let newTeamId = team_id || null;
     if (targetRole === 'Team Leader') {
+      // Get team_name from request body, fallback to default
+      const { team_name } = req.body;
+      const finalTeamName = team_name || `${name}'s Team`;
+
       const teamResult = await pool.query(
         `INSERT INTO teams (company_id, team_name, team_leader_id, manager_id) 
-         VALUES ($1, $2, $3, $4) RETURNING id`,
-        [companyId, `${name}'s Team`, null, manager_id]
+        VALUES ($1, $2, $3, $4) RETURNING id`,
+        [companyId, finalTeamName, null, manager_id]
       );
       newTeamId = teamResult.rows[0].id;
     }
@@ -1232,8 +1560,10 @@ app.delete("/users/:id", authenticateToken, async (req, res) => {
     console.log("User:", req.user);
 
     // Only admins can delete users
-    if (req.user.role !== "admin") {
-      return res.status(403).json({ error: "Admin access required" });
+
+
+    function isAdminRole(role) {
+      return ['admin', 'super_admin', 'org_admin'].includes(role);
     }
 
     const userId = req.params.id;
@@ -1308,10 +1638,12 @@ app.delete("/users/:id", authenticateToken, async (req, res) => {
 });
 
 // Toggle user active/inactive
-app.put("/users/:id/toggle-access", authenticateToken, async (req, res) => {
+app.put("/users/:id/toggle-access", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin']), async (req, res) => {
   try {
-    if (req.user.role !== "admin") {
-      return res.status(403).json({ error: "Admin access required" });
+
+
+    function isAdminRole(role) {
+      return ['admin', 'super_admin', 'org_admin'].includes(role);
     }
 
     const { isActive } = req.body;
@@ -1333,10 +1665,12 @@ app.put("/users/:id/toggle-access", authenticateToken, async (req, res) => {
 });
 
 // Reset user password (admin only)
-app.put("/users/:id/password", authenticateToken, async (req, res) => {
+app.put("/users/:id/password", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin']), async (req, res) => {
   try {
-    if (req.user.role !== "admin") {
-      return res.status(403).json({ error: "Admin access required" });
+
+
+    function isAdminRole(role) {
+      return ['admin', 'super_admin', 'org_admin'].includes(role);
     }
 
     const { password } = req.body;
@@ -1365,10 +1699,12 @@ app.put("/users/:id/password", authenticateToken, async (req, res) => {
 // ── USER ACTIVATION/DEACTIVATION ──
 
 // Activate user
-app.put("/users/:id/activate", authenticateToken, async (req, res) => {
+app.put("/users/:id/activate", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin']), async (req, res) => {
   try {
-    if (req.user.role !== "admin") {
-      return res.status(403).json({ error: "Admin access required" });
+
+
+    function isAdminRole(role) {
+      return ['admin', 'super_admin', 'org_admin'].includes(role);
     }
 
     const userId = req.params.id;
@@ -1431,10 +1767,12 @@ app.put("/users/:id/activate", authenticateToken, async (req, res) => {
 });
 
 // Deactivate user
-app.put("/users/:id/deactivate", authenticateToken, async (req, res) => {
+app.put("/users/:id/deactivate", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin']), async (req, res) => {
   try {
-    if (req.user.role !== "admin") {
-      return res.status(403).json({ error: "Admin access required" });
+
+
+    function isAdminRole(role) {
+      return ['admin', 'super_admin', 'org_admin'].includes(role);
     }
 
     const userId = req.params.id;
@@ -1478,13 +1816,17 @@ app.put("/users/:id/deactivate", authenticateToken, async (req, res) => {
 
 
 // Settings
-app.get("/settings/:userId", async (req, res) => {
-  try {
-    const result = await pool.query("SELECT * FROM settings WHERE user_id = $1", [req.params.userId]);
-    res.json(result.rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+app.get("/settings/:userId", authenticateToken, async (req, res) => {
+  const userId = req.params.userId;
+  const requestingUserId = req.user.id;
+  const isAdmin = isAdminRole(req.user.role);
+
+  if (userId !== requestingUserId && !isAdmin) {
+    return res.status(403).json({ error: "Access denied" });
   }
+
+  const result = await pool.query("SELECT * FROM settings WHERE user_id = $1", [userId]);
+  res.json(result.rows[0]);
 });
 // Leads POST
 app.post("/leads", authenticateToken, async (req, res) => {
@@ -2225,9 +2567,11 @@ app.delete("/deals/:id", authenticateToken, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-app.delete("/admin/reset-database", authenticateToken, async (req, res) => {
-  if (req.user.role !== "admin") {
-    return res.status(403).json({ error: "Admin access required" });
+app.delete("/admin/reset-database", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin']), async (req, res) => {
+
+
+  function isAdminRole(role) {
+    return ['admin', 'super_admin', 'org_admin'].includes(role);
   }
   try {
     await pool.query("DELETE FROM leads");
@@ -3754,7 +4098,7 @@ app.post("/payments/verify", authenticateToken, async (req, res) => {
 // ──────────────────────────────────────────────────────────────
 
 // GET /api/audit-logs (Admin only)
-app.get("/api/audit-logs", authenticateToken, async (req, res) => {
+app.get("/api/audit-logs", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin']), async (req, res) => {
   try {
     if (req.user.role !== 'admin') {
       return res.status(403).json({ error: "Admin access required" });
@@ -3807,7 +4151,7 @@ app.get("/api/audit-logs", authenticateToken, async (req, res) => {
 });
 
 // POST /users/bulk/action (Admin only)
-app.post("/users/bulk/action", authenticateToken, async (req, res) => {
+app.post("/users/bulk/action", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin']), async (req, res) => {
   try {
     if (req.user.role !== 'admin') {
       return res.status(403).json({ error: "Admin access required" });
@@ -3874,7 +4218,8 @@ app.post("/users/bulk/action", authenticateToken, async (req, res) => {
         break;
 
       case 'assign_role':
-        if (!value || !['super_admin', 'admin', 'manager', 'sales', 'viewer', 'user'].includes(value)) {
+        const validRoles = ['super_admin', 'org_admin', 'admin', 'sales_manager', 'team_leader', 'sales_executive', 'lead_manager', 'lead_executive', 'telecaller', 'lead_qualifier'];
+        if (!value || !validRoles.includes(value)) {
           return res.status(400).json({ error: "Invalid role" });
         }
         result = await pool.query(
@@ -4822,7 +5167,7 @@ app.get('/api/pricing-config', async (req, res) => {
 });
 
 // PUT /api/pricing-config (Admin only)
-app.put('/api/pricing-config', authenticateToken, async (req, res) => {
+app.put('/api/pricing-config', authenticateToken, requireRole(['admin', 'super_admin', 'org_admin']), async (req, res) => {
   try {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
     const { starter_price_per_user, gst_rate, monthly_discount, quarterly_discount, half_yearly_discount, yearly_discount } = req.body;
@@ -4852,7 +5197,7 @@ app.put('/api/pricing-config', authenticateToken, async (req, res) => {
 });
 
 // POST /api/company/subscription/quote - Request custom quote
-app.post("/api/company/subscription/quote", authenticateToken, async (req, res) => {
+app.post("/api/company/subscription/quote", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin']), async (req, res) => {
   try {
     const companyId = req.user.company_id;
 
@@ -4872,7 +5217,7 @@ app.post("/api/company/subscription/quote", authenticateToken, async (req, res) 
 });
 
 // GET /api/company/subscription/quote-status - Check quote status
-app.get("/api/company/subscription/quote-status", authenticateToken, async (req, res) => {
+app.get("/api/company/subscription/quote-status", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin']), async (req, res) => {
   try {
     const companyId = req.user.company_id;
 

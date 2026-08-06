@@ -12,7 +12,126 @@ import { z } from 'zod'
 import { useApp } from "../context/AppContext";
 import type { UserProfile } from "../context/AppContext";
 import { useNavigate } from "react-router";
+import { usePermissions } from "../hooks/usePermissions";
 
+// All hierarchy roles available to create
+
+
+const ALL_HIERARCHY_ROLES = [
+  { value: "Org Admin", label: "Org Admin" },
+  { value: "Sales Manager", label: "Sales Manager" },
+  { value: "Team Leader", label: "Team Leader" },
+  { value: "Sales Executive", label: "Sales Executive" },
+  { value: "Lead Manager", label: "Lead Manager" },
+  { value: "admin", label: "Admin (Full)" },
+];
+// ── ROLE HIERARCHY CONFIGURATION ── (Add this after the existing constants)
+
+// Who can create whom (Creation Rules)
+export const ROLE_CREATION_RULES: Record<string, string[]> = {
+  'Super Admin': ['Org Admin'],
+  'Org Admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive'],
+  'admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive'],
+  'Sales Manager': ['Team Leader', 'Sales Executive'],
+  'Lead Manager': ['Lead Executive', 'Telecaller', 'Lead Qualifier'],
+  'Team Leader': ['Sales Executive'],
+  'Lead Executive': [],
+  'Telecaller': [],
+  'Lead Qualifier': [],
+  'Sales Executive': []
+};
+
+// Who reports to whom (Reporting Rules)
+export const REPORTING_RULES: Record<string, string[]> = {
+  'Org Admin': ['Super Admin'],
+  'Sales Manager': ['Org Admin'],
+  'Lead Manager': ['Org Admin'],
+  'Team Leader': ['Sales Manager', 'Org Admin'],
+  'Sales Executive': ['Team Leader', 'Sales Manager'],
+  'Lead Executive': ['Lead Manager'],
+  'Telecaller': ['Lead Manager'],
+  'Lead Qualifier': ['Lead Manager']
+};
+
+// All roles list for dropdown (filtered by user's role)
+export const ALL_ROLES = [
+  'Super Admin',
+  'Org Admin',
+  'Sales Manager',
+  'Lead Manager',
+  'Team Leader',
+  'Sales Executive',
+  'Lead Executive',
+  'Telecaller',
+  'Lead Qualifier'
+];
+
+// Avatar color helper
+// Avatar color helper
+const getAvatarColor = (role: string): string => {
+  const colors: Record<string, string> = {
+    // ── ADMIN ROLES ──
+    'Super Admin': 'bg-gradient-to-br from-purple-600 to-indigo-600',
+    'super_admin': 'bg-gradient-to-br from-purple-600 to-indigo-600',
+    'Org Admin': 'bg-gradient-to-br from-indigo-600 to-blue-600',
+    'org_admin': 'bg-gradient-to-br from-indigo-600 to-blue-600',
+    'admin': 'bg-gradient-to-br from-red-600 to-rose-600',
+
+    // ── SALES MANAGEMENT ROLES ──
+    'Sales Manager': 'bg-gradient-to-br from-blue-600 to-cyan-600',
+    'sales_manager': 'bg-gradient-to-br from-blue-600 to-cyan-600',
+    'Lead Manager': 'bg-gradient-to-br from-orange-600 to-amber-600',
+    'lead_manager': 'bg-gradient-to-br from-orange-600 to-amber-600',
+    'Team Leader': 'bg-gradient-to-br from-cyan-600 to-teal-600',
+    'team_leader': 'bg-gradient-to-br from-cyan-600 to-teal-600',
+
+    // ── SALES ROLES ──
+    'Sales Executive': 'bg-gradient-to-br from-emerald-600 to-green-600',
+    'sales': 'bg-gradient-to-br from-emerald-600 to-green-600',
+    'sales_executive': 'bg-gradient-to-br from-emerald-600 to-green-600',
+    'Lead Executive': 'bg-gradient-to-br from-yellow-600 to-amber-600',
+    'lead_executive': 'bg-gradient-to-br from-yellow-600 to-amber-600',
+    'Telecaller': 'bg-gradient-to-br from-pink-600 to-rose-600',
+    'telecaller': 'bg-gradient-to-br from-pink-600 to-rose-600',
+    'Lead Qualifier': 'bg-gradient-to-br from-gray-600 to-slate-600',
+    'lead_qualifier': 'bg-gradient-to-br from-gray-600 to-slate-600',
+  };
+  return colors[role] || 'bg-gradient-to-br from-gray-500 to-slate-500';
+};
+
+// Role color helper
+const getRoleColor = (role: string): string => {
+  const colors: Record<string, string> = {
+    // ── ADMIN ROLES ──
+    'Super Admin': 'bg-purple-100 text-purple-700',
+    'super_admin': 'bg-purple-100 text-purple-700',
+    'Org Admin': 'bg-indigo-100 text-indigo-700',
+    'org_admin': 'bg-indigo-100 text-indigo-700',
+    'admin': 'bg-red-100 text-red-700',
+
+    // ── SALES MANAGEMENT ROLES ──
+    'Sales Manager': 'bg-blue-100 text-blue-700',
+    'sales_manager': 'bg-blue-100 text-blue-700',
+    'Lead Manager': 'bg-orange-100 text-orange-700',
+    'lead_manager': 'bg-orange-100 text-orange-700',
+    'Team Leader': 'bg-cyan-100 text-cyan-700',
+    'team_leader': 'bg-cyan-100 text-cyan-700',
+
+    // ── SALES ROLES ──
+    'Sales Executive': 'bg-green-100 text-green-700',
+    'sales': 'bg-green-100 text-green-700',
+    'sales_executive': 'bg-green-100 text-green-700',
+    'Lead Executive': 'bg-yellow-100 text-yellow-700',
+    'lead_executive': 'bg-yellow-100 text-yellow-700',
+    'Telecaller': 'bg-pink-100 text-pink-700',
+    'telecaller': 'bg-pink-100 text-pink-700',
+    'Lead Qualifier': 'bg-gray-100 text-gray-700',
+    'lead_qualifier': 'bg-gray-100 text-gray-700',
+  };
+  return colors[role] || 'bg-gray-100 text-gray-500';
+};
+
+// Legacy constant (kept for compatibility)
 const ROLE_OPTIONS = ["admin", "user"] as const;
 const DEPT_OPTIONS = [
   {
@@ -76,19 +195,29 @@ interface UserForm {
   email: string;
   password: string;
   confirmPassword: string;
-  role: "super_admin" | "admin" | "manager" | "sales" | "viewer" | "user";
+  role: string;
   employeeId: string;
   department: string;
+  manager_id: string;
 }
 
 const emptyForm: UserForm = {
   name: "", email: "", password: "", confirmPassword: "",
-  role: "sales", employeeId: "", department: "sales",
+  role: "Sales Executive", employeeId: "", department: "Sales",
+  manager_id: "",
 };
 
 export default function AdminPage() {
   const { role, users, usersLoading, loadUsers, createUser, updateUser, deleteUser, toggleUserAccess, resetUserPassword, activateUser, deactivateUser, userProfile, } = useApp();
   const navigate = useNavigate();
+  const { canCreate } = usePermissions();
+
+  // Filter role options based on the creator's permission level
+  const availableRoles = useMemo(() => {
+    const userRole = userProfile?.role || 'Sales Executive';
+    const roles = ROLE_CREATION_RULES[userRole] || ['Sales Executive'];
+    return roles.map(r => ({ value: r, label: r }));
+  }, [userProfile]);
 
   const employeeOptions = [
     { id: "", label: "— No assignment —" },
@@ -111,8 +240,8 @@ export default function AdminPage() {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
-      setSubscriptions(data || []);
-    } catch { } finally { setSubLoading(false); }
+      setSubscriptions(Array.isArray(data) ? data : []);
+    } catch { setSubscriptions([]); } finally { setSubLoading(false); }
   };
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [auditLogsLoading, setAuditLogsLoading] = useState(false);
@@ -124,7 +253,7 @@ export default function AdminPage() {
   const [bulkActionValue, setBulkActionValue] = useState<string>('');
 
   const [search, setSearch] = useState("");
-  const [filterRole, setFilterRole] = useState<"all" | "admin" | "user">("all");
+  const [filterRole, setFilterRole] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<"all" | "active" | "inactive">("all");
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
 
@@ -164,6 +293,16 @@ export default function AdminPage() {
 
     return data;
   }, [users, search, filterRole, filterStatus]);
+
+  // Get available managers based on selected role
+  const getAvailableManagers = (selectedRole: string) => {
+    const allowedManagerRoles = REPORTING_RULES[selectedRole] || [];
+    return users.filter(u =>
+      u.id !== userProfile?.id &&
+      allowedManagerRoles.includes(u.role) &&
+      u.isActive
+    );
+  };
 
   const fetchAuditLogs = async () => {
     const token = localStorage.getItem('token');
@@ -217,41 +356,51 @@ export default function AdminPage() {
 
 
 
-  const stats = useMemo(() => ({
-    total: users.length,
-    active: users.filter(u => u.isActive).length,
-    admins: users.filter(u => u.role === "admin" || u.role === "super_admin").length,
-    users: users.filter(u => u.role !== "admin" && u.role !== "super_admin").length,
-    inactive: users.filter(u => !u.isActive).length,
-  }), [users]);
+  const stats = useMemo(() => {
+    const adminRoles = ["admin", "super_admin", "Super Admin", "Org Admin"];
+    const admins = users.filter(u => adminRoles.includes(u.role)).length;
+    const regularUsers = users.filter(u => !adminRoles.includes(u.role)).length;
+
+    return {
+      total: users.length,
+      active: users.filter(u => u.isActive).length,
+      admins,
+      users: regularUsers,
+      inactive: users.filter(u => !u.isActive).length,
+    };
+  }, [users]);
 
   const openCreate = () => {
-    setForm(emptyForm);
+    setForm({
+      ...emptyForm,
+      role: availableRoles[0]?.value || "Sales Executive"
+    });
     setFormError("");
     setShowCreateModal(true);
   };
 
   const openEdit = (user: UserProfile) => {
-    // console.log(user);
     setForm({
-      name: user.name, email: user.email, password: "", confirmPassword: "",
-      role: user.role, employeeId: user.employeeId || "", department: user.department,
+      name: user.name,
+      email: user.email,
+      password: "",
+      confirmPassword: "",
+      role: user.role,
+      employeeId: user.employeeId || "",
+      department: user.department || "Sales",
+      manager_id: user.manager_id || "",  // ← ADD THIS
     });
     setFormError("");
     setEditUser(user);
   };
 
   const handleCreate = async () => {
-    if (!form.name.trim() || !form.email.trim() || !form.password) {
-      setFormError("Name, email, and password are required");
+    if (!form.name.trim() || !form.email.trim()) {
+      setFormError("Name and email are required");
       return;
     }
-    if (form.password !== form.confirmPassword) {
-      setFormError("Passwords do not match");
-      return;
-    }
-    if (form.password.length < 6) {
-      setFormError("Password must be at least 6 characters");
+    if (!form.role) {
+      setFormError("Please select a role for the new user");
       return;
     }
     setSaving(true);
@@ -259,7 +408,6 @@ export default function AdminPage() {
     const result = await createUser({
       name: form.name.trim(),
       email: form.email.trim(),
-      password: form.password,
       role: form.role,
       employeeId: form.employeeId || undefined,
       department: form.department,
@@ -268,8 +416,9 @@ export default function AdminPage() {
     if (result) {
       setShowCreateModal(false);
       setForm(emptyForm);
+      toast.success(`Invitation sent to ${form.email}`);
     } else {
-      setFormError("Failed to create user. Email may already be registered.");
+      setFormError("Failed to invite user. Email may already be registered.");
     }
   };
 
@@ -288,7 +437,7 @@ export default function AdminPage() {
 
     await updateUser(editUser.id, {
       name: form.name.trim(),
-      role: form.role,
+      role: form.role as any,
       employeeId: form.employeeId || null,
       department: form.department,
     });
@@ -461,14 +610,32 @@ export default function AdminPage() {
                 className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 transition-all"
               />
             </div>
+            {/* ── ROLE FILTER (Clean Static List) ── */}
             <select
               value={filterRole}
-              onChange={(e) => setFilterRole(e.target.value as any)}
-              className="px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none text-slate-600"
+              onChange={(e) => setFilterRole(e.target.value)}
+              className="px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none text-slate-600 min-w-[150px]"
             >
               <option value="all">All Roles</option>
-              <option value="admin">Admin</option>
-              <option value="user">User</option>
+
+              <optgroup label="Admin">
+                <option value="Super Admin">Super Admin</option>
+                <option value="Org Admin">Org Admin</option>
+                <option value="admin">Admin</option>
+              </optgroup>
+
+              <optgroup label="Management">
+                <option value="Sales Manager">Sales Manager</option>
+                <option value="Lead Manager">Lead Manager</option>
+                <option value="Team Leader">Team Leader</option>
+              </optgroup>
+
+              <optgroup label="Sales">
+                <option value="Sales Executive">Sales Executive</option>
+                <option value="Lead Executive">Lead Executive</option>
+                <option value="Telecaller">Telecaller</option>
+                <option value="Lead Qualifier">Lead Qualifier</option>
+              </optgroup>
             </select>
 
             <select
@@ -523,8 +690,8 @@ export default function AdminPage() {
                   className="px-3 py-1.5 text-sm border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                 >
                   <option value="">Select Role</option>
-                  {ROLE_OPTIONS.map((r) => (
-                    <option key={r} value={r}>{r === 'admin' ? 'Admin' : 'User'}</option>
+                  {['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'].map((r) => (
+                    <option key={r} value={r}>{r}</option>
                   ))}
                 </select>
               )}
@@ -584,7 +751,7 @@ export default function AdminPage() {
                         Role
                       </th>
                       <th className="text-left py-3 px-3 text-xs text-slate-500 font-medium">
-                        Employee
+                        Reports To
                       </th>
                       <th className="text-left py-3 px-3 text-xs text-slate-500 font-medium">
                         Status
@@ -620,7 +787,7 @@ export default function AdminPage() {
                         <td className="py-3 px-4">
                           <div className="flex items-center gap-3">
                             <div
-                              className={`w-9 h-9 rounded-xl flex items-center justify-center text-xs font-bold flex-shrink-0 ${user.role === "admin" ? "bg-gradient-to-br from-purple-500 to-indigo-600" : "bg-gradient-to-br from-emerald-500 to-teal-600"} text-white`}
+                              className={`w-9 h-9 rounded-xl flex items-center justify-center text-xs font-bold flex-shrink-0 ${getAvatarColor(user.role)} text-white`}
                             >
                               {user.name
                                 .split(" ")
@@ -632,7 +799,7 @@ export default function AdminPage() {
                             <div>
                               <div className="text-xs font-semibold text-slate-800 flex items-center gap-1">
                                 {user.name}
-                                {user.role === "admin" && (
+                                {["admin", "super_admin", "Super Admin", "Org Admin"].includes(user.role) && (
                                   <Crown size={10} className="text-purple-500" />
                                 )}
                               </div>
@@ -644,22 +811,20 @@ export default function AdminPage() {
                           </div>
                         </td>
                         <td className="py-3 px-3">
-                          <span
-                            className={`text-xs px-2 py-0.5 rounded-full border font-medium ${getRoleBadge(user.role)}`}
-                          >
-                            {user.role === "admin" ? "Admin" : "User"}
+                          <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${getRoleColor(user.role)}`}>
+                            {user.role}
                           </span>
                         </td>
                         <td className="py-3 px-3 text-xs text-slate-500">
-                          {user.employeeId ? (
-                            (() => {
-                              const emp = users.find(u => u.id === user.employeeId);
-                              return (
-                                <span className="bg-indigo-50 text-indigo-600 border border-indigo-200 px-2 py-0.5 rounded-full" title={emp ? emp.email : user.employeeId}>
-                                  {emp ? emp.name : `${user.employeeId.slice(0, 8)}...`}
-                                </span>
-                              );
-                            })()
+                          {user.manager_id ? (
+                            <span className="flex items-center gap-1">
+                              <span className="font-medium text-slate-700">
+                                {users.find(u => u.id === user.manager_id)?.name || 'Unknown'}
+                              </span>
+                              <span className="text-[10px] text-slate-400">
+                                ({users.find(u => u.id === user.manager_id)?.role || 'N/A'})
+                              </span>
+                            </span>
                           ) : (
                             <span className="text-slate-300">—</span>
                           )}
@@ -1043,47 +1208,10 @@ export default function AdminPage() {
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1.5">
-                    Password *
-                  </label>
-                  <div className="relative">
-                    <input
-                      type={showPass ? "text" : "password"}
-                      value={form.password}
-                      onChange={(e) =>
-                        setForm((f) => ({ ...f, password: e.target.value }))
-                      }
-                      placeholder="Min 6 chars"
-                      className="w-full px-3 py-2 pr-9 text-sm border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPass((s) => !s)}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400"
-                    >
-                      <EyeOff size={13} />
-                    </button>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1.5">
-                    Confirm Password *
-                  </label>
-                  <input
-                    type="password"
-                    value={form.confirmPassword}
-                    onChange={(e) =>
-                      setForm((f) => ({
-                        ...f,
-                        confirmPassword: e.target.value,
-                      }))
-                    }
-                    placeholder="Repeat password"
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                  />
-                </div>
+              {/* Invite info notice */}
+              <div className="flex items-start gap-2 p-3 bg-indigo-50 border border-indigo-200 rounded-xl text-xs text-indigo-700">
+                <Shield size={14} className="flex-shrink-0 mt-0.5" />
+                <span>An <strong>invitation link</strong> will be sent to this email. The user will set their own password when they accept the invite.</span>
               </div>
               <div className="grid grid-cols-3 gap-4">
                 <div>
@@ -1093,12 +1221,17 @@ export default function AdminPage() {
                   <select
                     value={form.role}
                     onChange={(e) =>
-                      setForm((f) => ({ ...f, role: e.target.value as any }))
+                      setForm((f) => ({ ...f, role: e.target.value }))
                     }
                     className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none"
                   >
-                    <option value="user">User</option>
-                    <option value="admin">Admin</option>
+                    {availableRoles.length > 0 ? (
+                      availableRoles.map(r => (
+                        <option key={r.value} value={r.value}>{r.label}</option>
+                      ))
+                    ) : (
+                      <option value="Sales Executive">Sales Executive</option>
+                    )}
                   </select>
                 </div>
                 <div>
@@ -1227,60 +1360,62 @@ export default function AdminPage() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs text-slate-500 mb-1.5">
-                    Role
-                  </label>
+                  <label className="block text-xs text-slate-500 mb-1.5">Role *</label>
                   <select
                     value={form.role}
-                    onChange={(e) =>
-                      setForm((f) => ({ ...f, role: e.target.value as any }))
-                    }
+                    onChange={(e) => {
+                      const newRole = e.target.value;
+                      setForm((f) => ({
+                        ...f,
+                        role: newRole,
+                        manager_id: '' // Reset manager when role changes
+                      }));
+                    }}
                     className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none"
                   >
-                    <option value="user">User</option>
-                    <option value="admin">Admin</option>
+                    {availableRoles.length > 0 ? (
+                      availableRoles.map(r => (
+                        <option key={r.value} value={r.value}>{r.label}</option>
+                      ))
+                    ) : (
+                      <option value="Sales Executive">Sales Executive</option>
+                    )}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-500 mb-1.5">
-                    Department
-                  </label>
+                  <label className="block text-xs text-slate-500 mb-1.5">Department</label>
                   <select
                     value={form.department}
-                    onChange={(e) =>
-                      setForm((f) => ({ ...f, department: e.target.value }))
-                    }
+                    onChange={(e) => setForm((f) => ({ ...f, department: e.target.value }))}
                     className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none"
                   >
                     {DEPT_OPTIONS.map((d) => (
-                      <option key={d.value} value={d.value}>
-                        {d.label}
-                      </option>
+                      <option key={d.value} value={d.value}>{d.label}</option>
                     ))}
                   </select>
                 </div>
               </div>
+
+              {/* ── REPORTING MANAGER ── */}
               <div>
                 <label className="block text-xs text-slate-500 mb-1.5">
-                  Employee Link
+                  Reporting Manager
                 </label>
                 <select
-                  value={form.employeeId}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, employeeId: e.target.value }))
-                  }
+                  value={form.manager_id}
+                  onChange={(e) => setForm((f) => ({ ...f, manager_id: e.target.value }))}
                   className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none"
                 >
-                  {usersLoading ? (
-                    <option value="">Loading employees...</option>
-                  ) : (
-                    employeeOptions.map((e) => (
-                      <option key={e.id} value={e.id}>
-                        {e.label}
-                      </option>
-                    ))
-                  )}
+                  <option value="">None</option>
+                  {getAvailableManagers(form.role).map(manager => (
+                    <option key={manager.id} value={manager.id}>
+                      {manager.name} ({manager.role})
+                    </option>
+                  ))}
                 </select>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  {form.role} reports to: {REPORTING_RULES[form.role]?.join(', ') || 'No one'}
+                </p>
               </div>
             </div>
             <div className="px-6 py-4 border-t border-slate-100 flex justify-end gap-3">

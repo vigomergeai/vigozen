@@ -23,7 +23,7 @@ export interface UserProfile {
   id: string;
   email: string;
   name: string;
-  role: "super_admin" | "admin" | "manager" | "sales" | "viewer" | "user";
+  role: "super_admin" | "admin" | "manager" | "sales" | "viewer" | "user" | "Sales Executive" | "Sales Manager" | "Team Leader" | "Lead Manager" | "Org Admin" | "Super Admin" | string;
   employeeId: string | null;
   department: string;
   isActive: boolean;
@@ -50,6 +50,9 @@ export interface UserProfile {
   activated_at?: string;
   deactivated_at?: string;
   company_id?: string;
+  manager_id?: string | null;
+  team_id?: string | null;
+  invite_token?: string | null;
 }
 
 interface Activity {
@@ -851,7 +854,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // ── User Management (Admin) ────────────────────────────────────────────────
   const loadUsers = async () => {
     const token = getToken();
-    if (!token || role !== "admin") return;
+    const isAdmin = role === 'Super Admin' || role === 'super_admin' || role === 'Org Admin' || role === 'admin';
+    if (!token || !isAdmin) return;
     setUsersLoading(true);
     try {
       const res = await fetch(

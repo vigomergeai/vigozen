@@ -59,10 +59,10 @@ export default function Layout() {
     return pathname === '/' || restricted.some(p => pathname.startsWith(p));
   };
 
-  const isTrialExpired = role !== 'admin' && companySubscription && 
-    !(companySubscription as any)?.is_trial_active && 
-    !(companySubscription as any)?.is_subscription_active && 
-    !subscription?.is_subscription_active && 
+  const isTrialExpired = role !== 'admin' && companySubscription &&
+    !(companySubscription as any)?.is_trial_active &&
+    !(companySubscription as any)?.is_subscription_active &&
+    !subscription?.is_subscription_active &&
     !subscription?.is_trial_active;
 
 
@@ -169,7 +169,7 @@ export default function Layout() {
 
         {/* Nav */}
         <nav className="flex-1 px-3 py-2 space-y-0.5 overflow-y-auto">
-          {navItems.filter(item => canView(item.module)).map(({ path, label, icon: Icon, end }) => (
+          {navItems.filter(item => canView(item.module as any)).map(({ path, label, icon: Icon, end }) => (
             <NavLink
               key={path}
               to={path}

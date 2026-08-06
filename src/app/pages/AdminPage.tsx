@@ -127,8 +127,8 @@ export default function AdminPage() {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
-      setSubscriptions(data || []);
-    } catch { } finally { setSubLoading(false); }
+      setSubscriptions(Array.isArray(data) ? data : []);
+    } catch { setSubscriptions([]); } finally { setSubLoading(false); }
   };
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [auditLogsLoading, setAuditLogsLoading] = useState(false);
@@ -233,13 +233,19 @@ export default function AdminPage() {
 
 
 
-  const stats = useMemo(() => ({
-    total: users.length,
-    active: users.filter(u => u.isActive).length,
-    admins: users.filter(u => u.role === "admin" || u.role === "super_admin").length,
-    users: users.filter(u => u.role !== "admin" && u.role !== "super_admin").length,
-    inactive: users.filter(u => !u.isActive).length,
-  }), [users]);
+  const stats = useMemo(() => {
+    const adminRoles = ["admin", "super_admin", "Super Admin", "Org Admin"];
+    const admins = users.filter(u => adminRoles.includes(u.role)).length;
+    const regularUsers = users.filter(u => !adminRoles.includes(u.role)).length;
+
+    return {
+      total: users.length,
+      active: users.filter(u => u.isActive).length,
+      admins,
+      users: regularUsers,
+      inactive: users.filter(u => !u.isActive).length,
+    };
+  }, [users]);
 
   const openCreate = () => {
     setForm(emptyForm);
@@ -632,7 +638,7 @@ export default function AdminPage() {
                         <td className="py-3 px-4">
                           <div className="flex items-center gap-3">
                             <div
-                              className={`w-9 h-9 rounded-xl flex items-center justify-center text-xs font-bold flex-shrink-0 ${user.role === "admin" ? "bg-gradient-to-br from-purple-500 to-indigo-600" : "bg-gradient-to-br from-emerald-500 to-teal-600"} text-white`}
+                              className={`w-9 h-9 rounded-xl flex items-center justify-center text-xs font-bold flex-shrink-0 ${["admin", "super_admin", "Super Admin", "Org Admin"].includes(user.role) ? "bg-gradient-to-br from-purple-500 to-indigo-600" : "bg-gradient-to-br from-emerald-500 to-teal-600"} text-white`}
                             >
                               {user.name
                                 .split(" ")
@@ -644,7 +650,7 @@ export default function AdminPage() {
                             <div>
                               <div className="text-xs font-semibold text-slate-800 flex items-center gap-1">
                                 {user.name}
-                                {user.role === "admin" && (
+                                {["admin", "super_admin", "Super Admin", "Org Admin"].includes(user.role) && (
                                   <Crown size={10} className="text-purple-500" />
                                 )}
                               </div>
@@ -657,9 +663,9 @@ export default function AdminPage() {
                         </td>
                         <td className="py-3 px-3">
                           <span
-                            className={`text-xs px-2 py-0.5 rounded-full border font-medium ${getRoleBadge(user.role)}`}
+                            className={`text-xs px-2 py-0.5 rounded-full border font-medium ${["admin", "super_admin", "Super Admin", "Org Admin"].includes(user.role) ? "bg-purple-50 text-purple-700 border-purple-200" : "bg-emerald-50 text-emerald-700 border-emerald-200"}`}
                           >
-                            {user.role === "admin" ? "Admin" : "User"}
+                            {["admin", "super_admin", "Super Admin", "Org Admin"].includes(user.role) ? "Admin" : "User"}
                           </span>
                         </td>
                         <td className="py-3 px-3 text-xs text-slate-500">

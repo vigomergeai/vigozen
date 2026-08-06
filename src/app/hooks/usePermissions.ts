@@ -4,17 +4,22 @@ export const usePermissions = () => {
   const { userProfile } = useApp();
   const role = userProfile?.role || 'Sales Executive';
 
+  const isAdmin = role === 'Super Admin' || role === 'super_admin' || role === 'Org Admin' || role === 'admin';
+
   const canView = (module: string): boolean => {
-    // Super Admin and Org Admin get full access
-    if (role === 'Super Admin' || role === 'Org Admin' || role === 'admin' || (role as string) === 'admin') {
+    // Super Admin, Org Admin, and admin get full access
+    if (isAdmin) {
       return true;
     }
 
     const accessMap: Record<string, string[]> = {
       'leads': ['Sales Manager', 'Team Leader', 'Sales Executive', 'Lead Manager'],
+      'contacts': ['Sales Manager', 'Team Leader', 'Sales Executive', 'Lead Manager'],
       'deals': ['Sales Manager', 'Team Leader', 'Sales Executive'], // Lead Manager has none
       'users': ['Sales Manager', 'Team Leader'], // Excludes Sales Exec and Lead Manager
       'reports': ['Sales Manager', 'Team Leader', 'Sales Executive', 'Lead Manager'],
+      'tickets': ['Sales Manager', 'Team Leader', 'Sales Executive', 'Lead Manager'],
+      'activities': ['Sales Manager', 'Team Leader', 'Sales Executive', 'Lead Manager'],
       'settings': [], // Only Admins see it
       'billing': [] // Only Admins see it
     };

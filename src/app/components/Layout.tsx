@@ -59,10 +59,10 @@ export default function Layout() {
     return pathname === '/' || restricted.some(p => pathname.startsWith(p));
   };
 
-  const isTrialExpired = role !== 'admin' && companySubscription && 
-    !(companySubscription as any)?.is_trial_active && 
-    !(companySubscription as any)?.is_subscription_active && 
-    !subscription?.is_subscription_active && 
+  const isTrialExpired = role !== 'admin' && companySubscription &&
+    !(companySubscription as any)?.is_trial_active &&
+    !(companySubscription as any)?.is_subscription_active &&
+    !subscription?.is_subscription_active &&
     !subscription?.is_trial_active;
 
 

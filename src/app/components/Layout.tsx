@@ -33,7 +33,7 @@ export default function Layout() {
     companySubscription,
   } = useApp();
 
-  const { canView } = usePermissions();
+  const { canView, isAdmin } = usePermissions();
 
 
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -45,21 +45,21 @@ export default function Layout() {
 
   // ── Route protection for expired trials ──
   useEffect(() => {
-    if (role !== 'admin' && subscription && !subscription.is_trial_active && !subscription.is_subscription_active) {
+    if (!isAdmin && subscription && !subscription.is_trial_active && !subscription.is_subscription_active) {
       const currentPath = window.location.pathname;
       const allowedPaths = ['/billing', '/login', '/signup', '/payment-success', '/payment-failure'];
       if (!allowedPaths.includes(currentPath)) {
         setShowTrialModal(true);
       }
     }
-  }, [subscription, role]);
+  }, [subscription, isAdmin]);
 
   const isRestrictedPath = (pathname: string) => {
     const restricted = ['/leads', '/sales', '/analysis', '/admin', '/integrations'];
     return pathname === '/' || restricted.some(p => pathname.startsWith(p));
   };
 
-  const isTrialExpired = role !== 'admin' && companySubscription &&
+  const isTrialExpired = !isAdmin && companySubscription &&
     !(companySubscription as any)?.is_trial_active &&
     !(companySubscription as any)?.is_subscription_active &&
     !subscription?.is_subscription_active &&
@@ -151,9 +151,9 @@ export default function Layout() {
         {/* Role Badge */}
         {!sidebarCollapsed && (
           <div className="mx-3 mt-3 mb-2">
-            <div className={`flex items-center gap-2 px-3 py-2 rounded-lg ${role === "admin" ? "bg-gradient-to-r from-purple-600/30 to-indigo-600/30" : "bg-gradient-to-r from-emerald-600/30 to-teal-600/30"}`}>
-              {role === "admin" ? <Crown size={13} className="text-purple-300" /> : <User size={13} className="text-emerald-300" />}
-              <span className="text-xs font-medium text-white/90">{role === "admin" ? "Admin Access" : "User Access"}</span>
+            <div className={`flex items-center gap-2 px-3 py-2 rounded-lg ${isAdmin ? "bg-gradient-to-r from-purple-600/30 to-indigo-600/30" : "bg-gradient-to-r from-emerald-600/30 to-teal-600/30"}`}>
+              {isAdmin ? <Crown size={13} className="text-purple-300" /> : <User size={13} className="text-emerald-300" />}
+              <span className="text-xs font-medium text-white/90">{isAdmin ? "Admin Access" : "User Access"}</span>
               {/* Demo-mode role switcher */}
               {!userProfile && (
                 <button
@@ -261,7 +261,7 @@ export default function Layout() {
         {/* User section */}
         <div className="border-t border-white/10 p-3">
           <div className="flex items-center gap-2">
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-white text-xs font-semibold flex-shrink-0 overflow-hidden ${role === "admin" ? "bg-gradient-to-br from-purple-500 to-indigo-600" : "bg-gradient-to-br from-emerald-500 to-teal-600"}`}>
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-white text-xs font-semibold flex-shrink-0 overflow-hidden ${isAdmin ? "bg-gradient-to-br from-purple-500 to-indigo-600" : "bg-gradient-to-br from-emerald-500 to-teal-600"}`}>
               {userProfile?.avatar_url ? (
                 <img
                   src={userProfile.avatar_url.startsWith('http') ? userProfile.avatar_url : `http://localhost:5000${userProfile.avatar_url}`}
@@ -370,7 +370,7 @@ export default function Layout() {
                 onClick={() => { setShowUserMenu(!showUserMenu); setShowNotifications(false); }}
                 className="flex items-center gap-2 pl-2 pr-3 py-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
               >
-                <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-white text-xs font-semibold overflow-hidden ${role === "admin" ? "bg-gradient-to-br from-purple-500 to-indigo-600" : "bg-gradient-to-br from-emerald-500 to-teal-600"}`}>
+                <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-white text-xs font-semibold overflow-hidden ${isAdmin ? "bg-gradient-to-br from-purple-500 to-indigo-600" : "bg-gradient-to-br from-emerald-500 to-teal-600"}`}>
                   {userProfile?.avatar_url ? (
                     <img
                       src={userProfile.avatar_url.startsWith('http') ? userProfile.avatar_url : `http://localhost:5000${userProfile.avatar_url}`}
@@ -387,7 +387,7 @@ export default function Layout() {
                 </div>
                 <div className="hidden sm:block text-left">
                   <div className="text-xs font-semibold text-slate-800 dark:text-slate-100 leading-tight">{currentUser.name}</div>
-                  <div className="text-[10px] text-slate-400 capitalize">{role}</div>
+                  <div className="text-[10px] text-slate-400 capitalize">{role.replace('_', ' ')}</div>
                 </div>
                 <ChevronDown size={13} className="text-slate-400 hidden sm:block" />
               </button>
@@ -396,7 +396,7 @@ export default function Layout() {
                 <div className="absolute right-0 top-full mt-2 w-56 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-xl z-50 overflow-hidden">
                   <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-700 bg-gradient-to-br from-slate-50 to-indigo-50 dark:from-slate-800 dark:to-slate-900">
                     <div className="flex items-center gap-3 mb-2">
-                      <div className={`w-10 h-10 rounded-lg flex items-center justify-center text-white text-sm font-semibold overflow-hidden ${role === "admin" ? "bg-gradient-to-br from-purple-500 to-indigo-600" : "bg-gradient-to-br from-emerald-500 to-teal-600"}`}>
+                      <div className={`w-10 h-10 rounded-lg flex items-center justify-center text-white text-sm font-semibold overflow-hidden ${isAdmin ? "bg-gradient-to-br from-purple-500 to-indigo-600" : "bg-gradient-to-br from-emerald-500 to-teal-600"}`}>
                         {userProfile?.avatar_url ? (
                           <img
                             src={userProfile.avatar_url.startsWith('http') ? userProfile.avatar_url : `http://localhost:5000${userProfile.avatar_url}`}
@@ -417,13 +417,13 @@ export default function Layout() {
                       </div>
                     </div>
                     <div className="mt-1.5 flex items-center gap-1.5">
-                      {role === "admin" ? (
-                        <span className="text-[10px] bg-purple-100 text-purple-700 border border-purple-200 px-2 py-0.5 rounded-full flex items-center gap-1">
-                          <Crown size={9} />Admin
+                      {isAdmin ? (
+                        <span className="text-[10px] bg-purple-100 text-purple-700 border border-purple-200 px-2 py-0.5 rounded-full flex items-center gap-1 capitalize">
+                          <Crown size={9} />{role.replace('_', ' ')}
                         </span>
                       ) : (
-                        <span className="text-[10px] bg-emerald-100 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full flex items-center gap-1">
-                          <User size={9} />User
+                        <span className="text-[10px] bg-emerald-100 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full flex items-center gap-1 capitalize">
+                          <User size={9} />{role.replace('_', ' ')}
                         </span>
                       )}
                       {subscription && (
@@ -445,7 +445,7 @@ export default function Layout() {
                   <div className="py-1">
 
                     <button onClick={() => { navigate("/settings"); setShowUserMenu(false); }} className="w-full text-left px-4 py-2 text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700">Profile Settings</button>
-                    {role === "admin" && (
+                    {isAdmin && (
                       <button onClick={() => { navigate("/admin"); setShowUserMenu(false); }} className="w-full text-left px-4 py-2 text-sm text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-900/30 flex items-center gap-2">
                         <UserCog size={13} />Admin Panel
                       </button>

@@ -1561,26 +1561,38 @@ app.delete("/users/:id", authenticateToken, async (req, res) => {
 
     // Only admins can delete users
 
-
     function isAdminRole(role) {
       return ['admin', 'super_admin', 'org_admin'].includes(role);
+    }
+
+    if (!isAdminRole(req.user.role)) {
+      return res.status(403).json({ error: "Insufficient permissions. Only admins can delete users." });
     }
 
     const userId = req.params.id;
     const companyId = req.user.company_id;
 
-    // Check if user exists and belongs to the same company
+    // Check if user exists - admins can delete users from any company or no company
     let userCheck;
-    if (companyId) {
+    if (isAdminRole(req.user.role)) {
+      // Super Admin and Org Admin can delete any user
       userCheck = await pool.query(
-        "SELECT id, name, email FROM users WHERE id = $1 AND company_id = $2",
-        [userId, companyId]
-      );
-    } else {
-      userCheck = await pool.query(
-        "SELECT id, name, email FROM users WHERE id = $1 AND company_id IS NULL",
+        "SELECT id, name, email, company_id FROM users WHERE id = $1",
         [userId]
       );
+    } else {
+      // Regular admin can only delete users from same company
+      if (companyId) {
+        userCheck = await pool.query(
+          "SELECT id, name, email FROM users WHERE id = $1 AND company_id = $2",
+          [userId, companyId]
+        );
+      } else {
+        userCheck = await pool.query(
+          "SELECT id, name, email FROM users WHERE id = $1 AND company_id IS NULL",
+          [userId]
+        );
+      }
     }
 
     if (userCheck.rows.length === 0) {

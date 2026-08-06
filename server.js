@@ -271,7 +271,7 @@ const upload = multer({
             await pool.query(
               "INSERT INTO role_permissions (company_id, role, module, permission) VALUES ($1, $2, $3, $4)",
               [compId, p.role, p.module, p.permission]
-            ).catch(() => {});
+            ).catch(() => { });
           }
         } else {
           const check = await pool.query(
@@ -282,7 +282,7 @@ const upload = multer({
             await pool.query(
               "INSERT INTO role_permissions (role, module, permission) VALUES ($1, $2, $3)",
               [p.role, p.module, p.permission]
-            ).catch(() => {});
+            ).catch(() => { });
           }
         }
       }
@@ -507,9 +507,11 @@ const requireRole = (allowedRoles) => {
 };
 
 // Determine user's scope for a specific module (Static Fallback)
+const isAdminRole = (role) => role === 'Super Admin' || role === 'super_admin' || role === 'Org Admin' || role === 'admin';
+
 const getPermissionScope = (role, module) => {
-  if (role === 'Super Admin') return 'full';
-  
+  if (isAdminRole(role)) return 'full';
+
   const hierarchy = {
     'Org Admin': { leads: 'full', deals: 'full', users: 'full', reports: 'full', settings: 'full', billing: 'full', tickets: 'full', activities: 'full' },
     'Sales Manager': { leads: 'dept', deals: 'dept', users: 'dept', reports: 'dept', settings: 'none', billing: 'none', tickets: 'dept', activities: 'dept' },
@@ -517,7 +519,7 @@ const getPermissionScope = (role, module) => {
     'Sales Executive': { leads: 'own', deals: 'own', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own' },
     'Lead Manager': { leads: 'full', deals: 'none', users: 'none', reports: 'full', settings: 'none', billing: 'none', tickets: 'full', activities: 'full' }
   };
-  
+
   return hierarchy[role]?.[module] || 'none';
 };
 
@@ -533,7 +535,7 @@ const checkPermission = (module) => {
     req.userId = userId;
     req.companyId = company_id;
 
-    if (role === 'Super Admin') {
+    if (isAdminRole(role)) {
       req.permissionScope = 'full';
       return next();
     }
@@ -597,7 +599,7 @@ const getScopedQueryFilters = async (table, req) => {
   const { role, company_id, id: userId, team_id } = req.user;
   const scope = req.permissionScope;
 
-  if (role === 'Super Admin') {
+  if (isAdminRole(role)) {
     return { joinClause: '', whereClause: '', params: [] };
   }
 
@@ -608,7 +610,7 @@ const getScopedQueryFilters = async (table, req) => {
   if (table === 'activities') {
     joinClause = 'INNER JOIN deals d ON a.deal_id = d.id';
     clauses.push('d.company_id = $1');
-    
+
     if (scope === 'own') {
       clauses.push(`d.owner_id = $2`);
       params.push(userId);
@@ -619,6 +621,14 @@ const getScopedQueryFilters = async (table, req) => {
     }
   } else if (table === 'contacts') {
     clauses.push('company_id = $1');
+    if (scope === 'own') {
+      clauses.push(`owner_id = $2`);
+      params.push(userId);
+    } else if (scope === 'team' || scope === 'dept') {
+      const subIds = await getSubordinateUserIds(userId, team_id);
+      clauses.push(`owner_id = ANY($2)`);
+      params.push(subIds);
+    }
   } else {
     clauses.push('company_id = $1');
     if (scope === 'own') {
@@ -736,7 +746,7 @@ app.get("/deals", authenticateToken, checkPermission('deals'), async (req, res) 
 });
 
 // Contacts
-app.get("/contacts", authenticateToken, checkPermission('leads'), async (req, res) => {
+app.get("/contacts", authenticateToken, checkPermission('contacts'), async (req, res) => {
   try {
     const { whereClause, params } = await getScopedQueryFilters('contacts', req);
     const result = await pool.query(`SELECT * FROM contacts ${whereClause} ORDER BY created_at DESC`, params);
@@ -747,7 +757,7 @@ app.get("/contacts", authenticateToken, checkPermission('leads'), async (req, re
 });
 
 // Tickets
-app.get("/tickets", authenticateToken, checkPermission('leads'), async (req, res) => {
+app.get("/tickets", authenticateToken, checkPermission('tickets'), async (req, res) => {
   try {
     const { whereClause, params } = await getScopedQueryFilters('tickets', req);
     const result = await pool.query(`SELECT * FROM tickets ${whereClause} ORDER BY created_at DESC`, params);
@@ -916,11 +926,11 @@ app.get("/activities", authenticateToken, checkPermission('activities'), async (
 app.get("/users", authenticateToken, checkPermission('users'), async (req, res) => {
   try {
     const { permissionScope, companyId, userId, teamId } = req;
-    let query = "SELECT id, name, email, role, department, manager_id, team_id, is_active, status, created_at FROM users";
+    let query = "SELECT id, name, email, role, department, manager_id, team_id, is_active, status, created_at, trial_start, trial_end, subscription_status, plan_type, payment_status FROM users";
     let params = [];
 
     if (permissionScope === 'full') {
-      if (req.user.role === 'Super Admin') {
+      if (isAdminRole(req.user.role)) {
         query += " ORDER BY name ASC;";
       } else {
         query += " WHERE company_id = $1 ORDER BY name ASC;";
@@ -4508,8 +4518,8 @@ let globalPricingConfig = {
 
 // Pricing calculation helper
 function calculatePricing({ planType, billingPeriod, activeUsers, pricePerUser }) {
-  const basePricePerUser = planType === 'starter' 
-    ? (globalPricingConfig.starter_price_per_user || 600) 
+  const basePricePerUser = planType === 'starter'
+    ? (globalPricingConfig.starter_price_per_user || 600)
     : (pricePerUser || 600);
 
   const periodMonths = {
@@ -4829,11 +4839,11 @@ app.put('/api/pricing-config', authenticateToken, async (req, res) => {
        RETURNING *`,
       [starter_price_per_user, gst_rate, monthly_discount, quarterly_discount, half_yearly_discount, yearly_discount]
     );
-    
+
     if (result.rows.length > 0) {
       globalPricingConfig = result.rows[0];
     }
-    
+
     res.json({ success: true, config: globalPricingConfig });
   } catch (error) {
     console.error("Update pricing config error:", error);

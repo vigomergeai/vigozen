@@ -169,7 +169,7 @@ export default function Layout() {
 
         {/* Nav */}
         <nav className="flex-1 px-3 py-2 space-y-0.5 overflow-y-auto">
-          {navItems.filter(item => canView(item.module)).map(({ path, label, icon: Icon, end }) => (
+          {navItems.filter(item => canView(item.module as any)).map(({ path, label, icon: Icon, end }) => (
             <NavLink
               key={path}
               to={path}

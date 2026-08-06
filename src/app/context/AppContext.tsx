@@ -50,6 +50,9 @@ export interface UserProfile {
   activated_at?: string;
   deactivated_at?: string;
   company_id?: string;
+  manager_id?: string | null;
+  team_id?: string | null;
+  invite_token?: string | null;
 }
 
 interface Activity {

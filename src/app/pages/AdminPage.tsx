@@ -67,17 +67,34 @@ export const ALL_ROLES = [
 ];
 
 // Avatar color helper
+// Avatar color helper
 const getAvatarColor = (role: string): string => {
   const colors: Record<string, string> = {
+    // ── ADMIN ROLES ──
     'Super Admin': 'bg-gradient-to-br from-purple-600 to-indigo-600',
+    'super_admin': 'bg-gradient-to-br from-purple-600 to-indigo-600',
     'Org Admin': 'bg-gradient-to-br from-indigo-600 to-blue-600',
+    'org_admin': 'bg-gradient-to-br from-indigo-600 to-blue-600',
+    'admin': 'bg-gradient-to-br from-red-600 to-rose-600',
+
+    // ── SALES MANAGEMENT ROLES ──
     'Sales Manager': 'bg-gradient-to-br from-blue-600 to-cyan-600',
+    'sales_manager': 'bg-gradient-to-br from-blue-600 to-cyan-600',
     'Lead Manager': 'bg-gradient-to-br from-orange-600 to-amber-600',
+    'lead_manager': 'bg-gradient-to-br from-orange-600 to-amber-600',
     'Team Leader': 'bg-gradient-to-br from-cyan-600 to-teal-600',
+    'team_leader': 'bg-gradient-to-br from-cyan-600 to-teal-600',
+
+    // ── SALES ROLES ──
     'Sales Executive': 'bg-gradient-to-br from-emerald-600 to-green-600',
+    'sales': 'bg-gradient-to-br from-emerald-600 to-green-600',
+    'sales_executive': 'bg-gradient-to-br from-emerald-600 to-green-600',
     'Lead Executive': 'bg-gradient-to-br from-yellow-600 to-amber-600',
+    'lead_executive': 'bg-gradient-to-br from-yellow-600 to-amber-600',
     'Telecaller': 'bg-gradient-to-br from-pink-600 to-rose-600',
-    'Lead Qualifier': 'bg-gradient-to-br from-gray-600 to-slate-600'
+    'telecaller': 'bg-gradient-to-br from-pink-600 to-rose-600',
+    'Lead Qualifier': 'bg-gradient-to-br from-gray-600 to-slate-600',
+    'lead_qualifier': 'bg-gradient-to-br from-gray-600 to-slate-600',
   };
   return colors[role] || 'bg-gradient-to-br from-gray-500 to-slate-500';
 };
@@ -85,18 +102,35 @@ const getAvatarColor = (role: string): string => {
 // Role color helper
 const getRoleColor = (role: string): string => {
   const colors: Record<string, string> = {
+    // ── ADMIN ROLES ──
     'Super Admin': 'bg-purple-100 text-purple-700',
+    'super_admin': 'bg-purple-100 text-purple-700',
     'Org Admin': 'bg-indigo-100 text-indigo-700',
+    'org_admin': 'bg-indigo-100 text-indigo-700',
+    'admin': 'bg-red-100 text-red-700',
+
+    // ── SALES MANAGEMENT ROLES ──
     'Sales Manager': 'bg-blue-100 text-blue-700',
+    'sales_manager': 'bg-blue-100 text-blue-700',
     'Lead Manager': 'bg-orange-100 text-orange-700',
+    'lead_manager': 'bg-orange-100 text-orange-700',
     'Team Leader': 'bg-cyan-100 text-cyan-700',
+    'team_leader': 'bg-cyan-100 text-cyan-700',
+
+    // ── SALES ROLES ──
     'Sales Executive': 'bg-green-100 text-green-700',
+    'sales': 'bg-green-100 text-green-700',
+    'sales_executive': 'bg-green-100 text-green-700',
     'Lead Executive': 'bg-yellow-100 text-yellow-700',
+    'lead_executive': 'bg-yellow-100 text-yellow-700',
     'Telecaller': 'bg-pink-100 text-pink-700',
-    'Lead Qualifier': 'bg-gray-100 text-gray-700'
+    'telecaller': 'bg-pink-100 text-pink-700',
+    'Lead Qualifier': 'bg-gray-100 text-gray-700',
+    'lead_qualifier': 'bg-gray-100 text-gray-700',
   };
-  return colors[role] || 'bg-gray-100 text-gray-700';
+  return colors[role] || 'bg-gray-100 text-gray-500';
 };
+
 // Legacy constant (kept for compatibility)
 const ROLE_OPTIONS = ["admin", "user"] as const;
 const DEPT_OPTIONS = [
@@ -219,7 +253,7 @@ export default function AdminPage() {
   const [bulkActionValue, setBulkActionValue] = useState<string>('');
 
   const [search, setSearch] = useState("");
-  const [filterRole, setFilterRole] = useState<"all" | "admin" | "user">("all");
+  const [filterRole, setFilterRole] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<"all" | "active" | "inactive">("all");
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
 
@@ -576,14 +610,32 @@ export default function AdminPage() {
                 className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 transition-all"
               />
             </div>
+            {/* ── ROLE FILTER (Clean Static List) ── */}
             <select
               value={filterRole}
-              onChange={(e) => setFilterRole(e.target.value as any)}
-              className="px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none text-slate-600"
+              onChange={(e) => setFilterRole(e.target.value)}
+              className="px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none text-slate-600 min-w-[150px]"
             >
               <option value="all">All Roles</option>
-              <option value="admin">Admin</option>
-              <option value="user">User</option>
+
+              <optgroup label="Admin">
+                <option value="Super Admin">Super Admin</option>
+                <option value="Org Admin">Org Admin</option>
+                <option value="admin">Admin</option>
+              </optgroup>
+
+              <optgroup label="Management">
+                <option value="Sales Manager">Sales Manager</option>
+                <option value="Lead Manager">Lead Manager</option>
+                <option value="Team Leader">Team Leader</option>
+              </optgroup>
+
+              <optgroup label="Sales">
+                <option value="Sales Executive">Sales Executive</option>
+                <option value="Lead Executive">Lead Executive</option>
+                <option value="Telecaller">Telecaller</option>
+                <option value="Lead Qualifier">Lead Qualifier</option>
+              </optgroup>
             </select>
 
             <select
@@ -1395,185 +1447,185 @@ export default function AdminPage() {
         </div>
       )}
 
-          {/* ── Password Reset Modal ── */}
-          {showPasswordModal && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-              <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden">
-                <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
-                  <h2 className="text-slate-800 flex items-center gap-2">
-                    <Key size={16} className="text-amber-600" />
+      {/* ── Password Reset Modal ── */}
+      {showPasswordModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden">
+            <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
+              <h2 className="text-slate-800 flex items-center gap-2">
+                <Key size={16} className="text-amber-600" />
+                Reset Password
+              </h2>
+              <button
+                onClick={() => setShowPasswordModal(null)}
+                className="p-2 rounded-xl hover:bg-slate-100"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              {error && (
+                <div className="mb-4 flex items-start gap-3 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-sm text-red-300">
+                  <AlertCircle size={16} className="flex-shrink-0 mt-0.5" />
+                  <span>{error}</span>
+                </div>
+              )}
+              <p className="text-sm text-slate-500">
+                Setting new password for{" "}
+                <span className="font-medium text-slate-800">
+                  {showPasswordModal.name}
+                </span>
+              </p>
+              <div>
+                <label className="block text-xs text-slate-500 mb-1.5">
+                  New Password
+                </label>
+                <div className="relative">
+                  <input
+                    type={showPass ? "text" : "password"}
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="Min 6 characters"
+                    className="w-full px-3 py-2 pr-9 text-sm border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPass((s) => !s)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400"
+                  >
+                    {showPass ? <EyeOff size={13} /> : <Eye size={13} />}
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-slate-100 flex justify-end gap-3">
+              <button
+                onClick={() => setShowPasswordModal(null)}
+                className="px-4 py-2 text-sm border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleResetPassword}
+                disabled={saving || !newPassword}
+                className="px-6 py-2 text-sm bg-amber-600 text-white rounded-xl hover:bg-amber-700 flex items-center gap-2 disabled:opacity-50"
+              >
+                {saving ? (
+                  <>
+                    <Loader2 size={13} className="animate-spin" />
+                    Resetting...
+                  </>
+                ) : (
+                  <>
+                    <Lock size={13} />
                     Reset Password
-                  </h2>
-                  <button
-                    onClick={() => setShowPasswordModal(null)}
-                    className="p-2 rounded-xl hover:bg-slate-100"
-                  >
-                    <X size={16} />
-                  </button>
-                </div>
-                <div className="p-6 space-y-4">
-                  {error && (
-                    <div className="mb-4 flex items-start gap-3 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-sm text-red-300">
-                      <AlertCircle size={16} className="flex-shrink-0 mt-0.5" />
-                      <span>{error}</span>
-                    </div>
-                  )}
-                  <p className="text-sm text-slate-500">
-                    Setting new password for{" "}
-                    <span className="font-medium text-slate-800">
-                      {showPasswordModal.name}
-                    </span>
-                  </p>
-                  <div>
-                    <label className="block text-xs text-slate-500 mb-1.5">
-                      New Password
-                    </label>
-                    <div className="relative">
-                      <input
-                        type={showPass ? "text" : "password"}
-                        value={newPassword}
-                        onChange={(e) => setNewPassword(e.target.value)}
-                        placeholder="Min 6 characters"
-                        className="w-full px-3 py-2 pr-9 text-sm border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPass((s) => !s)}
-                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400"
-                      >
-                        {showPass ? <EyeOff size={13} /> : <Eye size={13} />}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                <div className="px-6 py-4 border-t border-slate-100 flex justify-end gap-3">
-                  <button
-                    onClick={() => setShowPasswordModal(null)}
-                    className="px-4 py-2 text-sm border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleResetPassword}
-                    disabled={saving || !newPassword}
-                    className="px-6 py-2 text-sm bg-amber-600 text-white rounded-xl hover:bg-amber-700 flex items-center gap-2 disabled:opacity-50"
-                  >
-                    {saving ? (
-                      <>
-                        <Loader2 size={13} className="animate-spin" />
-                        Resetting...
-                      </>
-                    ) : (
-                      <>
-                        <Lock size={13} />
-                        Reset Password
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
+                  </>
+                )}
+              </button>
             </div>
-          )}
-
-          {/* ── Delete Confirm Modal ── */}
-          {deleteConfirm && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-              <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden">
-                <div className="p-6 text-center">
-                  <div className="w-14 h-14 rounded-full bg-red-50 border border-red-100 flex items-center justify-center mx-auto mb-4">
-                    <AlertTriangle size={24} className="text-red-500" />
-                  </div>
-                  <h3 className="text-lg font-bold text-slate-800 mb-2">
-                    Remove User Access
-                  </h3>
-                  <p className="text-sm text-slate-500 mb-1">
-                    Are you sure you want to remove{" "}
-                    <span className="font-medium text-slate-800">
-                      {deleteConfirm.name}
-                    </span>
-                    ?
-                  </p>
-                  <p className="text-xs text-slate-400">
-                    This will deactivate their account and revoke all access.
-                  </p>
-                  <div className="flex gap-3 mt-6">
-                    <button
-                      onClick={() => setDeleteConfirm(null)}
-                      className="flex-1 py-2.5 text-sm border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={handleDelete}
-                      disabled={saving}
-                      className="flex-1 py-2.5 text-sm bg-red-600 text-white rounded-xl hover:bg-red-700 flex items-center justify-center gap-2 disabled:opacity-50"
-                    >
-                      {saving ? (
-                        <Loader2 size={13} className="animate-spin" />
-                      ) : (
-                        <Trash2 size={13} />
-                      )}
-                      Remove
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-
-
-          {/* ── Bulk Delete Confirmation Modal ── */}
-          {showBulkDeleteConfirm && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-              <div className="absolute inset-0 bg-black/40" onClick={() => setShowBulkDeleteConfirm(false)} />
-              <div className="relative bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm text-center">
-                <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <AlertTriangle size={22} className="text-red-500" />
-                </div>
-                <h3 className="text-slate-800 mb-2">Delete {selectedUsers.length} Users?</h3>
-                <p className="text-sm text-slate-500 mb-5">This action cannot be undone. All selected users will be permanently deactivated.</p>
-                <div className="flex gap-3">
-                  <button
-                    onClick={() => setShowBulkDeleteConfirm(false)}
-                    className="flex-1 py-2.5 border border-slate-200 text-slate-700 rounded-xl text-sm hover:bg-slate-50 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={async () => {
-                      setShowBulkDeleteConfirm(false);
-                      // Proceed with delete
-                      const token = localStorage.getItem('token');
-                      if (!token) return;
-
-                      setBulkActionLoading(true);
-                      try {
-                        await api.users.bulkAction({
-                          userIds: selectedUsers,
-                          action: 'delete',
-                          value: undefined
-                        }, token);
-
-                        toast.success(`${selectedUsers.length} users deleted successfully`);
-                        await loadUsers();
-                        setSelectedUsers([]);
-                        setBulkAction("");
-                      } catch (error) {
-                        console.error("Bulk delete failed:", error);
-                        toast.error('Failed to delete users');
-                      } finally {
-                        setBulkActionLoading(false);
-                      }
-                    }}
-                    className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm hover:bg-red-700 transition-colors"
-                  >
-                    Delete All
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
+          </div>
         </div>
-      );
+      )}
+
+      {/* ── Delete Confirm Modal ── */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden">
+            <div className="p-6 text-center">
+              <div className="w-14 h-14 rounded-full bg-red-50 border border-red-100 flex items-center justify-center mx-auto mb-4">
+                <AlertTriangle size={24} className="text-red-500" />
+              </div>
+              <h3 className="text-lg font-bold text-slate-800 mb-2">
+                Remove User Access
+              </h3>
+              <p className="text-sm text-slate-500 mb-1">
+                Are you sure you want to remove{" "}
+                <span className="font-medium text-slate-800">
+                  {deleteConfirm.name}
+                </span>
+                ?
+              </p>
+              <p className="text-xs text-slate-400">
+                This will deactivate their account and revoke all access.
+              </p>
+              <div className="flex gap-3 mt-6">
+                <button
+                  onClick={() => setDeleteConfirm(null)}
+                  className="flex-1 py-2.5 text-sm border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleDelete}
+                  disabled={saving}
+                  className="flex-1 py-2.5 text-sm bg-red-600 text-white rounded-xl hover:bg-red-700 flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {saving ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : (
+                    <Trash2 size={13} />
+                  )}
+                  Remove
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+
+
+      {/* ── Bulk Delete Confirmation Modal ── */}
+      {showBulkDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setShowBulkDeleteConfirm(false)} />
+          <div className="relative bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm text-center">
+            <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <AlertTriangle size={22} className="text-red-500" />
+            </div>
+            <h3 className="text-slate-800 mb-2">Delete {selectedUsers.length} Users?</h3>
+            <p className="text-sm text-slate-500 mb-5">This action cannot be undone. All selected users will be permanently deactivated.</p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowBulkDeleteConfirm(false)}
+                className="flex-1 py-2.5 border border-slate-200 text-slate-700 rounded-xl text-sm hover:bg-slate-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  setShowBulkDeleteConfirm(false);
+                  // Proceed with delete
+                  const token = localStorage.getItem('token');
+                  if (!token) return;
+
+                  setBulkActionLoading(true);
+                  try {
+                    await api.users.bulkAction({
+                      userIds: selectedUsers,
+                      action: 'delete',
+                      value: undefined
+                    }, token);
+
+                    toast.success(`${selectedUsers.length} users deleted successfully`);
+                    await loadUsers();
+                    setSelectedUsers([]);
+                    setBulkAction("");
+                  } catch (error) {
+                    console.error("Bulk delete failed:", error);
+                    toast.error('Failed to delete users');
+                  } finally {
+                    setBulkActionLoading(false);
+                  }
+                }}
+                className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm hover:bg-red-700 transition-colors"
+              >
+                Delete All
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }

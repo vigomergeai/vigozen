@@ -549,6 +549,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (saved) {
             try { setUserSettings(JSON.parse(saved)); } catch { /* ignore */ }
           }
+          // Fetch fresh user profile from DB to sync any database changes (like role updates)
+          loadUserProfile(user.id);
         }
       } catch (err) {
         console.error("Auth init error:", err);

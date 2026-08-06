@@ -55,19 +55,22 @@ function LazyRoute({ Component }: { Component: React.ComponentType<any> }) {
   );
 }
 
+import { usePermissions } from "./hooks/usePermissions";
+
 // Guard: admin only
 function RequireAdmin({ children }: { children: React.ReactNode }) {
-  const { role, authLoading } = useApp();
+  const { authLoading } = useApp();
+  const { isAdmin } = usePermissions();
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!authLoading && role !== "admin") {
+    if (!authLoading && !isAdmin) {
       navigate("/", { replace: true });
     }
-  }, [authLoading, role]);
+  }, [authLoading, isAdmin]);
 
   if (authLoading) return null;
-  if (role !== "admin") return null;
+  if (!isAdmin) return null;
   return <>{children}</>;
 }
 

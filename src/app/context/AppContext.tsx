@@ -851,7 +851,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // ── User Management (Admin) ────────────────────────────────────────────────
   const loadUsers = async () => {
     const token = getToken();
-    if (!token || role !== "admin") return;
+    const isAdmin = role === 'Super Admin' || role === 'super_admin' || role === 'Org Admin' || role === 'admin';
+    if (!token || !isAdmin) return;
     setUsersLoading(true);
     try {
       const res = await fetch(

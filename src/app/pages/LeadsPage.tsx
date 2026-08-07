@@ -9,6 +9,8 @@ import {
   Check, TrendingUp, Minus, Circle
 } from "lucide-react";
 import { useNavigate } from "react-router";
+import { usePermissions } from "../hooks/usePermissions";
+import { hasModuleAccess, canWrite, isAdminRole } from "../utils/permissions";
 
 
 import { Lead, LeadStatus, LeadSource, Industry } from "../data/mockData";
@@ -54,7 +56,12 @@ export default function LeadsPage() {
   const [visibleColumns, setVisibleColumns] = useState(columns);
   const [showColumnDropdown, setShowColumnDropdown] = useState(false);
   const { role, currentUser, leads, loading, addLead, updateLead, deleteLead, bulkDeleteLeads, importLeads, refreshData, employees, convertLeadToDeal, leadComments, loadingComments, fetchLeadComments, addLeadComment,
-  updateLeadComment, deleteLeadComment, userProfile, subscription } = useApp();
+  updateLeadComment, deleteLeadComment, userProfile, subscription, permissions } = useApp();
+
+  const canSeeAllEmployees = hasModuleAccess(permissions, 'leads', ['full', 'dept', 'team']);
+  const canDeleteLeadsSeq  = hasModuleAccess(permissions, 'leads', ['full']);
+  const canWriteLeads      = canWrite(permissions, 'leads');
+  const canAssignLeads     = hasModuleAccess(permissions, 'leads', ['full', 'dept', 'team']);
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
   // ── Convert Lead Modal State ──
@@ -672,7 +679,7 @@ useEffect(() => {
             </option>
           ))}
         </select>
-        {role === "admin" && (
+        {canSeeAllEmployees && (
           <select
             value={empFilter}
             onChange={(e) => {
@@ -709,7 +716,7 @@ useEffect(() => {
             </button>
           ))}
         </div>
-        {role === "admin" && selectedIds.length > 0 && (
+        {canDeleteLeadsSeq && selectedIds.length > 0 && (
           <div className="flex items-center gap-2 px-3 py-1.5 bg-red-50 border border-red-200 rounded-xl">
             <span className="text-xs text-red-600 font-medium">
               {selectedIds.length} selected
@@ -809,7 +816,7 @@ useEffect(() => {
                     </button>
                   </th>
                   )}
-                    {role === "admin" && visibleColumns.includes("owner") && (
+                    {canSeeAllEmployees && visibleColumns.includes("owner") && (
                     <th className="text-left py-3 px-3 text-xs text-slate-500 font-medium">
                       Owner
                     </th>
@@ -928,7 +935,7 @@ useEffect(() => {
                         </div>
                       </td>
                       )}
-                      {role === "admin" && visibleColumns.includes("owner") && (
+                      {canSeeAllEmployees && visibleColumns.includes("owner") && (
                         <td className="py-3 px-3">
                           <div className="flex items-center gap-1.5">
                             <div className="w-5 h-5 rounded-md bg-indigo-100 flex items-center justify-center text-indigo-600 text-[9px] font-bold">
@@ -1074,7 +1081,7 @@ useEffect(() => {
                   <Edit size={11} />
                   Edit
                 </button>
-                {role === "admin" && (
+                 {canDeleteLeadsSeq && (
                   <button
                     onClick={() => setDeleteConfirm(selectedLead.id)}
                     className="px-3 py-1.5 text-xs bg-red-50 text-red-500 border border-red-200 rounded-lg flex items-center gap-1 hover:bg-red-100"
@@ -1217,7 +1224,7 @@ useEffect(() => {
                   <div className="space-y-3 max-h-64 overflow-y-auto pr-1">
                     {leadComments.map((comment) => {
                       const isAuthor = comment.user_id === userProfile?.id;
-                      const isAdmin = role === "admin";
+                      const isAdmin = isAdminRole(role);
                       const canEdit = isAuthor || isAdmin;
                       const isEditing = editingCommentId === comment.id;
 
@@ -1630,7 +1637,7 @@ useEffect(() => {
                   ))}
                 </select>
               </div>
-              {role === "admin" && (
+              {canAssignLeads && (
                 <div>
                   <label className="block text-xs text-slate-500 mb-1.5">
                     Assign To

@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
 import { toast } from "sonner";
 import { api } from "../lib/api";
+import { isAdminRole } from "../utils/permissions";
 
 import {
   Role, Lead, LeadStatus, LeadSource, Industry, Deal, Employee, Integration, Ticket,
@@ -215,6 +216,7 @@ interface AppContextType {
     name: string;
     role?: string;
     employeeId?: string;
+    manager_id?: string;
     department?: string;
   }) => Promise<UserProfile | null>;
   updateUser: (userId: string, data: Partial<UserProfile>) => Promise<boolean>;
@@ -302,6 +304,9 @@ interface AppContextType {
 
   activateUser: (userId: string) => Promise<void>;
   deactivateUser: (userId: string) => Promise<void>;
+
+  permissions: Record<string, string>;
+  fetchPermissions: () => Promise<void>;
 }
 
 export interface LeadComment {
@@ -363,6 +368,45 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   // ── Pricing Config State ──
   const [pricingConfig, setPricingConfig] = useState<PricingConfig | null>(null);
+  const [permissions, setPermissions] = useState<Record<string, string>>({});
+
+  // ── Fetch Permissions ──
+  const fetchPermissions = useCallback(async () => {
+    try {
+      const token = getToken();
+      if (!token) return;
+
+      const res = await fetch(
+        `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/auth/permissions`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.permissions) {
+          setPermissions(data.permissions);
+          localStorage.setItem("permissions", JSON.stringify(data.permissions));
+        }
+      } else {
+        const local = localStorage.getItem("permissions");
+        if (local) {
+          setPermissions(JSON.parse(local));
+        } else {
+          const roleFromProfile = userProfile?.role || 'viewer';
+          const staticPerms: Record<string, string> = {};
+          const modulesList = ['leads', 'deals', 'users', 'reports', 'settings', 'billing', 'tickets', 'activities'];
+          const { getPermissionScope: getScope } = await import("../utils/permissions");
+          for (const m of modulesList) {
+            staticPerms[m] = getScope(roleFromProfile, m);
+          }
+          setPermissions(staticPerms);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch permissions:', error);
+      const local = localStorage.getItem("permissions");
+      if (local) setPermissions(JSON.parse(local));
+    }
+  }, [userProfile?.role]);
 
   // ── Fetch Pricing Config ──
   const fetchPricingConfig = useCallback(async () => {
@@ -768,6 +812,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         importLeads(),
         importDeals(),
         fetchNotifications(),
+        fetchPermissions(),
       ]);
 
       setBackendOnline(true);
@@ -817,14 +862,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (userProfile?.id && role === "admin") {
+    const isPowerRole = ['Super Admin', 'super_admin', 'Org Admin', 'admin', 'Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager', 'Team Leader', 'team_leader'].includes(role) || isAdminRole(role);
+    if (userProfile?.id && isPowerRole) {
       fetchCompanySubscription();
       fetchPaymentMethods();
       fetchInvoices();
       loadUsers();
       fetchPricingConfig();
+      fetchPermissions();
     }
-  }, [userProfile?.id, role]);
+  }, [userProfile?.id, role, fetchPermissions]);
 
   //useEffect(() => { refreshData(); }, []);
   useEffect(() => {
@@ -856,8 +903,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // ── User Management (Admin) ────────────────────────────────────────────────
   const loadUsers = async () => {
     const token = getToken();
-    const isAdmin = role === 'Super Admin' || role === 'super_admin' || role === 'Org Admin' || role === 'admin';
-    if (!token || !isAdmin) return;
+    const isAllowed = ['Super Admin', 'super_admin', 'Org Admin', 'admin', 'Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager', 'Team Leader', 'team_leader'].includes(role) || isAdminRole(role);
+    if (!token || !isAllowed) return;
     setUsersLoading(true);
     try {
       const res = await fetch(
@@ -897,8 +944,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const createUser = async (data: {
-    email: string; password?: string; name: string;
-    role?: string; employeeId?: string; department?: string;
+    email: string;
+    password?: string;
+    name: string;
+    role?: string;
+    employeeId?: string;
+    manager_id?: string;
+    department?: string;
   }): Promise<UserProfile | null> => {
     const token = getToken();
     if (!token) {
@@ -2118,6 +2170,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       fetchInvoices,
       pricingConfig,
       fetchPricingConfig,
+      permissions,
+      fetchPermissions,
     }}>
       {children}
     </AppContext.Provider>

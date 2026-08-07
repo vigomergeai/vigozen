@@ -33,7 +33,7 @@ export default function Layout() {
     companySubscription,
   } = useApp();
 
-  const { canView, isAdmin } = usePermissions();
+  const { canView, isAdmin, canOpenAdminPanel } = usePermissions();
 
 
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -203,7 +203,7 @@ export default function Layout() {
           ))}
 
           {/* Admin Panel link */}
-          {canView('users') && (
+          {canOpenAdminPanel && (
             <NavLink
               to="/admin"
               onClick={() => setMobileOpen(false)}
@@ -445,7 +445,7 @@ export default function Layout() {
                   <div className="py-1">
 
                     <button onClick={() => { navigate("/settings"); setShowUserMenu(false); }} className="w-full text-left px-4 py-2 text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700">Profile Settings</button>
-                    {isAdmin && (
+                    {canOpenAdminPanel && (
                       <button onClick={() => { navigate("/admin"); setShowUserMenu(false); }} className="w-full text-left px-4 py-2 text-sm text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-900/30 flex items-center gap-2">
                         <UserCog size={13} />Admin Panel
                       </button>

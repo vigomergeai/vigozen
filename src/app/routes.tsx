@@ -18,6 +18,7 @@ const PaymentSuccess = lazy(() => import("./pages/PaymentSuccess"));
 const PaymentFailure = lazy(() => import("./pages/PaymentFailure")); 
 const BillingPage = lazy(() => import("./pages/BillingPage"));
 
+
 function NotFound() {
   return (
     <div className="flex flex-col items-center justify-center min-h-[60vh] text-center p-8">
@@ -60,17 +61,17 @@ import { usePermissions } from "./hooks/usePermissions";
 // Guard: admin only
 function RequireAdmin({ children }: { children: React.ReactNode }) {
   const { authLoading } = useApp();
-  const { isAdmin } = usePermissions();
+  const { canOpenAdminPanel } = usePermissions();
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!authLoading && !isAdmin) {
+    if (!authLoading && !canOpenAdminPanel) {
       navigate("/", { replace: true });
     }
-  }, [authLoading, isAdmin]);
+  }, [authLoading, canOpenAdminPanel]);
 
   if (authLoading) return null;
-  if (!isAdmin) return null;
+  if (!canOpenAdminPanel) return null;
   return <>{children}</>;
 }
 
@@ -200,6 +201,7 @@ export const router = createBrowserRouter([
           </RequireSubscription>
         )
       },
+
       { 
         path: "analysis", 
         Component: () => (

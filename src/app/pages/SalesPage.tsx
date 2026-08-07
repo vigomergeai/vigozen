@@ -12,6 +12,7 @@ import {
 } from "recharts";
 import { Deal, LeadStatus } from "../data/mockData";
 import { useApp } from "../context/AppContext";
+import { hasModuleAccess, canWrite } from "../utils/permissions";
 import { RevenueForecast } from '../components/RevenueForecast';
 import { formatCurrency } from '../../utils/formatters';
 
@@ -37,8 +38,10 @@ interface DealForm {
 const emptyDealForm: DealForm = { title: "", company: "", value: "", stage: "New", owner: "", ownerId: "", probability: "50", expectedClose: "" };
 
 export default function SalesPage() {
-  const { role, currentUser, deals, loading, addDeal, updateDeal, deleteDeal, refreshData, employees, importDeals, subscription } = useApp();
+  const { role, currentUser, deals, loading, addDeal, updateDeal, deleteDeal, refreshData, employees, importDeals, subscription, permissions } = useApp();
   const navigate = useNavigate();  // ← ADD THIS
+  const canManageDeals = canWrite(permissions, 'deals');
+  const canDeleteDeals = hasModuleAccess(permissions, 'deals', ['full']);
   const [view, setView] = useState<"kanban" | "forecast">("kanban");
   const [draggedDeal, setDraggedDeal] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -76,20 +79,13 @@ export default function SalesPage() {
   }
 
   const visibleDeals = useMemo(() =>
-    (role === "user"
-      ? deals.filter(
-        d =>
-          d.owner?.toLowerCase().trim() ===
-          currentUser.name?.toLowerCase().trim()
-      )
-      : deals
-    ).map(d => ({
+    deals.map(d => ({
       ...d,
       value: Number(d.value) || 0,
       probability: Number(d.probability) || 50,
       owner: d.owner || "Unknown"
     })),
-    [deals, role, currentUser]);
+    [deals]);
 
   const salesWiseData = useMemo(() => {
     const grouped = deals.reduce((acc: any, deal: any) => {
@@ -302,12 +298,16 @@ export default function SalesPage() {
                             </div>
                           </div>
                           <div className="opacity-0 group-hover:opacity-100 flex items-center gap-1 transition-all">
-                            <button onClick={() => openEdit(deal)} className="p-1 hover:bg-indigo-50 rounded-lg transition-colors">
-                              <Edit size={11} className="text-slate-400 hover:text-indigo-600" />
-                            </button>
-                            <button onClick={() => setDeleteConfirm(deal)} className="p-1 hover:bg-red-50 rounded-lg transition-colors">
-                              <Trash2 size={11} className="text-slate-400 hover:text-red-500" />
-                            </button>
+                            {canManageDeals && (
+                              <button onClick={() => openEdit(deal)} className="p-1 hover:bg-indigo-50 rounded-lg transition-colors">
+                                <Edit size={11} className="text-slate-400 hover:text-indigo-600" />
+                              </button>
+                            )}
+                            {canDeleteDeals && (
+                              <button onClick={() => setDeleteConfirm(deal)} className="p-1 hover:bg-red-50 rounded-lg transition-colors">
+                                <Trash2 size={11} className="text-slate-400 hover:text-red-500" />
+                              </button>
+                            )}
                           </div>
                         </div>
                         <div className="flex items-center justify-between mb-2">
@@ -431,8 +431,12 @@ export default function SalesPage() {
                       <td className="py-3 px-4 text-xs text-slate-500">{deal.expectedClose || "—"}</td>
                       <td className="py-3 px-4">
                         <div className="flex items-center gap-1">
-                          <button onClick={() => openEdit(deal)} className="p-1.5 hover:bg-indigo-50 rounded-lg text-slate-400 hover:text-indigo-600"><Edit size={12} /></button>
-                          <button onClick={() => setDeleteConfirm(deal)} className="p-1.5 hover:bg-red-50 rounded-lg text-slate-400 hover:text-red-500"><Trash2 size={12} /></button>
+                          {canManageDeals && (
+                            <button onClick={() => openEdit(deal)} className="p-1.5 hover:bg-indigo-50 rounded-lg text-slate-400 hover:text-indigo-600"><Edit size={12} /></button>
+                          )}
+                          {canDeleteDeals && (
+                            <button onClick={() => setDeleteConfirm(deal)} className="p-1.5 hover:bg-red-50 rounded-lg text-slate-400 hover:text-red-500"><Trash2 size={12} /></button>
+                          )}
                         </div>
                       </td>
                     </tr>

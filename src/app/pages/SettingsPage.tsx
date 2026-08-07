@@ -9,6 +9,7 @@ import {
   Facebook, Chrome, Linkedin, Instagram
 } from "lucide-react";
 import { useNavigate } from "react-router";
+import { hasModuleAccess } from "../utils/permissions";
 import { priceList as mockPriceList, PriceItem } from "../data/mockData";
 import { useApp } from "../context/AppContext";
 import { toast } from "sonner";
@@ -82,6 +83,7 @@ export default function SettingsPage() {
     // ── NEW ──
     pricingConfig,
     fetchPricingConfig,
+    permissions,
   } = useApp();
   const navigate = useNavigate();  // ← ADD THIS
   const [plans, setPlans] = useState<PriceItem[]>(mockPriceList);
@@ -1235,13 +1237,13 @@ export default function SettingsPage() {
     setShowIntegrationModal(true);
   };
 
-  const tabs: { id: SettingsTab; label: string; icon: React.ElementType; adminOnly?: boolean }[] = [
+  const tabs: { id: SettingsTab; label: string; icon: React.ElementType; permissionRequired?: boolean }[] = [
     { id: "profile", label: "Profile", icon: User },
     { id: "notifications", label: "Notifications", icon: Bell },
-    { id: "integrations", label: "Lead Integrations", icon: Plug },
-    { id: "pricing", label: "Price List", icon: CreditCard },
+    { id: "integrations", label: "Lead Integrations", icon: Plug, permissionRequired: true },
+    { id: "pricing", label: "Price List", icon: CreditCard, permissionRequired: true },
     { id: "security", label: "Security", icon: Shield },
-    { id: "system", label: "System", icon: Database, adminOnly: true },
+    { id: "system", label: "System", icon: Database, permissionRequired: true },
   ];
   const billingGroups = ["CRM Plans",];
 
@@ -1269,7 +1271,7 @@ export default function SettingsPage() {
               </div>
             </div>
             <nav className="p-2">
-              {tabs.filter(t => !t.adminOnly || role === "admin").map(tab => {
+              {tabs.filter(t => !t.permissionRequired || hasModuleAccess(permissions, 'settings', ['full'])).map(tab => {
                 const Icon = tab.icon;
                 return (
                   <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all text-sm ${activeTab === tab.id ? "bg-indigo-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-50 hover:text-slate-800"}`}>

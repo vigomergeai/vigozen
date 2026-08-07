@@ -224,6 +224,15 @@ const upload = multer({
     // Seed default role permissions
     const seedPermissions = async (compId) => {
       const permissions = [
+        // Super Admin (Platform-wide)
+        { role: 'Super Admin', module: 'leads', permission: 'full' },
+        { role: 'Super Admin', module: 'deals', permission: 'full' },
+        { role: 'Super Admin', module: 'users', permission: 'full' },
+        { role: 'Super Admin', module: 'reports', permission: 'full' },
+        { role: 'Super Admin', module: 'settings', permission: 'full' },
+        { role: 'Super Admin', module: 'billing', permission: 'full' },
+        { role: 'Super Admin', module: 'tickets', permission: 'full' },
+        { role: 'Super Admin', module: 'activities', permission: 'full' },
         // Org Admin
         { role: 'Org Admin', module: 'leads', permission: 'full' },
         { role: 'Org Admin', module: 'deals', permission: 'full' },
@@ -231,13 +240,17 @@ const upload = multer({
         { role: 'Org Admin', module: 'reports', permission: 'full' },
         { role: 'Org Admin', module: 'settings', permission: 'full' },
         { role: 'Org Admin', module: 'billing', permission: 'full' },
+        { role: 'Org Admin', module: 'tickets', permission: 'full' },
+        { role: 'Org Admin', module: 'activities', permission: 'full' },
         // Sales Manager
         { role: 'Sales Manager', module: 'leads', permission: 'dept' },
         { role: 'Sales Manager', module: 'deals', permission: 'dept' },
-        { role: 'Sales Manager', module: 'users', permission: 'dept' },
+        { role: 'Sales Manager', module: 'users', permission: 'team' },
         { role: 'Sales Manager', module: 'reports', permission: 'dept' },
         { role: 'Sales Manager', module: 'settings', permission: 'none' },
         { role: 'Sales Manager', module: 'billing', permission: 'none' },
+        { role: 'Sales Manager', module: 'tickets', permission: 'dept' },
+        { role: 'Sales Manager', module: 'activities', permission: 'dept' },
         // Team Leader
         { role: 'Team Leader', module: 'leads', permission: 'team' },
         { role: 'Team Leader', module: 'deals', permission: 'team' },
@@ -245,6 +258,8 @@ const upload = multer({
         { role: 'Team Leader', module: 'reports', permission: 'team' },
         { role: 'Team Leader', module: 'settings', permission: 'none' },
         { role: 'Team Leader', module: 'billing', permission: 'none' },
+        { role: 'Team Leader', module: 'tickets', permission: 'team' },
+        { role: 'Team Leader', module: 'activities', permission: 'team' },
         // Sales Executive
         { role: 'Sales Executive', module: 'leads', permission: 'own' },
         { role: 'Sales Executive', module: 'deals', permission: 'own' },
@@ -256,7 +271,7 @@ const upload = multer({
         { role: 'Lead Manager', module: 'leads', permission: 'full' },
         { role: 'Lead Manager', module: 'deals', permission: 'view' },
         { role: 'Lead Manager', module: 'reports', permission: 'own' },
-        { role: 'Sales Manager', module: 'users', permission: 'team' },
+        { role: 'Lead Manager', module: 'users', permission: 'team' },
         { role: 'Lead Manager', module: 'settings', permission: 'none' },
         { role: 'Lead Manager', module: 'billing', permission: 'none' }
       ];
@@ -460,6 +475,54 @@ process.on('unhandledRejection', (reason, promise) => {
 
 
 const app = express();
+
+// ── CORS CONFIGURATION ──
+// Allow requests from frontend origins. Supports crm.vigomerge.com, admin.vigomerge.com, localhost dev servers.
+app.use(cors({
+  origin: function (origin, callback) {
+    // Allow requests with no origin (server-to-server, mobile apps, curl, etc.)
+    if (!origin) return callback(null, true);
+
+    const allowedStaticOrigins = [
+      "https://crm.vigomerge.com",
+      "https://admin.vigomerge.com",
+      "https://api.vigomerge.com",
+      "http://localhost:5173",
+      "http://localhost:3000",
+      "http://localhost:5000",
+      "http://127.0.0.1:5173"
+    ];
+
+    if (
+      allowedStaticOrigins.includes(origin) ||
+      /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|172\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/.test(origin) ||
+      origin.endsWith(".vigomerge.com")
+    ) {
+      return callback(null, true);
+    }
+
+    // Fallback: allow all (for development flexibility)
+    return callback(null, true);
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
+  preflightContinue: false,
+  optionsSuccessStatus: 204
+}));
+
+// ── Explicit OPTIONS handler for preflight requests ──
+// Express 5 + path-to-regexp 8.x requires '{*splat}' instead of '*' or '/*'
+// This ensures preflight responses are handled even without the cors middleware.
+app.options('{*splat}', cors());
+app.options('{*splat}', (req, res) => {
+  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.sendStatus(204);
+});
+
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers["authorization"];
 
@@ -510,21 +573,98 @@ const requireRole = (allowedRoles) => {
 const isAdminRole = (role) => role === 'Super Admin' || role === 'super_admin' || role === 'Org Admin' || role === 'admin';
 
 const getPermissionScope = (role, module) => {
-  if (isAdminRole(role)) return 'full';
+  if (role === 'Super Admin' || role === 'super_admin') return 'full';
+  if (role === 'Org Admin' || role === 'org_admin' || role === 'admin') return 'full';
 
   const hierarchy = {
-    'Org Admin': { leads: 'full', deals: 'full', users: 'full', reports: 'full', settings: 'full', billing: 'full', tickets: 'full', activities: 'full', tasks: 'full', calendar: 'full' },
-    'Sales Manager': { leads: 'dept', deals: 'dept', users: 'dept', reports: 'dept', settings: 'none', billing: 'none', tickets: 'dept', activities: 'dept', tasks: 'dept', calendar: 'dept' },
-    'Team Leader': { leads: 'team', deals: 'team', users: 'team', reports: 'team', settings: 'none', billing: 'none', tickets: 'team', activities: 'team', tasks: 'team', calendar: 'team' },
-    'Sales Executive': { leads: 'own', deals: 'own', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own', tasks: 'own', calendar: 'own' },
-    'Lead Manager': { leads: 'full', deals: 'view', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'full', activities: 'full', tasks: 'full', calendar: 'full' },
-    'Lead Executive': { leads: 'own', deals: 'own', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own', tasks: 'own', calendar: 'own' },
-    'Telecaller': { leads: 'own', deals: 'none', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own', tasks: 'own', calendar: 'own' },
-    'Lead Qualifier': { leads: 'own', deals: 'none', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own', tasks: 'own', calendar: 'own' }
+    'Org Admin': { leads: 'full', deals: 'full', users: 'full', reports: 'full', settings: 'full', billing: 'full', tickets: 'full', activities: 'full' },
+    'Sales Manager': { leads: 'dept', deals: 'dept', users: 'team', reports: 'dept', settings: 'none', billing: 'none', tickets: 'dept', activities: 'dept' },
+    'Team Leader': { leads: 'team', deals: 'team', users: 'team', reports: 'team', settings: 'none', billing: 'none', tickets: 'team', activities: 'team' },
+    'Sales Executive': { leads: 'own', deals: 'own', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own' },
+    'Lead Manager': { leads: 'full', deals: 'view', users: 'team', reports: 'own', settings: 'none', billing: 'none', tickets: 'full', activities: 'full' },
+    'Lead Executive': { leads: 'own', deals: 'own', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own' },
+    'Telecaller': { leads: 'own', deals: 'none', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own' },
+    'Lead Qualifier': { leads: 'own', deals: 'none', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own' }
   };
 
   return hierarchy[role]?.[module] || 'none';
 };
+
+const checkUserManagementAccess = async (currentUser, targetUserId, reqTeamId) => {
+  const { role, id: currentUserId, company_id } = currentUser;
+
+  // Fetch target user details
+  const targetUserRes = await pool.query("SELECT role, company_id, manager_id, is_active FROM users WHERE id = $1", [targetUserId]);
+  if (targetUserRes.rows.length === 0) {
+    return { allowed: false, error: "User not found" };
+  }
+  const targetUser = targetUserRes.rows[0];
+
+  // Super Admin can edit/manage anyone
+  if (role === 'Super Admin' || role === 'super_admin') {
+    return { allowed: true, targetUser };
+  }
+
+  // Org Admin / admin can edit/manage anyone in same company except Super Admin
+  if (role === 'Org Admin' || role === 'org_admin' || role === 'admin') {
+    if (targetUser.company_id !== company_id) {
+      return { allowed: false, error: "User belongs to another company" };
+    }
+    if (targetUser.role === 'Super Admin' || targetUser.role === 'super_admin') {
+      return { allowed: false, error: "Cannot manage Super Admin" };
+    }
+    return { allowed: true, targetUser };
+  }
+
+  // Sales Manager, Lead Manager, Team Leader can only manage their subordinates
+  const subIds = await getSubordinateUserIds(currentUserId, reqTeamId);
+  const isSub = subIds.includes(targetUserId);
+
+  if (!isSub || currentUserId === targetUserId) {
+    return { allowed: false, error: "You can only manage users who report to you" };
+  }
+
+  const targetRoleLower = targetUser.role.toLowerCase();
+  const currentRoleLower = role.toLowerCase();
+
+  // - Sales Manager can edit/manage Team Leaders and Sales Executives under them
+  if (currentRoleLower === 'sales manager' || currentRoleLower === 'sales_manager') {
+    if (!['team leader', 'team_leader', 'sales executive', 'sales_executive'].includes(targetRoleLower)) {
+      return { allowed: false, error: "Sales Manager can only manage Team Leaders and Sales Executives" };
+    }
+  }
+  // - Lead Manager can edit/manage Lead Executives, Telecallers, and Lead Qualifiers under them
+  else if (currentRoleLower === 'lead manager' || currentRoleLower === 'lead_manager') {
+    if (!['lead executive', 'lead_executive', 'telecaller', 'lead qualifier', 'lead_qualifier'].includes(targetRoleLower)) {
+      return { allowed: false, error: "Lead Manager can only manage Lead Executives, Telecallers, and Lead Qualifiers" };
+    }
+  }
+  // - Team Leader can edit/manage only Sales Executives reporting to them
+  else if (currentRoleLower === 'team leader' || currentRoleLower === 'team_leader') {
+    if (!['sales executive', 'sales_executive'].includes(targetRoleLower)) {
+      return { allowed: false, error: "Team Leader can only manage Sales Executives" };
+    }
+  } else {
+    return { allowed: false, error: "Insufficient permissions to manage users" };
+  }
+
+  return { allowed: true, targetUser };
+};
+
+// GET /auth/permissions endpoint
+app.get("/auth/permissions", authenticateToken, async (req, res) => {
+  try {
+    const role = req.user.role;
+    const modules = ['leads', 'deals', 'users', 'reports', 'settings', 'billing', 'tickets', 'activities'];
+    const permissions = {};
+    for (const m of modules) {
+      permissions[m] = getPermissionScope(role, m);
+    }
+    res.json({ permissions });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Middleware to attach permission scope to request
 const checkPermission = (module) => {
@@ -602,7 +742,7 @@ const getScopedQueryFilters = async (table, req) => {
   const { role, company_id, id: userId, team_id } = req.user;
   const scope = req.permissionScope;
 
-  if (isAdminRole(role)) {
+  if (role === 'Super Admin' || role === 'super_admin') {
     return { joinClause: '', whereClause: '', params: [] };
   }
 
@@ -667,52 +807,7 @@ const getScopedQueryFilters = async (table, req) => {
   };
 };
 
-// ── CORS CONFIGURATION ──
-// Allow requests from frontend origins. Supports crm.vigomerge.com, admin.vigomerge.com, localhost dev servers.
-app.use(cors({
-  origin: function (origin, callback) {
-    // Allow requests with no origin (server-to-server, mobile apps, curl, etc.)
-    if (!origin) return callback(null, true);
 
-    const allowedStaticOrigins = [
-      "https://crm.vigomerge.com",
-      "https://admin.vigomerge.com",
-      "https://api.vigomerge.com",
-      "http://localhost:5173",
-      "http://localhost:3000",
-      "http://localhost:5000",
-      "http://127.0.0.1:5173"
-    ];
-
-    if (
-      allowedStaticOrigins.includes(origin) ||
-      /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|172\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/.test(origin) ||
-      origin.endsWith(".vigomerge.com")
-    ) {
-      return callback(null, true);
-    }
-
-    // Fallback: allow all (for development flexibility)
-    return callback(null, true);
-  },
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
-  preflightContinue: false,
-  optionsSuccessStatus: 204
-}));
-
-// ── Explicit OPTIONS handler for preflight requests ──
-// Express 5 + path-to-regexp 8.x requires '{*splat}' instead of '*' or '/*'
-// This ensures preflight responses are handled even without the cors middleware.
-app.options('{*splat}', cors());
-app.options('{*splat}', (req, res) => {
-  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.sendStatus(204);
-});
 
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
@@ -1378,11 +1473,85 @@ app.delete("/integrations/:id", authenticateToken, async (req, res) => {
 app.put("/users/:id", authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, email, phone, company, department, timezone, language, role, employee_id } = req.body;
+    const { name, email, phone, company, department, timezone, language, role, employee_id, manager_id } = req.body;
 
-    // Fetch existing user before update for audit trail
+    // Fetch existing user before update for validation and audit trail
     const existingUserRes = await pool.query("SELECT * FROM users WHERE id = $1", [id]);
+    if (existingUserRes.rows.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
     const existingUser = existingUserRes.rows[0];
+
+    const isSelf = req.user.id === id;
+
+    if (isSelf) {
+      // Self update: cannot change role or manager
+      if (role && role !== existingUser.role) {
+        return res.status(403).json({ error: "Cannot change your own role" });
+      }
+      if (manager_id !== undefined && manager_id !== existingUser.manager_id) {
+        return res.status(403).json({ error: "Cannot change your own manager" });
+      }
+    } else {
+      // Management update: check if current user is authorized to manage target user
+      const access = await checkUserManagementAccess(req.user, id, req.teamId);
+      if (!access.allowed) {
+        return res.status(403).json({ error: access.error });
+      }
+
+      // If updating role, verify creator can assign the new role
+      if (role && role !== existingUser.role) {
+        const creatorRole = req.user.role;
+        const canCreate = {
+          'Super Admin': ['Org Admin'],
+          'super_admin': ['Org Admin'],
+          'Org Admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
+          'org_admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
+          'admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
+          'Sales Manager': ['Team Leader', 'Sales Executive'],
+          'sales_manager': ['Team Leader', 'Sales Executive'],
+          'Team Leader': ['Sales Executive'],
+          'team_leader': ['Sales Executive'],
+          'Lead Manager': ['Lead Executive', 'Telecaller', 'Lead Qualifier'],
+          'lead_manager': ['Lead Executive', 'Telecaller', 'Lead Qualifier']
+        };
+        const allowedRoles = canCreate[creatorRole] || [];
+        if (!allowedRoles.includes(role)) {
+          return res.status(403).json({ error: `You are not authorized to assign role "${role}"` });
+        }
+      }
+
+      // If updating manager_id, verify reporting rules
+      if (manager_id && manager_id !== existingUser.manager_id) {
+        const REPORTING_RULES = {
+          'Org Admin': ['Super Admin'],
+          'Sales Manager': ['Org Admin'],
+          'Lead Manager': ['Org Admin'],
+          'Team Leader': ['Sales Manager', 'Org Admin'],
+          'Sales Executive': ['Team Leader', 'Sales Manager'],
+          'Lead Executive': ['Lead Manager'],
+          'Telecaller': ['Lead Manager'],
+          'Lead Qualifier': ['Lead Manager']
+        };
+        const targetRole = role || existingUser.role;
+        const managerRes = await pool.query("SELECT role FROM users WHERE id = $1", [manager_id]);
+        if (managerRes.rows.length > 0) {
+          const managerRole = managerRes.rows[0].role;
+          const allowedManagers = REPORTING_RULES[targetRole] || [];
+          if (!allowedManagers.includes(managerRole)) {
+            return res.status(403).json({
+              error: `${targetRole} cannot report to ${managerRole}`,
+              allowed: allowedManagers
+            });
+          }
+        }
+      }
+    }
+
+    let finalManagerId = existingUser.manager_id;
+    if (req.body.hasOwnProperty('manager_id')) {
+      finalManagerId = manager_id || null;
+    }
 
     const result = await pool.query(
       `UPDATE users
@@ -1395,10 +1564,11 @@ app.put("/users/:id", authenticateToken, async (req, res) => {
          timezone = COALESCE($6, timezone),
          language = COALESCE($7, language),
          role = COALESCE($8, role),
-         employee_id = COALESCE($9, employee_id)
-       WHERE id = $10
-       RETURNING id, name, email, phone, company, department, timezone, language, role, employee_id`,
-      [name, email, phone, company, department, timezone, language, role, employee_id, id]
+         employee_id = COALESCE($9, employee_id),
+         manager_id = $10::uuid
+       WHERE id = $11
+       RETURNING id, name, email, phone, company, department, timezone, language, role, employee_id, manager_id`,
+      [name, email, phone, company, department, timezone, language, role, employee_id, finalManagerId, id]
     );
 
     if (result.rows.length === 0) {
@@ -1455,12 +1625,12 @@ app.post("/users", authenticateToken, async (req, res) => {
 
     // 1. Define Hierarchical Creation Rules
     const canCreate = {
-      'Super Admin': ['Org Admin', 'admin'],
-      'Org Admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive'],
-      'admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive'],
+      'Super Admin': ['Org Admin'],
+      'Org Admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
+      'admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
       'Sales Manager': ['Team Leader', 'Sales Executive'],
       'Team Leader': ['Sales Executive'],
-      'Lead Manager': ['Lead Executive', 'Telecaller', 'Lead Qualifier']  // ← ADD THIS
+      'Lead Manager': ['Lead Executive', 'Telecaller', 'Lead Qualifier']
     };
 
     const { name, email, role, employeeId, department, team_id, manager_id: bodyManagerId } = req.body;
@@ -1469,6 +1639,32 @@ app.post("/users", authenticateToken, async (req, res) => {
     // 2. Validate Creator Permissions
     if (!canCreate[creatorRole] || !canCreate[creatorRole].includes(targetRole)) {
       return res.status(403).json({ error: `You are not authorized to create a user with role "${targetRole}"` });
+    }
+
+    // 2.5 Validate reporting manager against REPORTING_RULES
+    const REPORTING_RULES = {
+      'Org Admin': ['Super Admin'],
+      'Sales Manager': ['Org Admin'],
+      'Lead Manager': ['Org Admin'],
+      'Team Leader': ['Sales Manager', 'Org Admin'],
+      'Sales Executive': ['Team Leader', 'Sales Manager'],
+      'Lead Executive': ['Lead Manager'],
+      'Telecaller': ['Lead Manager'],
+      'Lead Qualifier': ['Lead Manager']
+    };
+
+    if (bodyManagerId) {
+      const managerRes = await pool.query("SELECT role FROM users WHERE id = $1", [bodyManagerId]);
+      if (managerRes.rows.length > 0) {
+        const managerRole = managerRes.rows[0].role;
+        const allowedManagers = REPORTING_RULES[targetRole] || [];
+        if (!allowedManagers.includes(managerRole)) {
+          return res.status(403).json({
+            error: `${targetRole} cannot report to ${managerRole}`,
+            allowed: allowedManagers
+          });
+        }
+      }
     }
 
     const existing = await pool.query("SELECT id FROM users WHERE email=$1", [email]);
@@ -1650,12 +1846,11 @@ app.delete("/users/:id", authenticateToken, async (req, res) => {
 });
 
 // Toggle user active/inactive
-app.put("/users/:id/toggle-access", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin']), async (req, res) => {
+app.put("/users/:id/toggle-access", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin', 'Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager', 'Team Leader', 'team_leader']), async (req, res) => {
   try {
-
-
-    function isAdminRole(role) {
-      return ['admin', 'super_admin', 'org_admin'].includes(role);
+    const access = await checkUserManagementAccess(req.user, req.params.id, req.teamId);
+    if (!access.allowed) {
+      return res.status(403).json({ error: access.error });
     }
 
     const { isActive } = req.body;
@@ -1676,13 +1871,12 @@ app.put("/users/:id/toggle-access", authenticateToken, requireRole(['admin', 'su
   }
 });
 
-// Reset user password (admin only)
-app.put("/users/:id/password", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin']), async (req, res) => {
+// Reset user password (admin/manager allowed for subordinates)
+app.put("/users/:id/password", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin', 'Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager', 'Team Leader', 'team_leader']), async (req, res) => {
   try {
-
-
-    function isAdminRole(role) {
-      return ['admin', 'super_admin', 'org_admin'].includes(role);
+    const access = await checkUserManagementAccess(req.user, req.params.id, req.teamId);
+    if (!access.allowed) {
+      return res.status(403).json({ error: access.error });
     }
 
     const { password } = req.body;
@@ -1711,28 +1905,17 @@ app.put("/users/:id/password", authenticateToken, requireRole(['admin', 'super_a
 // ── USER ACTIVATION/DEACTIVATION ──
 
 // Activate user
-app.put("/users/:id/activate", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin']), async (req, res) => {
+app.put("/users/:id/activate", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin', 'Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager', 'Team Leader', 'team_leader']), async (req, res) => {
   try {
-
-
-    function isAdminRole(role) {
-      return ['admin', 'super_admin', 'org_admin'].includes(role);
-    }
-
     const userId = req.params.id;
     const companyId = req.user.company_id;
 
-    // Check if user belongs to company
-    const userCheck = await pool.query(
-      "SELECT id, is_active FROM users WHERE id = $1 AND company_id = $2",
-      [userId, companyId]
-    );
-
-    if (userCheck.rows.length === 0) {
-      return res.status(404).json({ error: "User not found" });
+    const access = await checkUserManagementAccess(req.user, userId, req.teamId);
+    if (!access.allowed) {
+      return res.status(403).json({ error: access.error });
     }
 
-    if (userCheck.rows[0].is_active) {
+    if (access.targetUser.is_active) {
       return res.status(400).json({ error: "User is already active" });
     }
 
@@ -1779,28 +1962,16 @@ app.put("/users/:id/activate", authenticateToken, requireRole(['admin', 'super_a
 });
 
 // Deactivate user
-app.put("/users/:id/deactivate", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin']), async (req, res) => {
+app.put("/users/:id/deactivate", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin', 'Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager', 'Team Leader', 'team_leader']), async (req, res) => {
   try {
-
-
-    function isAdminRole(role) {
-      return ['admin', 'super_admin', 'org_admin'].includes(role);
-    }
-
     const userId = req.params.id;
-    const companyId = req.user.company_id;
 
-    // Check if user belongs to company
-    const userCheck = await pool.query(
-      "SELECT id, is_active FROM users WHERE id = $1 AND company_id = $2",
-      [userId, companyId]
-    );
-
-    if (userCheck.rows.length === 0) {
-      return res.status(404).json({ error: "User not found" });
+    const access = await checkUserManagementAccess(req.user, userId, req.teamId);
+    if (!access.allowed) {
+      return res.status(403).json({ error: access.error });
     }
 
-    if (!userCheck.rows[0].is_active) {
+    if (!access.targetUser.is_active) {
       return res.status(400).json({ error: "User is already inactive" });
     }
 
@@ -4109,46 +4280,64 @@ app.post("/payments/verify", authenticateToken, async (req, res) => {
 // NOTIFICATION ROUTES
 // ──────────────────────────────────────────────────────────────
 
-// GET /api/audit-logs (Admin only)
-app.get("/api/audit-logs", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin']), async (req, res) => {
+// GET /api/audit-logs (Admin & managers allowed with dynamic filtering)
+app.get("/api/audit-logs", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin', 'Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager', 'Team Leader', 'team_leader']), async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ error: "Admin access required" });
-    }
-
     const { limit = 50, offset = 0, action, entity_type, user_id } = req.query;
     const companyId = req.user.company_id;
+    const { role } = req.user;
+
+    const isSuperAdmin = role === 'Super Admin' || role === 'super_admin';
+    const isOrgAdmin = role === 'Org Admin' || role === 'org_admin' || role === 'admin';
+    const isManager = ['Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager', 'Team Leader', 'team_leader'].includes(role);
 
     let query = `
       SELECT * FROM audit_logs 
     `;
     const params = [];
     let paramIndex = 1;
+    const conditions = [];
 
-    if (companyId) {
-      query += ` WHERE user_id IN (SELECT id FROM users WHERE company_id = $${paramIndex})`;
-      params.push(companyId);
+    if (isSuperAdmin) {
+      // Super Admin can view all logs
+    } else if (isOrgAdmin) {
+      if (companyId) {
+        conditions.push(`user_id IN (SELECT id FROM users WHERE company_id = $${paramIndex})`);
+        params.push(companyId);
+        paramIndex++;
+      } else {
+        conditions.push(`(user_id IS NULL OR user_id IN (SELECT id FROM users WHERE company_id IS NULL))`);
+      }
+    } else if (isManager) {
+      // Managers only see logs of their subordinates
+      const subIds = await getSubordinateUserIds(req.user.id, req.teamId);
+      conditions.push(`user_id = ANY($${paramIndex})`);
+      params.push(subIds);
       paramIndex++;
     } else {
-      query += ` WHERE user_id IS NULL OR user_id IN (SELECT id FROM users WHERE company_id IS NULL)`;
+      return res.status(403).json({ error: "Access denied to audit logs" });
     }
 
     if (action) {
-      query += ` AND action = $${paramIndex}`;
+      conditions.push(`action = $${paramIndex}`);
       params.push(action);
       paramIndex++;
     }
 
     if (entity_type) {
-      query += ` AND entity_type = $${paramIndex}`;
+      conditions.push(`entity_type = $${paramIndex}`);
       params.push(entity_type);
       paramIndex++;
     }
 
     if (user_id) {
-      query += ` AND user_id = $${paramIndex}`;
+      conditions.push(`user_id = $${paramIndex}`);
       params.push(user_id);
       paramIndex++;
+    }
+
+    if (conditions.length > 0) {
+      query += " WHERE " + conditions.join(" AND ");
     }
 
     query += ` ORDER BY created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
@@ -4163,36 +4352,69 @@ app.get("/api/audit-logs", authenticateToken, requireRole(['admin', 'super_admin
 });
 
 // POST /users/bulk/action (Admin only)
-app.post("/users/bulk/action", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin']), async (req, res) => {
+// POST /users/bulk/action (Admin & managers allowed on subordinates)
+app.post("/users/bulk/action", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin', 'Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager']), async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ error: "Admin access required" });
-    }
-
     const { userIds, action, value } = req.body;
 
     if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
       return res.status(400).json({ error: "User IDs required" });
     }
 
+    const { role } = req.user;
+    const isSuperAdmin = role === 'Super Admin' || role === 'super_admin';
+    const isOrgAdmin = role === 'Org Admin' || role === 'org_admin' || role === 'admin';
+    const isManager = ['Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager'].includes(role);
+
     const companyId = req.user.company_id;
 
-    // Verify all users belong to same company
-    let verify;
-    if (companyId) {
-      verify = await pool.query(
-        "SELECT id FROM users WHERE id = ANY($1) AND company_id = $2",
-        [userIds, companyId]
-      );
-    } else {
-      verify = await pool.query(
-        "SELECT id FROM users WHERE id = ANY($1) AND company_id IS NULL",
-        [userIds]
-      );
-    }
+    if (isSuperAdmin) {
+      // Super Admin can manage anyone
+    } else if (isOrgAdmin) {
+      // Verify all users belong to the same company
+      let verify;
+      if (companyId) {
+        verify = await pool.query(
+          "SELECT id FROM users WHERE id = ANY($1) AND company_id = $2",
+          [userIds, companyId]
+        );
+      } else {
+        verify = await pool.query(
+          "SELECT id FROM users WHERE id = ANY($1) AND company_id IS NULL",
+          [userIds]
+        );
+      }
+      if (verify.rows.length !== userIds.length) {
+        return res.status(403).json({ error: "Some users don't belong to your company" });
+      }
+    } else if (isManager) {
+      // Sales/Lead Managers can only perform actions on subordinates and cannot delete
+      if (action === 'delete') {
+        return res.status(403).json({ error: "Managers are not authorized to delete users" });
+      }
 
-    if (verify.rows.length !== userIds.length) {
-      return res.status(403).json({ error: "Some users don't belong to your company" });
+      const subIds = await getSubordinateUserIds(req.user.id, req.teamId);
+      const allSubordinates = userIds.every(id => subIds.includes(id));
+      if (!allSubordinates) {
+        return res.status(403).json({ error: "You can only manage your subordinates" });
+      }
+
+      // Role assignment constraints
+      if (action === 'assign_role') {
+        const roleLower = role.toLowerCase();
+        const valueLower = value?.toLowerCase();
+        if (roleLower === 'sales manager' || roleLower === 'sales_manager') {
+          if (!['team leader', 'team_leader', 'sales executive', 'sales_executive'].includes(valueLower)) {
+            return res.status(403).json({ error: "Sales Manager can only assign Team Leader or Sales Executive roles" });
+          }
+        } else if (roleLower === 'lead manager' || roleLower === 'lead_manager') {
+          if (!['lead executive', 'lead_executive', 'telecaller', 'lead qualifier', 'lead_qualifier'].includes(valueLower)) {
+            return res.status(403).json({ error: "Lead Manager can only assign Lead Executive, Telecaller, or Lead Qualifier roles" });
+          }
+        }
+      }
+    } else {
+      return res.status(403).json({ error: "Bulk actions are restricted" });
     }
 
     let result;
@@ -4230,13 +4452,14 @@ app.post("/users/bulk/action", authenticateToken, requireRole(['admin', 'super_a
         break;
 
       case 'assign_role':
-        const validRoles = ['super_admin', 'org_admin', 'admin', 'sales_manager', 'team_leader', 'sales_executive', 'lead_manager', 'lead_executive', 'telecaller', 'lead_qualifier'];
-        if (!value || !validRoles.includes(value)) {
+        const allowedDisplayRoles = ['Super Admin', 'Org Admin', 'admin', 'Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'];
+        const matchedRole = allowedDisplayRoles.find(r => r.toLowerCase() === value.toLowerCase());
+        if (!value || !matchedRole) {
           return res.status(400).json({ error: "Invalid role" });
         }
         result = await pool.query(
           "UPDATE users SET role = $1, updated_at = NOW() WHERE id = ANY($2) RETURNING id, name",
-          [value, userIds]
+          [matchedRole, userIds]
         );
         break;
 
@@ -4920,7 +5143,24 @@ function calculatePricing({ planType, billingPeriod, activeUsers, pricePerUser }
 // GET company subscription details
 app.get("/api/company/subscription", authenticateToken, async (req, res) => {
   try {
-    const companyId = req.user.company_id;
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    const isOrgAdmin = req.user.role === 'Org Admin' || req.user.role === 'org_admin' || req.user.role === 'admin';
+    
+    if (!isSuperAdmin && !isOrgAdmin) {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    let companyId = req.user.company_id;
+    if (isSuperAdmin) {
+      companyId = req.query.company_id || req.user.company_id;
+      if (!companyId) {
+        return res.status(400).json({ error: "Super Admin must specify company_id" });
+      }
+    } else {
+      if (req.query.company_id && req.query.company_id !== req.user.company_id) {
+        return res.status(403).json({ error: "Cannot access other companies" });
+      }
+    }
 
     // Get company details
     const companyRes = await pool.query(
@@ -5050,11 +5290,25 @@ app.get("/api/company/subscription/pricing", authenticateToken, async (req, res)
 // PUT update company subscription
 app.put("/api/company/subscription", authenticateToken, async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    const isOrgAdmin = req.user.role === 'Org Admin' || req.user.role === 'org_admin' || req.user.role === 'admin';
+    
+    if (!isSuperAdmin && !isOrgAdmin) {
       return res.status(403).json({ error: "Admin access required" });
     }
 
-    const companyId = req.user.company_id;
+    let companyId = req.user.company_id;
+    if (isSuperAdmin) {
+      companyId = req.body.company_id || req.query.company_id || req.user.company_id;
+      if (!companyId) {
+        return res.status(400).json({ error: "Super Admin must specify company_id" });
+      }
+    } else {
+      if ((req.body.company_id && req.body.company_id !== req.user.company_id) || (req.query.company_id && req.query.company_id !== req.user.company_id)) {
+        return res.status(403).json({ error: "Cannot access other companies" });
+      }
+    }
+
     const { plan_type, billing_period, auto_renew, purchased_users, allowed_users } = req.body;
 
     // Validate
@@ -5178,10 +5432,18 @@ app.get('/api/pricing-config', async (req, res) => {
   }
 });
 
-// PUT /api/pricing-config (Admin only)
-app.put('/api/pricing-config', authenticateToken, requireRole(['admin', 'super_admin', 'org_admin']), async (req, res) => {
+app.put('/api/pricing-config', authenticateToken, requireRole(['admin', 'super_admin', 'org_admin', 'Super Admin', 'Org Admin']), async (req, res) => {
   try {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    const isOrgAdmin = req.user.role === 'Org Admin' || req.user.role === 'org_admin' || req.user.role === 'admin';
+    
+    if (!isSuperAdmin && !isOrgAdmin) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    
+    if (!isSuperAdmin) {
+      return res.status(403).json({ error: 'Only Super Admin can modify pricing configuration' });
+    }
     const { starter_price_per_user, gst_rate, monthly_discount, quarterly_discount, half_yearly_discount, yearly_discount } = req.body;
     const result = await pool.query(
       `UPDATE pricing_config 
@@ -5204,6 +5466,129 @@ app.put('/api/pricing-config', authenticateToken, requireRole(['admin', 'super_a
     res.json({ success: true, config: globalPricingConfig });
   } catch (error) {
     console.error("Update pricing config error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── GET ALL ROLE PERMISSIONS ──
+app.get("/api/role-permissions", authenticateToken, async (req, res) => {
+  try {
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    if (!isSuperAdmin) {
+      return res.status(403).json({ error: "Super Admin access required" });
+    }
+
+    const result = await pool.query(
+      `SELECT id, role, module, permission, company_id 
+       FROM role_permissions 
+       ORDER BY role, module`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error("Get role permissions error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── UPDATE ROLE PERMISSION ──
+app.put("/api/role-permissions/:id", authenticateToken, async (req, res) => {
+  try {
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    if (!isSuperAdmin) {
+      return res.status(403).json({ error: "Super Admin access required" });
+    }
+
+    const { id } = req.params;
+    const { permission } = req.body;
+
+    if (!permission || !['none', 'view', 'own', 'team', 'dept', 'full'].includes(permission)) {
+      return res.status(400).json({ error: "Invalid permission value" });
+    }
+
+    const result = await pool.query(
+      `UPDATE role_permissions 
+       SET permission = $1
+       WHERE id = $2 
+       RETURNING *`,
+      [permission, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Permission entry not found" });
+    }
+
+    res.json({ success: true, updated: result.rows[0] });
+  } catch (error) {
+    console.error("Update role permission error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── CREATE ROLE PERMISSION ──
+app.post("/api/role-permissions", authenticateToken, async (req, res) => {
+  try {
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    if (!isSuperAdmin) {
+      return res.status(403).json({ error: "Super Admin access required" });
+    }
+
+    const { role, module, permission, company_id } = req.body;
+
+    if (!role || !module || !permission) {
+      return res.status(400).json({ error: "role, module, and permission are required" });
+    }
+
+    if (!['none', 'view', 'own', 'team', 'dept', 'full'].includes(permission)) {
+      return res.status(400).json({ error: "Invalid permission value" });
+    }
+
+    // Check if entry exists
+    const existing = await pool.query(
+      `SELECT id FROM role_permissions 
+       WHERE role = $1 AND module = $2 AND (company_id = $3 OR (company_id IS NULL AND $3 IS NULL))`,
+      [role, module, company_id || null]
+    );
+
+    if (existing.rows.length > 0) {
+      return res.status(409).json({ error: "Permission entry already exists" });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO role_permissions (id, role, module, permission, company_id)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4)
+       RETURNING *`,
+      [role, module, permission, company_id || null]
+    );
+
+    res.status(201).json({ success: true, created: result.rows[0] });
+  } catch (error) {
+    console.error("Create role permission error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── DELETE ROLE PERMISSION ──
+app.delete("/api/role-permissions/:id", authenticateToken, async (req, res) => {
+  try {
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    if (!isSuperAdmin) {
+      return res.status(403).json({ error: "Super Admin access required" });
+    }
+
+    const { id } = req.params;
+
+    const result = await pool.query(
+      "DELETE FROM role_permissions WHERE id = $1 RETURNING *",
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Permission entry not found" });
+    }
+
+    res.json({ success: true, deleted: result.rows[0] });
+  } catch (error) {
+    console.error("Delete role permission error:", error);
     res.status(500).json({ error: error.message });
   }
 });

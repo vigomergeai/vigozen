@@ -48,6 +48,7 @@ export function useCurrentUser() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userName, setUserName] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [role, setRole] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -60,6 +61,7 @@ export function useCurrentUser() {
           setUserEmail("vigomerge@gmail.com");
           setUserName("vigomerge");
           setIsAdmin(true);
+          setRole("Super Admin");
           setLoading(false);
           return;
         }
@@ -71,6 +73,7 @@ export function useCurrentUser() {
           setUserEmail(payload.email || null);
           setUserName(payload.name || payload.email || null);
           setIsAdmin(payload.role === "admin");
+          setRole(payload.role || null);
         } catch {
           // If decode fails, try fetching profile through api client
           const data = await api.auth.profile(token);
@@ -78,6 +81,7 @@ export function useCurrentUser() {
           setUserEmail(data.email || null);
           setUserName(data.name || data.email || null);
           setIsAdmin(data.role === "admin");
+          setRole(data.role || null);
         }
       } catch (err) {
         console.error("useCurrentUser error:", err);
@@ -89,7 +93,7 @@ export function useCurrentUser() {
     getUser();
   }, []);
 
-  return { userId, userEmail, userName, isAdmin, loading };
+  return { userId, userEmail, userName, isAdmin, role, loading };
 }
 
 // ============================================================
@@ -99,7 +103,7 @@ export function useTickets() {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const { userId, isAdmin } = useCurrentUser();
+  const { userId, isAdmin, role } = useCurrentUser();
 
   const fetchTickets = useCallback(async () => {
     setLoading(true);
@@ -108,10 +112,11 @@ export function useTickets() {
     try {
       const token = localStorage.getItem("token") || "local-dev-bypass-token";
       const data = await api.tickets.list(token);
-      // Role-based filtering: admin sees all, users see own tickets
-      const filtered = isAdmin
-        ? (data as Ticket[])
-        : (data as Ticket[]).filter((t) => t.owner_id === userId);
+      
+      const isExecutive = role && ['Sales Executive', 'sales_executive', 'Lead Executive', 'lead_executive', 'Telecaller', 'telecaller', 'Lead Qualifier', 'lead_qualifier'].includes(role);
+      const filtered = isExecutive
+        ? (data as Ticket[]).filter((t) => t.owner_id === userId)
+        : (data as Ticket[]);
       setTickets(filtered);
     } catch (err: any) {
       console.error("Error fetching tickets:", err);
@@ -119,7 +124,7 @@ export function useTickets() {
     } finally {
       setLoading(false);
     }
-  }, [userId, isAdmin]);
+  }, [userId, isAdmin, role]);
 
   useEffect(() => {
     fetchTickets();

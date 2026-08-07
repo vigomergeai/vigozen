@@ -13,6 +13,7 @@ import { useApp } from "../context/AppContext";
 import type { UserProfile } from "../context/AppContext";
 import { useNavigate } from "react-router";
 import { usePermissions } from "../hooks/usePermissions";
+import { isAdminRole, hasModuleAccess, canWrite } from "../utils/permissions";
 
 // All hierarchy roles available to create
 
@@ -30,11 +31,16 @@ const ALL_HIERARCHY_ROLES = [
 // Who can create whom (Creation Rules)
 export const ROLE_CREATION_RULES: Record<string, string[]> = {
   'Super Admin': ['Org Admin'],
-  'Org Admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive'],
-  'admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive'],
+  'super_admin': ['Org Admin'],
+  'Org Admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
+  'org_admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
+  'admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
   'Sales Manager': ['Team Leader', 'Sales Executive'],
+  'sales_manager': ['Team Leader', 'Sales Executive'],
   'Lead Manager': ['Lead Executive', 'Telecaller', 'Lead Qualifier'],
+  'lead_manager': ['Lead Executive', 'Telecaller', 'Lead Qualifier'],
   'Team Leader': ['Sales Executive'],
+  'team_leader': ['Sales Executive'],
   'Lead Executive': [],
   'Telecaller': [],
   'Lead Qualifier': [],
@@ -44,13 +50,21 @@ export const ROLE_CREATION_RULES: Record<string, string[]> = {
 // Who reports to whom (Reporting Rules)
 export const REPORTING_RULES: Record<string, string[]> = {
   'Org Admin': ['Super Admin'],
+  'org_admin': ['Super Admin', 'super_admin'],
   'Sales Manager': ['Org Admin'],
+  'sales_manager': ['Org Admin', 'org_admin'],
   'Lead Manager': ['Org Admin'],
+  'lead_manager': ['Org Admin', 'org_admin'],
   'Team Leader': ['Sales Manager', 'Org Admin'],
+  'team_leader': ['Sales Manager', 'sales_manager', 'Org Admin', 'org_admin'],
   'Sales Executive': ['Team Leader', 'Sales Manager'],
+  'sales_executive': ['Team Leader', 'team_leader', 'Sales Manager', 'sales_manager'],
   'Lead Executive': ['Lead Manager'],
+  'lead_executive': ['Lead Manager', 'lead_manager'],
   'Telecaller': ['Lead Manager'],
-  'Lead Qualifier': ['Lead Manager']
+  'telecaller': ['Lead Manager', 'lead_manager'],
+  'Lead Qualifier': ['Lead Manager'],
+  'lead_qualifier': ['Lead Manager', 'lead_manager']
 };
 
 // All roles list for dropdown (filtered by user's role)
@@ -180,37 +194,26 @@ const editUserSchema = z.object({
     ),
 });
 
-const EMPLOYEE_OPTIONS = [
-  { id: "", label: "— No assignment —" },
-  { id: "e1", label: "Arjun Sharma (e1)" },
-  { id: "e2", label: "Priya Patel (e2)" },
-  { id: "e3", label: "Rahul Verma (e3)" },
-  { id: "e4", label: "Sneha Gupta (e4)" },
-  { id: "e5", label: "Karan Mehta (e5)" },
-  { id: "e6", label: "Divya Singh (e6)" },
-];
-
 interface UserForm {
   name: string;
   email: string;
   password: string;
   confirmPassword: string;
   role: string;
-  employeeId: string;
   department: string;
   manager_id: string;
 }
 
 const emptyForm: UserForm = {
   name: "", email: "", password: "", confirmPassword: "",
-  role: "Sales Executive", employeeId: "", department: "Sales",
+  role: "Sales Executive", department: "Sales",
   manager_id: "",
 };
 
 export default function AdminPage() {
   const { role, users, usersLoading, loadUsers, createUser, updateUser, deleteUser, toggleUserAccess, resetUserPassword, activateUser, deactivateUser, userProfile, } = useApp();
   const navigate = useNavigate();
-  const { canCreate } = usePermissions();
+  const { canCreate, isAdmin } = usePermissions();
 
   // Filter role options based on the creator's permission level
   const availableRoles = useMemo(() => {
@@ -219,15 +222,76 @@ export default function AdminPage() {
     return roles.map(r => ({ value: r, label: r }));
   }, [userProfile]);
 
-  const employeeOptions = [
-    { id: "", label: "— No assignment —" },
-    ...users.map((u) => ({
-      id: u.id,
-      label: `${u.name || u.email} (${u.id ? u.id.slice(0, 8) : ""})`
-    }))
-  ];
+  const [activeTab, setActiveTab] = useState<"users" | "audit" | "subscriptions" | "permissions">("users");
+  const [rolePermissions, setRolePermissions] = useState<any[]>([]);
+  const [rolePermissionsLoading, setRolePermissionsLoading] = useState(false);
+  const permsLoading = rolePermissionsLoading;
 
-  const [activeTab, setActiveTab] = useState<"users" | "audit" | "subscriptions">("users");
+  const fetchRolePermissions = async () => {
+    const token = localStorage.getItem('token');
+    if (!token) return;
+    setRolePermissionsLoading(true);
+    try {
+      const res = await fetch(`${getApiBaseUrl()}/role-permissions`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRolePermissions(Array.isArray(data) ? data : []);
+      } else {
+        setRolePermissions([]);
+      }
+    } catch {
+      setRolePermissions([]);
+    } finally {
+      setRolePermissionsLoading(false);
+    }
+  };
+
+  const updateRolePermission = async (id: string, permission: string) => {
+    const token = localStorage.getItem('token');
+    if (!token) return;
+    try {
+      const res = await fetch(`${getApiBaseUrl()}/role-permissions/${id}`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ permission })
+      });
+      if (res.ok) {
+        toast.success("Permission updated successfully");
+        fetchRolePermissions();
+      } else {
+        const data = await res.json();
+        toast.error(data.error || "Failed to update permission");
+      }
+    } catch {
+      toast.error("Failed to update permission");
+    }
+  };
+
+  const deleteRolePermission = async (id: string) => {
+    const token = localStorage.getItem('token');
+    if (!token) return;
+    try {
+      const res = await fetch(`${getApiBaseUrl()}/role-permissions/${id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        toast.success("Permission deleted successfully");
+        fetchRolePermissions();
+      } else {
+        const data = await res.json();
+        toast.error(data.error || "Failed to delete permission");
+      }
+    } catch {
+      toast.error("Failed to delete permission");
+    }
+  };
+
   const [subscriptions, setSubscriptions] = useState<any[]>([]);
   const [subLoading, setSubLoading] = useState(false);
 
@@ -270,12 +334,9 @@ export default function AdminPage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-if (role === "admin") {
-    navigate("/");
-    return;
-}   
-
- loadUsers();
+    const allowed = ['Super Admin', 'super_admin', 'Org Admin', 'org_admin', 'admin', 'Sales Manager', 'Lead Manager', 'Team Leader'];
+    if (!allowed.includes(role)) { navigate("/"); return; }
+    loadUsers();
   }, [role]);
 
   const filtered = useMemo(() => {
@@ -298,11 +359,21 @@ if (role === "admin") {
     return data;
   }, [users, search, filterRole, filterStatus]);
 
+  // Helper to traverse hierarchy and verify recursive manager relationship
+  const isSubordinate = (managerId: string, targetUserId: string, allUsers: UserProfile[]): boolean => {
+    let current = allUsers.find(u => u.id === targetUserId);
+    while (current && current.manager_id) {
+      if (current.manager_id === managerId) return true;
+      current = allUsers.find(u => u.id === current.manager_id);
+    }
+    return false;
+  };
+
   // Get available managers based on selected role
-  const getAvailableManagers = (selectedRole: string) => {
+  const getAvailableManagers = (selectedRole: string, targetUserId?: string) => {
     const allowedManagerRoles = REPORTING_RULES[selectedRole] || [];
     return users.filter(u =>
-      u.id !== userProfile?.id &&
+      u.id !== targetUserId &&
       allowedManagerRoles.includes(u.role) &&
       u.isActive
     );
@@ -361,9 +432,8 @@ if (role === "admin") {
 
 
   const stats = useMemo(() => {
-    const adminRoles = ["admin", "super_admin", "Super Admin", "Org Admin"];
-    const admins = users.filter(u => adminRoles.includes(u.role)).length;
-    const regularUsers = users.filter(u => !adminRoles.includes(u.role)).length;
+    const admins = users.filter(u => isAdminRole(u.role)).length;
+    const regularUsers = users.filter(u => !isAdminRole(u.role)).length;
 
     return {
       total: users.length,
@@ -390,9 +460,8 @@ if (role === "admin") {
       password: "",
       confirmPassword: "",
       role: user.role,
-      employeeId: user.employeeId || "",
       department: user.department || "Sales",
-      manager_id: user.manager_id || "",  // ← ADD THIS
+      manager_id: user.manager_id || "",
     });
     setFormError("");
     setEditUser(user);
@@ -413,7 +482,7 @@ if (role === "admin") {
       name: form.name.trim(),
       email: form.email.trim(),
       role: form.role,
-      employeeId: form.employeeId || undefined,
+      manager_id: form.manager_id || undefined,
       department: form.department,
     });
     setSaving(false);
@@ -442,7 +511,7 @@ if (role === "admin") {
     await updateUser(editUser.id, {
       name: form.name.trim(),
       role: form.role as any,
-      employeeId: form.employeeId || null,
+      manager_id: form.manager_id || null,
       department: form.department,
     });
     setSaving(false);
@@ -492,12 +561,14 @@ if (role === "admin") {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <button
-            onClick={() => navigate("/subscription")}
-            className="px-3 py-2 text-sm font-medium text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-xl hover:bg-indigo-100 transition-colors flex items-center gap-2"
-          >
-            <CreditCard size={14} /> Manage Subscription
-          </button>
+          {isAdmin && (
+            <button
+              onClick={() => navigate("/subscription")}
+              className="px-3 py-2 text-sm font-medium text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-xl hover:bg-indigo-100 transition-colors flex items-center gap-2"
+            >
+              <CreditCard size={14} /> Manage Subscription
+            </button>
+          )}
           <button
             onClick={loadUsers}
             disabled={usersLoading}
@@ -519,7 +590,10 @@ if (role === "admin") {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {[
           {
-            label: "Total Users",
+            label: isAdmin ? "Total Users" : 
+                   (role === "Sales Manager" ? "Department Users" :
+                    role === "Lead Manager" ? "Lead Team Users" :
+                    role === "Team Leader" ? "Team Members" : "Total Users"),
             value: stats.total,
             icon: Users,
             color: "from-blue-500 to-indigo-500",
@@ -587,14 +661,26 @@ if (role === "admin") {
           <FileText size={14} className="inline mr-2" />
           Audit Logs
         </button>
-        <button
-          onClick={() => { setActiveTab("subscriptions" as any); fetchSubscriptions(); }}
-          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activeTab === "subscriptions" ? "border-indigo-600 text-indigo-600" : "border-transparent text-slate-500"
-            }`}
-        >
-          <CreditCard size={14} className="inline mr-2" />
-          Subscriptions
-        </button>
+        {isAdmin && (
+          <button
+            onClick={() => { setActiveTab("subscriptions" as any); fetchSubscriptions(); }}
+            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activeTab === "subscriptions" ? "border-indigo-600 text-indigo-600" : "border-transparent text-slate-500"
+              }`}
+          >
+            <CreditCard size={14} className="inline mr-2" />
+            Subscriptions
+          </button>
+        )}
+        {(role === 'Super Admin' || role === 'super_admin') && (
+          <button
+            onClick={() => { setActiveTab("permissions"); fetchRolePermissions(); }}
+            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activeTab === "permissions" ? "border-indigo-600 text-indigo-600" : "border-transparent text-slate-500"
+              }`}
+          >
+            <Shield size={14} className="inline mr-2" />
+            Role Permissions
+          </button>
+        )}
       </div>
 
 
@@ -658,7 +744,7 @@ if (role === "admin") {
           </div>
 
           {/* Bulk Action Toolbar */}
-          {selectedUsers.length > 0 && (
+          {selectedUsers.length > 0 && role !== "Team Leader" && (
             <div className="flex items-center gap-3 p-3 bg-indigo-50 rounded-xl border border-indigo-200 w-full flex-wrap">
               <span className="text-sm font-medium text-indigo-700">{selectedUsers.length} users selected</span>
               <select
@@ -669,7 +755,7 @@ if (role === "admin") {
                 <option value="">Select Action</option>
                 <option value="activate">Activate</option>
                 <option value="deactivate">Deactivate</option>
-                <option value="delete">Delete</option>
+                {isAdmin && <option value="delete">Delete</option>}
                 <option value="assign_department">Assign Department</option>
                 <option value="assign_role">Assign Role</option>
               </select>
@@ -694,8 +780,8 @@ if (role === "admin") {
                   className="px-3 py-1.5 text-sm border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                 >
                   <option value="">Select Role</option>
-                  {['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'].map((r) => (
-                    <option key={r} value={r}>{r}</option>
+                  {availableRoles.map((r) => (
+                    <option key={r.value} value={r.value}>{r.label}</option>
                   ))}
                 </select>
               )}
@@ -769,121 +855,158 @@ if (role === "admin") {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50">
-                    {filtered.map((user) => (
-                      <tr
-                        key={user.id}
-                        className="hover:bg-slate-50 transition-colors"
-                      >
-                        <td className="py-3 px-3">
-                          <input
-                            type="checkbox"
-                            className="rounded"
-                            checked={selectedUsers.includes(user.id)}
-                            onChange={(e) => {
-                              if (e.target.checked) {
-                                setSelectedUsers([...selectedUsers, user.id]);
-                              } else {
-                                setSelectedUsers(selectedUsers.filter(id => id !== user.id));
-                              }
-                            }}
-                          />
-                        </td>
-                        <td className="py-3 px-4">
-                          <div className="flex items-center gap-3">
-                            <div
-                              className={`w-9 h-9 rounded-xl flex items-center justify-center text-xs font-bold flex-shrink-0 ${getAvatarColor(user.role)} text-white`}
-                            >
-                              {user.name
-                                .split(" ")
-                                .map((n) => n[0])
-                                .join("")
-                                .slice(0, 2)
-                                .toUpperCase()}
-                            </div>
-                            <div>
-                              <div className="text-xs font-semibold text-slate-800 flex items-center gap-1">
-                                {user.name}
-                                {["admin", "super_admin", "Super Admin", "Org Admin"].includes(user.role) && (
-                                  <Crown size={10} className="text-purple-500" />
-                                )}
-                              </div>
-                              <div className="text-[10px] text-slate-400 flex items-center gap-1">
-                                <Mail size={9} />
-                                {user.email}
-                              </div>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="py-3 px-3">
-                          <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${getRoleColor(user.role)}`}>
-                            {user.role}
-                          </span>
-                        </td>
-                        <td className="py-3 px-3 text-xs text-slate-500">
-                          {user.manager_id ? (
-                            <span className="flex items-center gap-1">
-                              <span className="font-medium text-slate-700">
-                                {users.find(u => u.id === user.manager_id)?.name || 'Unknown'}
-                              </span>
-                              <span className="text-[10px] text-slate-400">
-                                ({users.find(u => u.id === user.manager_id)?.role || 'N/A'})
-                              </span>
-                            </span>
-                          ) : (
-                            <span className="text-slate-300">—</span>
-                          )}
-                        </td>
-                        <td className="py-3 px-3">
-                          <button
-                            onClick={() =>
-                              toggleUserAccess(user.id, !user.isActive)
-                            }
-                            className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border font-medium transition-colors ${user.isActive ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100" : "bg-red-50 text-red-600 border-red-200 hover:bg-red-100"}`}
-                            title={
-                              user.isActive
-                                ? "Click to deactivate"
-                                : "Click to activate"
-                            }
-                          >
-                            <div
-                              className={`w-1.5 h-1.5 rounded-full ${user.isActive ? "bg-emerald-500" : "bg-red-500"}`}
+                    {filtered.map((user) => {
+                      const isSelf = userProfile?.id === user.id;
+                      const isTargetSubordinate = userProfile && isSubordinate(userProfile.id, user.id, users);
+
+                      const canEdit =
+                        role === 'Super Admin' || role === 'super_admin' ||
+                        ((role === 'Org Admin' || role === 'org_admin' || role === 'admin') && user.role !== 'Super Admin' && user.role !== 'super_admin') ||
+                        (role === 'Sales Manager' && isTargetSubordinate && ['Team Leader', 'Sales Executive'].includes(user.role)) ||
+                        (role === 'Lead Manager' && isTargetSubordinate && ['Lead Executive', 'Telecaller', 'Lead Qualifier'].includes(user.role)) ||
+                        (role === 'Team Leader' && isTargetSubordinate && user.role === 'Sales Executive');
+
+                      const canDelete =
+                        !isSelf && (
+                          role === 'Super Admin' || role === 'super_admin' ||
+                          ((role === 'Org Admin' || role === 'org_admin' || role === 'admin') && user.role !== 'Super Admin' && user.role !== 'super_admin')
+                        );
+
+                      const canActivateDeactivate =
+                        !isSelf && (
+                          role === 'Super Admin' || role === 'super_admin' ||
+                          ((role === 'Org Admin' || role === 'org_admin' || role === 'admin') && user.role !== 'Super Admin' && user.role !== 'super_admin') ||
+                          (role === 'Sales Manager' && isTargetSubordinate && ['Team Leader', 'Sales Executive'].includes(user.role)) ||
+                          (role === 'Lead Manager' && isTargetSubordinate && ['Lead Executive', 'Telecaller', 'Lead Qualifier'].includes(user.role)) ||
+                          (role === 'Team Leader' && isTargetSubordinate && user.role === 'Sales Executive')
+                        );
+
+                      const canResetPassword = canEdit;
+
+                      return (
+                        <tr
+                          key={user.id}
+                          className="hover:bg-slate-50 transition-colors"
+                        >
+                          <td className="py-3 px-3">
+                            <input
+                              type="checkbox"
+                              className="rounded"
+                              checked={selectedUsers.includes(user.id)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedUsers([...selectedUsers, user.id]);
+                                } else {
+                                  setSelectedUsers(selectedUsers.filter(id => id !== user.id));
+                                }
+                              }}
                             />
-                            {user.isActive ? "Active" : "Inactive"}
-                          </button>
-                        </td>
-                        <td className="py-3 px-3 text-xs text-slate-400">
-                          {user.lastLogin
-                            ? new Date(user.lastLogin).toLocaleDateString()
-                            : "Never"}
-                        </td>
-                        <td className="py-3 px-4">
-                          <div className="flex items-center gap-1">
-                            {/* Activate/Deactivate Button */}
-                            {user.id !== userProfile?.id && (
-                              <button
-                                onClick={() => user.isActive ? deactivateUser(user.id) : activateUser(user.id)}
-                                className={`p-1.5 rounded-lg transition-colors ${user.isActive
-                                  ? "text-red-400 hover:text-red-600 hover:bg-red-50"
-                                  : "text-emerald-400 hover:text-emerald-600 hover:bg-emerald-50"
-                                  }`}
-                                title={user.isActive ? "Deactivate User" : "Activate User"}
+                          </td>
+                          <td className="py-3 px-4">
+                            <div className="flex items-center gap-3">
+                              <div
+                                className={`w-9 h-9 rounded-xl flex items-center justify-center text-xs font-bold flex-shrink-0 ${getAvatarColor(user.role)} text-white`}
                               >
-                                {user.isActive ? <UserX size={13} /> : <UserCheck size={13} />}
-                              </button>
+                                {user.name
+                                  .split(" ")
+                                  .map((n) => n[0])
+                                  .join("")
+                                  .slice(0, 2)
+                                  .toUpperCase()}
+                              </div>
+                              <div>
+                                <div className="text-xs font-semibold text-slate-800 flex items-center gap-1">
+                                  {user.name}
+                                  {isAdminRole(user.role) && (
+                                    <Crown size={10} className="text-purple-500" />
+                                  )}
+                                </div>
+                                <div className="text-[10px] text-slate-400 flex items-center gap-1">
+                                  <Mail size={9} />
+                                  {user.email}
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${getRoleColor(user.role)}`}>
+                              {user.role}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-xs text-slate-500">
+                            {user.manager_id ? (
+                              <span className="flex items-center gap-1">
+                                <span className="font-medium text-slate-700">
+                                  {users.find(u => u.id === user.manager_id)?.name || 'Unknown'}
+                                </span>
+                                <span className="text-[10px] text-slate-400">
+                                  ({users.find(u => u.id === user.manager_id)?.role || 'N/A'})
+                                </span>
+                              </span>
+                            ) : (
+                              <span className="text-slate-300">—</span>
                             )}
-                            <button onClick={() => openEdit(user)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors" title="Edit">
-                              <Edit size={13} />
+                          </td>
+                          <td className="py-3 px-3">
+                            <button
+                              onClick={() =>
+                                canActivateDeactivate && toggleUserAccess(user.id, !user.isActive)
+                              }
+                              disabled={!canActivateDeactivate}
+                              className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border font-medium transition-colors ${!canActivateDeactivate ? "opacity-50 cursor-not-allowed" : ""} ${user.isActive ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100" : "bg-red-50 text-red-600 border-red-200 hover:bg-red-100"}`}
+                              title={
+                                !canActivateDeactivate ? "You don't have permission to toggle access for this user" :
+                                user.isActive
+                                  ? "Click to deactivate"
+                                  : "Click to activate"
+                              }
+                            >
+                              <div
+                                className={`w-1.5 h-1.5 rounded-full ${user.isActive ? "bg-emerald-500" : "bg-red-500"}`}
+                              />
+                              {user.isActive ? "Active" : "Inactive"}
                             </button>
-                            <button onClick={() => setShowPasswordModal(user)} className="p-1.5 rounded-lg hover:bg-amber-50 text-slate-400 hover:text-amber-600 transition-colors" title="Reset Password">
-                              <Key size={13} />
-                            </button>
-                            <button onClick={() => setDeleteConfirm(user)} className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500 transition-colors" title="Delete">
-                              <Trash2 size={13} />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+                          </td>
+                          <td className="py-3 px-3 text-xs text-slate-400">
+                            {user.lastLogin
+                              ? new Date(user.lastLogin).toLocaleDateString()
+                              : "Never"}
+                          </td>
+                          <td className="py-3 px-4">
+                            <div className="flex items-center gap-1">
+                              {/* Activate/Deactivate Button */}
+                              {user.id !== userProfile?.id && canActivateDeactivate && (
+                                <button
+                                  onClick={() => user.isActive ? deactivateUser(user.id) : activateUser(user.id)}
+                                  className={`p-1.5 rounded-lg transition-colors ${user.isActive
+                                    ? "text-red-400 hover:text-red-600 hover:bg-red-50"
+                                    : "text-emerald-400 hover:text-emerald-600 hover:bg-emerald-50"
+                                    }`}
+                                  title={user.isActive ? "Deactivate User" : "Activate User"}
+                                >
+                                  {user.isActive ? <UserX size={13} /> : <UserCheck size={13} />}
+                                </button>
+                              )}
+                              {canEdit && (
+                                <button onClick={() => openEdit(user)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors" title="Edit">
+                                  <Edit size={13} />
+                                </button>
+                              )}
+                              {canResetPassword && (
+                                <button onClick={() => setShowPasswordModal(user)} className="p-1.5 rounded-lg hover:bg-amber-50 text-slate-400 hover:text-amber-600 transition-colors" title="Reset Password">
+                                  <Key size={13} />
+                                </button>
+                              )}
+                              {canDelete && (
+                                <button onClick={() => setDeleteConfirm(user)} className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500 transition-colors" title="Delete">
+                                  <Trash2 size={13} />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1097,6 +1220,78 @@ if (role === "admin") {
         </div>
       )}
 
+      {activeTab === "permissions" && (
+        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm p-6 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-slate-800">Role Permissions Matrix</h3>
+            <button
+              onClick={fetchRolePermissions}
+              className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 flex items-center gap-2"
+            >
+              <RefreshCw size={14} className={rolePermissionsLoading ? "animate-spin" : ""} />
+              Refresh
+            </button>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-100 bg-slate-50">
+                  <th className="text-left py-3 px-4 text-xs text-slate-500 font-medium">Role</th>
+                  <th className="text-left py-3 px-3 text-xs text-slate-500 font-medium">Module</th>
+                  <th className="text-left py-3 px-3 text-xs text-slate-500 font-medium">Permission</th>
+                  <th className="text-left py-3 px-3 text-xs text-slate-500 font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {rolePermissionsLoading ? (
+                  <tr>
+                    <td colSpan={4} className="py-12 text-center text-slate-400">
+                      <Loader2 size={24} className="animate-spin mx-auto mb-2 text-indigo-400" />
+                      Loading permissions...
+                    </td>
+                  </tr>
+                ) : rolePermissions.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="py-12 text-center text-slate-400">No permissions found</td>
+                  </tr>
+                ) : (
+                  rolePermissions.map((perm: any) => (
+                    <tr key={perm.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="py-3 px-4 text-xs font-medium text-slate-800">{perm.role}</td>
+                      <td className="py-3 px-3 text-xs text-slate-600">{perm.module}</td>
+                      <td className="py-3 px-3">
+                        <select
+                          value={perm.permission}
+                          onChange={(e) => updateRolePermission(perm.id, e.target.value)}
+                          className="text-xs px-2 py-1 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                        >
+                          <option value="none">None</option>
+                          <option value="view">View</option>
+                          <option value="own">Own</option>
+                          <option value="team">Team</option>
+                          <option value="dept">Dept</option>
+                          <option value="full">Full</option>
+                        </select>
+                      </td>
+                      <td className="py-3 px-3">
+                        <button
+                          onClick={() => deleteRolePermission(perm.id)}
+                          className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500 transition-colors"
+                          title="Delete Permission"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
 
       {/* Permissions Info */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1217,16 +1412,21 @@ if (role === "admin") {
                 <Shield size={14} className="flex-shrink-0 mt-0.5" />
                 <span>An <strong>invitation link</strong> will be sent to this email. The user will set their own password when they accept the invite.</span>
               </div>
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs text-slate-500 mb-1.5">
                     Role
                   </label>
                   <select
                     value={form.role}
-                    onChange={(e) =>
-                      setForm((f) => ({ ...f, role: e.target.value }))
-                    }
+                    onChange={(e) => {
+                      const newRole = e.target.value;
+                      setForm((f) => ({
+                        ...f,
+                        role: newRole,
+                        manager_id: '' // Reset manager when role changes
+                      }));
+                    }}
                     className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none"
                   >
                     {availableRoles.length > 0 ? (
@@ -1256,28 +1456,38 @@ if (role === "admin") {
                     ))}
                   </select>
                 </div>
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1.5">
-                    Employee Link
-                  </label>
-                  <select
-                    value={form.employeeId}
-                    onChange={(e) =>
-                      setForm((f) => ({ ...f, employeeId: e.target.value }))
-                    }
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none"
-                  >
-                    {usersLoading ? (
-                      <option value="">Loading employees...</option>
-                    ) : (
-                      employeeOptions.map((e) => (
-                        <option key={e.id} value={e.id}>
-                          {e.label}
-                        </option>
-                      ))
-                    )}
-                  </select>
-                </div>
+              </div>
+
+              {/* ── REPORTING MANAGER ── */}
+              <div>
+                <label className="block text-xs text-slate-500 mb-1.5">
+                  Reporting Manager
+                  <span className="text-[10px] text-slate-400 ml-2">
+                    (Based on role hierarchy)
+                  </span>
+                </label>
+                <select
+                  value={form.manager_id}
+                  onChange={(e) => setForm((f) => ({ ...f, manager_id: e.target.value }))}
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                >
+                  <option value="">— No manager —</option>
+                  {getAvailableManagers(form.role).map((manager) => (
+                    <option key={manager.id} value={manager.id}>
+                      {manager.name} ({manager.role})
+                    </option>
+                  ))}
+                </select>
+                {form.manager_id && (
+                  <p className="text-[10px] text-emerald-600 mt-1">
+                    ✅ Valid reporting relationship
+                  </p>
+                )}
+                {!form.manager_id && getAvailableManagers(form.role).length > 0 && (
+                  <p className="text-[10px] text-amber-600 mt-1">
+                    ⚠️ {form.role} should report to: {REPORTING_RULES[form.role]?.join(' or ') || 'No one'}
+                  </p>
+                )}
               </div>
             </div>
             <div className="px-6 py-4 border-t border-slate-100 flex justify-end gap-3">
@@ -1411,7 +1621,7 @@ if (role === "admin") {
                   className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none"
                 >
                   <option value="">None</option>
-                  {getAvailableManagers(form.role).map(manager => (
+                  {getAvailableManagers(form.role, editUser?.id).map(manager => (
                     <option key={manager.id} value={manager.id}>
                       {manager.name} ({manager.role})
                     </option>

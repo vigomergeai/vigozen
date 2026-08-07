@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router";
 import { useApp } from "../context/AppContext";
+import { isAdminRole, hasModuleAccess } from "../utils/permissions";
 import { api } from "../lib/api";
 import { toast } from "sonner";
 import {
@@ -113,6 +114,7 @@ export default function PriceListPage() {
         activateUser,
         deactivateUser,
         role,
+        permissions,
     } = useApp();
 
     const navigate = useNavigate();
@@ -218,7 +220,8 @@ export default function PriceListPage() {
     };
 
     // ── Role Check ──
-    if ((role as string) !== "admin" && (role as string) !== "super_admin") {
+    const canAccessBilling = hasModuleAccess(permissions, 'billing', ['full', 'dept', 'team', 'view']);
+    if (!canAccessBilling) {
         return (
             <div className="p-4 lg:p-6 flex items-center justify-center min-h-[60vh]">
                 <div className="text-center max-w-md">

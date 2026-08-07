@@ -4,13 +4,37 @@ import { useApp } from "../context/AppContext";
 import { toast } from "sonner";
 import { api } from "../lib/api";
 import { Lock, Zap } from "lucide-react";
+import { hasModuleAccess } from "../utils/permissions";
 
 export default function BillingPage() {
-  const { subscription, subscriptionLoading, userProfile } = useApp();
+  const { subscription, subscriptionLoading, userProfile, permissions } = useApp();
   const navigate = useNavigate();
   const [selectedPlan, setSelectedPlan] = useState<string>("professional");
   const [loading, setLoading] = useState(false);
   const [plans, setPlans] = useState<any[]>([]);
+
+  const canAccessBilling = hasModuleAccess(permissions, 'billing', ['full']);
+  if (!canAccessBilling && !subscriptionLoading) {
+    return (
+      <div className="p-4 lg:p-6 flex items-center justify-center min-h-[60vh]">
+        <div className="text-center max-w-md bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
+          <div className="w-16 h-16 bg-red-100 rounded-2xl flex items-center justify-center mx-auto mb-4 text-red-500">
+            <Lock size={28} />
+          </div>
+          <h2 className="text-xl font-bold text-slate-800 mb-2">Access Restricted</h2>
+          <p className="text-sm text-slate-500 mb-6">
+            You do not have permission to view or manage subscription billing.
+          </p>
+          <button
+            onClick={() => navigate("/")}
+            className="w-full py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors text-sm font-medium"
+          >
+            Return to Dashboard
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   useEffect(() => {
     const token = localStorage.getItem("token");

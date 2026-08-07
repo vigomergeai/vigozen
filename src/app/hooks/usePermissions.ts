@@ -5,14 +5,16 @@ export type UserRole =
   | 'org_admin'
   | 'admin'
   | 'sales_manager'
+  | 'lead_manager'
   | 'team_leader'
   | 'sales_executive'
-  | 'lead_manager'
+  | 'lead_executive'
+  | 'telecaller'
+  | 'lead_qualifier'
   | 'viewer';
 
 export type ModuleName = 
   | 'leads'
-  | 'contacts'
   | 'deals'
   | 'users'
   | 'reports'
@@ -37,8 +39,18 @@ const normalizeRole = (role: string): UserRole => {
     'sales_executive': 'sales_executive',
     'Lead Manager': 'lead_manager',
     'lead_manager': 'lead_manager',
+    'Lead Executive': 'lead_executive',
+    'lead_executive': 'lead_executive',
+    'Telecaller': 'telecaller',
+    'telecaller': 'telecaller',
+    'Lead Qualifier': 'lead_qualifier',
+    'lead_qualifier': 'lead_qualifier',
     'Viewer': 'viewer',
     'viewer': 'viewer',
+    'unknown': 'viewer',
+    'viewer_role': 'viewer',
+    'user': 'viewer',
+    'User': 'viewer',
   };
   return roleMap[role] || 'viewer';
 };
@@ -46,24 +58,30 @@ const normalizeRole = (role: string): UserRole => {
 const adminRoles: UserRole[] = ['super_admin', 'org_admin', 'admin'];
 
 const moduleAccessMap: Record<UserRole, ModuleName[]> = {
-  'super_admin': ['leads', 'contacts', 'deals', 'users', 'reports', 'tickets', 'activities', 'settings', 'billing'],
-  'org_admin': ['leads', 'contacts', 'deals', 'users', 'reports', 'tickets', 'activities', 'settings', 'billing'],
-  'admin': ['leads', 'contacts', 'deals', 'users', 'reports', 'tickets', 'activities', 'settings', 'billing'],
-  'sales_manager': ['leads', 'contacts', 'deals', 'users', 'reports', 'tickets', 'activities'],
-  'team_leader': ['leads', 'contacts', 'deals', 'users', 'reports', 'tickets', 'activities'],
-  'sales_executive': ['leads', 'contacts', 'deals', 'reports', 'tickets', 'activities'],
-  'lead_manager': ['leads', 'contacts', 'reports', 'tickets', 'activities'],
-  'viewer': ['leads', 'contacts', 'reports'],
+  'super_admin': ['leads', 'deals', 'users', 'reports', 'tickets', 'activities', 'settings', 'billing'],
+  'org_admin': ['leads', 'deals', 'users', 'reports', 'tickets', 'activities', 'settings', 'billing'],
+  'admin': ['leads', 'deals', 'users', 'reports', 'tickets', 'activities', 'settings', 'billing'],
+  'sales_manager': ['leads', 'deals', 'users', 'reports', 'tickets', 'activities'],
+  'team_leader': ['leads', 'deals', 'users', 'reports', 'tickets', 'activities'],
+  'sales_executive': ['leads', 'deals', 'reports', 'tickets', 'activities'],
+  'lead_manager': ['leads', 'users', 'reports', 'tickets', 'activities'],
+  'lead_executive': ['leads', 'deals', 'reports', 'tickets', 'activities'],
+  'telecaller': ['leads', 'reports', 'tickets', 'activities'],
+  'lead_qualifier': ['leads', 'reports', 'tickets', 'activities'],
+  'viewer': ['leads', 'reports'],
 };
 
 const roleCreationRules: Record<UserRole, UserRole[]> = {
-  'super_admin': ['org_admin', 'admin', 'sales_manager', 'lead_manager', 'team_leader', 'sales_executive', 'viewer'],
-  'org_admin': ['sales_manager', 'lead_manager', 'team_leader', 'sales_executive', 'viewer'],
-  'admin': ['sales_manager', 'lead_manager', 'team_leader', 'sales_executive', 'viewer'],
-  'sales_manager': ['team_leader', 'sales_executive', 'viewer'],
-  'team_leader': ['sales_executive', 'viewer'],
+  'super_admin': ['org_admin'],
+  'org_admin': ['sales_manager', 'lead_manager', 'team_leader', 'sales_executive', 'lead_executive', 'telecaller', 'lead_qualifier'],
+  'admin': ['sales_manager', 'lead_manager', 'team_leader', 'sales_executive', 'lead_executive', 'telecaller', 'lead_qualifier'],
+  'sales_manager': ['team_leader', 'sales_executive'],
+  'team_leader': ['sales_executive'],
+  'lead_manager': ['lead_executive', 'telecaller', 'lead_qualifier'],
   'sales_executive': [],
-  'lead_manager': [],
+  'lead_executive': [],
+  'telecaller': [],
+  'lead_qualifier': [],
   'viewer': [],
 };
 
@@ -72,6 +90,7 @@ export const usePermissions = () => {
   const rawRole = userProfile?.role || 'viewer';
   const role = normalizeRole(rawRole);
   const isAdmin = adminRoles.includes(role);
+  const canOpenAdminPanel = ['super_admin', 'org_admin', 'admin', 'sales_manager', 'lead_manager', 'team_leader'].includes(role);
 
   /**
    * Check if current user can view a specific module
@@ -98,7 +117,7 @@ export const usePermissions = () => {
    */
   const getAccessibleModules = (): ModuleName[] => {
     if (isAdmin) {
-      return ['leads', 'contacts', 'deals', 'users', 'reports', 'tickets', 'activities', 'settings', 'billing'];
+      return ['leads', 'deals', 'users', 'reports', 'tickets', 'activities', 'settings', 'billing'];
     }
     return moduleAccessMap[role] || [];
   };
@@ -115,6 +134,7 @@ export const usePermissions = () => {
   return {
     role,
     isAdmin,
+    canOpenAdminPanel,
     canView,
     canCreate,
     getAccessibleModules,

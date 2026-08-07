@@ -293,34 +293,15 @@ export default function SettingsPage() {
       console.log('Invoice generated:', invoiceResponse);
 
       // =====================================================
-      // 2. PAYMENT GATEWAY (DISABLED FOR TESTING PHASE)
+      // 2. PAYMENT GATEWAY (PayU live)
       // =====================================================
-      // Uncomment these lines when PayU is live:
-      // const payuResponse = await api.payments.createOrder(invoiceResponse.total, "INR", `invoice_${invoiceResponse.id}`, token);
-      // if (payuResponse.success) submitToPayU(payuResponse.payuUrl, payuResponse.payuData);
-      // return; // STOP execution here in real mode
-
-      // =====================================================
-      // 3. TEST MODE SIMULATION (Run only in dev)
-      // =====================================================
-      console.log("🧪 TEST MODE: Simulating successful payment for invoice:", invoiceResponse.id);
-
-      // Simulate backend activating the subscription
-      await api.subscription.activateTestMode({
-        invoice_id: invoiceResponse.id,
-        plan: selectedPlan,
-        billing_cycle: billingPeriod,
-        allowed_users: isUpgrade ? (allowedUsers + additionalUsers) : purchasedUsers,
-        status: "active"
-      }, token);
-
-      toast.success(`✅ Subscription Activated (Test Mode)! ${isUpgrade ? 'Users added.' : ''}`);
-
-      // 4. Refresh UI Data
-      await fetchInvoices();
-      await fetchCompanySubscription();
-      setShowPaymentModal(false);
-      setShowUpgradeModal(false);
+      const payuResponse = await api.payments.createOrder(invoiceResponse.total_amount, "INR", `invoice_${invoiceResponse.id}`, token);
+      if (payuResponse.success) {
+        submitToPayU(payuResponse.payuUrl, payuResponse.payuData);
+      } else {
+        throw new Error("Failed to create payment order");
+      }
+      return; // STOP execution here - redirect to PayU handles the rest
 
     } catch (error: any) {
       toast.error(error.message || 'Transaction failed (Test Mode)');

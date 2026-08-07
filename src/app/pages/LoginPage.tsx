@@ -1,7 +1,10 @@
 import React, { useState } from "react";
 import { api } from "../lib/api";
+
 import { useNavigate } from "react-router";
+
 //import { Zap, Eye, EyeOff, Bot, Shield, User, AlertCircle, Loader2, ChevronRight } from "lucide-react";
+import logo from "../../assets/Media.png";
 import { Zap, Eye, EyeOff, Bot, AlertCircle, Loader2, ChevronRight } from "lucide-react";
 import {z} from 'zod'
 import { useApp } from "../context/AppContext";
@@ -208,7 +211,13 @@ const handleSignUp = async (e: React.FormEvent) => {
         <div className="lg:flex-1 text-center lg:text-left">
           <div className="flex items-center gap-3 justify-center lg:justify-start mb-8">
             <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/30">
-              <Zap size={24} className="text-white" />
+              
+
+<img
+  src={logo}
+  alt="Logo"
+  className="h-6 w-6 object-contain"
+/>
             </div>
             <div>
               <div className="text-xl font-bold text-white">Vigozen CRM</div>

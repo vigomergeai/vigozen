@@ -270,8 +270,12 @@ export default function AdminPage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    if (role === "Sales Executive" || role === "Lead Manager") { navigate("/"); return; }
-    loadUsers();
+if (role === "admin") {
+    navigate("/");
+    return;
+}   
+
+ loadUsers();
   }, [role]);
 
   const filtered = useMemo(() => {

@@ -2,9 +2,12 @@ import React, { useEffect, lazy, Suspense } from "react";
 import { createBrowserRouter, useNavigate } from "react-router";
 import { AppProvider } from "./context/AppContext";
 import { useApp } from "./context/AppContext";
+
 import Layout from "./components/Layout";
+
 import { Loader2, Zap } from "lucide-react";
 
+import logo from "../assets/Media.png";
 // Lazy load route pages
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const LeadsPage = lazy(() => import("./pages/LeadsPage"));
@@ -34,10 +37,14 @@ function AuthLoadingScreen() {
     <div className="min-h-screen bg-gradient-to-br from-[#0A0F1E] via-[#0D1530] to-[#0A0F1E] flex items-center justify-center">
       <div className="flex flex-col items-center gap-4">
         <div className="w-16 h-16 rounded-3xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-2xl shadow-indigo-500/30 animate-pulse">
-          <Zap size={32} className="text-white" />
-        </div>
+          <img
+  src={logo}
+  alt="Logo"
+  className="h-8 w-8 object-contain"
+/>
+       </div>
         <div className="text-center">
-          <div className="text-white font-semibold text-lg">Vigozen CRM</div>
+          <div className="text-white font-semibold text-lg">Vigozen CRM — Transforming Customer Relationships.</div>
           <div className="text-indigo-300 text-sm mt-1">Loading your workspace...</div>
         </div>
         <Loader2 size={20} className="text-indigo-400 animate-spin mt-2" />

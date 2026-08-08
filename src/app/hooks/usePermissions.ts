@@ -64,7 +64,7 @@ const moduleAccessMap: Record<UserRole, ModuleName[]> = {
   'sales_manager': ['leads', 'deals', 'users', 'reports', 'tickets', 'activities'],
   'team_leader': ['leads', 'deals', 'users', 'reports', 'tickets', 'activities'],
   'sales_executive': ['leads', 'deals', 'reports', 'tickets', 'activities'],
-  'lead_manager': ['leads', 'users', 'reports', 'tickets', 'activities'],
+  'lead_manager': ['leads', 'deals', 'users', 'reports', 'tickets', 'activities', 'settings'],
   'lead_executive': ['leads', 'deals', 'reports', 'tickets', 'activities'],
   'telecaller': ['leads', 'reports', 'tickets', 'activities'],
   'lead_qualifier': ['leads', 'reports', 'tickets', 'activities'],

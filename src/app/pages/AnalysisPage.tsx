@@ -11,6 +11,7 @@ import {
   Radar, Legend, Cell
 } from "recharts";
 import { useApp } from "../context/AppContext";
+import { canExport } from "../utils/permissions";
 
 type ReportType = "employee" | "status" | "sales";
 type DateFilter = "daily" | "weekly" | "custom";
@@ -39,8 +40,9 @@ const COLORS = ["#6366F1", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#3B82F6"
 
 
 export default function AnalysisPage() {
-  const { role, leads, deals, refreshData, subscription } = useApp();
+  const { role, leads, deals, refreshData, subscription, permissions } = useApp();
   const navigate = useNavigate();  // ← ADD THIS
+  const canExportReports = canExport(permissions, 'reports', role);
 
   // Helper to format date as YYYY-MM-DD
   const formatYYYYMMDD = (d: Date) => {
@@ -296,21 +298,25 @@ export default function AnalysisPage() {
             AI Insights
           </button>
 
-          <button
-            onClick={handleExportCSV}
-            className="px-3 py-2 text-sm text-slate-600 border border-slate-200 bg-white hover:bg-slate-50 rounded-xl flex items-center gap-2 transition-colors"
-          >
-            <Download size={14} />
-            Export
-          </button>
+          {canExportReports && (
+            <>
+              <button
+                onClick={handleExportCSV}
+                className="px-3 py-2 text-sm text-slate-600 border border-slate-200 bg-white hover:bg-slate-50 rounded-xl flex items-center gap-2 transition-colors"
+              >
+                <Download size={14} />
+                Export
+              </button>
 
-          <button
-            onClick={handleDownloadPDF}
-            className="px-3 py-2 text-sm text-slate-600 border border-slate-200 bg-white hover:bg-slate-50 rounded-xl flex items-center gap-2 transition-colors"
-          >
-            <FileText size={14} />
-            PDF Report
-          </button>
+              <button
+                onClick={handleDownloadPDF}
+                className="px-3 py-2 text-sm text-slate-600 border border-slate-200 bg-white hover:bg-slate-50 rounded-xl flex items-center gap-2 transition-colors"
+              >
+                <FileText size={14} />
+                PDF Report
+              </button>
+            </>
+          )}
 
         </div>
       </div>

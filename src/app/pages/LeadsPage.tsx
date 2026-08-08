@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router";
 import { usePermissions } from "../hooks/usePermissions";
-import { hasModuleAccess, canWrite, isAdminRole } from "../utils/permissions";
+import { hasModuleAccess, canWrite, isAdminRole, canEdit, canDelete, canExport } from "../utils/permissions";
 
 
 import { Lead, LeadStatus, LeadSource, Industry } from "../data/mockData";
@@ -59,9 +59,12 @@ export default function LeadsPage() {
   updateLeadComment, deleteLeadComment, userProfile, subscription, permissions } = useApp();
 
   const canSeeAllEmployees = hasModuleAccess(permissions, 'leads', ['full', 'dept', 'team']);
-  const canDeleteLeadsSeq  = hasModuleAccess(permissions, 'leads', ['full']);
+  const canDeleteLeadsSeq  = canDelete(permissions, 'leads');
   const canWriteLeads      = canWrite(permissions, 'leads');
   const canAssignLeads     = hasModuleAccess(permissions, 'leads', ['full', 'dept', 'team']);
+  const canEditLeads       = canEdit(permissions, 'leads');
+  const canExportLeads     = canExport(permissions, 'leads', role);
+  const canConvertLeads    = hasModuleAccess(permissions, 'leads', ['full', 'dept']);
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
   // ── Convert Lead Modal State ──
@@ -488,53 +491,59 @@ useEffect(() => {
           </button>
 
           {/* Import Excel button */}
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="px-3 py-2 text-sm text-emerald-700 border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 rounded-xl flex items-center gap-2 transition-colors"
-          >
-            <Upload size={14} />
-            Import Excel
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".xlsx,.xls,.csv"
-            onChange={handleFileSelect}
-            className="hidden"
-          />
+          {canEditLeads && (
+            <>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="px-3 py-2 text-sm text-emerald-700 border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 rounded-xl flex items-center gap-2 transition-colors"
+              >
+                <Upload size={14} />
+                Import Excel
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                onChange={handleFileSelect}
+                className="hidden"
+              />
+            </>
+          )}
 
           {/* Export dropdown */}
-          <div className="relative group">
-            <button className="px-3 py-2 text-sm text-slate-600 border border-slate-200 bg-white hover:bg-slate-50 rounded-xl flex items-center gap-2 transition-colors">
-              <FileDown size={14} />
-              Export
-              <ChevronRight size={11} className="rotate-90" />
-            </button>
-            <div className="absolute right-0 top-full mt-1 w-44 bg-white border border-slate-200 rounded-xl shadow-lg z-20 overflow-hidden opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto transition-all">
-              <button
-                onClick={exportExcel}
-                className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-600 hover:bg-slate-50"
-              >
-                <FileSpreadsheet size={14} className="text-emerald-600" />
-                Export Excel (.xlsx)
+          {canExportLeads && (
+            <div className="relative group">
+              <button className="px-3 py-2 text-sm text-slate-600 border border-slate-200 bg-white hover:bg-slate-50 rounded-xl flex items-center gap-2 transition-colors">
+                <FileDown size={14} />
+                Export
+                <ChevronRight size={11} className="rotate-90" />
               </button>
-              <button
-                onClick={exportCSV}
-                className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-600 hover:bg-slate-50"
-              >
-                <Download size={14} className="text-slate-500" />
-                Export CSV
-              </button>
-              <div className="border-t border-slate-100" />
-              <button
-                onClick={downloadTemplate}
-                className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-indigo-600 hover:bg-indigo-50"
-              >
-                <FileSpreadsheet size={14} />
-                Download Template
-              </button>
+              <div className="absolute right-0 top-full mt-1 w-44 bg-white border border-slate-200 rounded-xl shadow-lg z-20 overflow-hidden opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto transition-all">
+                <button
+                  onClick={exportExcel}
+                  className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-600 hover:bg-slate-50"
+                >
+                  <FileSpreadsheet size={14} className="text-emerald-600" />
+                  Export Excel (.xlsx)
+                </button>
+                <button
+                  onClick={exportCSV}
+                  className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-600 hover:bg-slate-50"
+                >
+                  <Download size={14} className="text-slate-500" />
+                  Export CSV
+                </button>
+                <div className="border-t border-slate-100" />
+                <button
+                  onClick={downloadTemplate}
+                  className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-indigo-600 hover:bg-indigo-50"
+                >
+                  <FileSpreadsheet size={14} />
+                  Download Template
+                </button>
+              </div>
             </div>
-          </div>
+          )}
           <div className="relative">
   <button
     onClick={(e) => {
@@ -963,22 +972,24 @@ useEffect(() => {
                       <td className="py-3 px-3">
                         <div className="flex items-center gap-1">
                           {/* ── CONVERT TO DEAL BUTTON ── */}
-                          <button
-                            onClick={() => handleOpenConvertModal(lead)}
-                            className={`p-1.5 rounded-lg transition-colors flex items-center justify-center ${
-                              lead.converted_to_deal
-                                ? "bg-emerald-100 text-emerald-700 cursor-default"
-                                : "hover:bg-emerald-50 text-slate-400 hover:text-emerald-600"
-                            }`}
-                            title={lead.converted_to_deal ? "Converted to Deal" : "Convert to Deal"}
-                            disabled={lead.converted_to_deal}
-                          >
-                            {lead.converted_to_deal ? (
-                              <Check size={13} className="text-emerald-600 stroke-[3]" />
-                            ) : (
-                              <Circle size={13} className="text-slate-300" />
-                            )}
-                          </button>
+                          {canConvertLeads && (
+                            <button
+                              onClick={() => handleOpenConvertModal(lead)}
+                              className={`p-1.5 rounded-lg transition-colors flex items-center justify-center ${
+                                lead.converted_to_deal
+                                  ? "bg-emerald-100 text-emerald-700 cursor-default"
+                                  : "hover:bg-emerald-50 text-slate-400 hover:text-emerald-600"
+                              }`}
+                              title={lead.converted_to_deal ? "Converted to Deal" : "Convert to Deal"}
+                              disabled={lead.converted_to_deal}
+                            >
+                              {lead.converted_to_deal ? (
+                                <Check size={13} className="text-emerald-600 stroke-[3]" />
+                              ) : (
+                                <Circle size={13} className="text-slate-300" />
+                              )}
+                            </button>
+                          )}
                           <button
                             onClick={() => handleSelectLead(lead)}
                             className="p-1.5 rounded-lg hover:bg-indigo-50 text-slate-400 hover:text-indigo-600 transition-colors"
@@ -986,20 +997,24 @@ useEffect(() => {
                           >
                             <Eye size={13} />
                           </button>
-                          <button
-                            onClick={() => openEdit(lead)}
-                            className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
-                            title="Edit"
-                          >
-                            <Edit size={13} />
-                          </button>
-                          <button
-                            onClick={() => setDeleteConfirm(lead.id)}
-                            className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500 transition-colors"
-                            title="Delete Lead"
-                          >
-                            <Trash2 size={13} />
-                          </button>
+                          {canEditLeads && (
+                            <button
+                              onClick={() => openEdit(lead)}
+                              className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
+                              title="Edit"
+                            >
+                              <Edit size={13} />
+                            </button>
+                          )}
+                          {canDeleteLeadsSeq && (
+                            <button
+                              onClick={() => setDeleteConfirm(lead.id)}
+                              className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500 transition-colors"
+                              title="Delete Lead"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -1062,26 +1077,30 @@ useEffect(() => {
             <div className="sticky top-0 bg-white border-b border-slate-200 px-5 py-4 flex items-center justify-between z-10 flex-shrink-0">
               <h2 className="text-slate-800">Lead Details</h2>
               <div className="flex items-center gap-2">
-                <button
-                  onClick={() => handleOpenConvertModal(selectedLead)}
-                  disabled={selectedLead.converted_to_deal}
-                  className={`px-3 py-1.5 text-xs rounded-lg flex items-center gap-1 transition-colors ${
-                    selectedLead.converted_to_deal
-                      ? "bg-emerald-50 text-emerald-600 border border-emerald-200 opacity-75 cursor-default"
-                      : "bg-emerald-600 text-white hover:bg-emerald-700 font-medium"
-                  }`}
-                >
-                  <TrendingUp size={11} />
-                  {selectedLead.converted_to_deal ? "Converted" : "Convert to Deal"}
-                </button>
-                <button
-                  onClick={() => openEdit(selectedLead)}
-                  className="px-3 py-1.5 text-xs bg-indigo-50 text-indigo-600 border border-indigo-200 rounded-lg flex items-center gap-1 hover:bg-indigo-100"
-                >
-                  <Edit size={11} />
-                  Edit
-                </button>
-                 {canDeleteLeadsSeq && (
+                {canConvertLeads && (
+                  <button
+                    onClick={() => handleOpenConvertModal(selectedLead)}
+                    disabled={selectedLead.converted_to_deal}
+                    className={`px-3 py-1.5 text-xs rounded-lg flex items-center gap-1 transition-colors ${
+                      selectedLead.converted_to_deal
+                        ? "bg-emerald-50 text-emerald-600 border border-emerald-200 opacity-75 cursor-default"
+                        : "bg-emerald-600 text-white hover:bg-emerald-700 font-medium"
+                    }`}
+                  >
+                    <TrendingUp size={11} />
+                    {selectedLead.converted_to_deal ? "Converted" : "Convert to Deal"}
+                  </button>
+                )}
+                {canEditLeads && (
+                  <button
+                    onClick={() => openEdit(selectedLead)}
+                    className="px-3 py-1.5 text-xs bg-indigo-50 text-indigo-600 border border-indigo-200 rounded-lg flex items-center gap-1 hover:bg-indigo-100"
+                  >
+                    <Edit size={11} />
+                    Edit
+                  </button>
+                )}
+                {canDeleteLeadsSeq && (
                   <button
                     onClick={() => setDeleteConfirm(selectedLead.id)}
                     className="px-3 py-1.5 text-xs bg-red-50 text-red-500 border border-red-200 rounded-lg flex items-center gap-1 hover:bg-red-100"
@@ -1320,20 +1339,22 @@ useEffect(() => {
                 </button>
               </div>
               <div className="flex gap-2">
-                <button
-                  onClick={() => {
-                    handleOpenConvertModal(selectedLead);
-                    setSelectedLead(null);
-                  }}
-                  disabled={selectedLead.converted_to_deal}
-                  className={`flex-1 py-2.5 text-sm rounded-xl transition-colors flex items-center justify-center gap-2 ${
-                    selectedLead.converted_to_deal
-                      ? "bg-emerald-100 text-emerald-600 cursor-default"
-                      : "bg-emerald-600 text-white hover:bg-emerald-700"
-                  }`}
-                >
-                  {selectedLead.converted_to_deal ? "✅ Converted" : "→ Convert to Deal"}
-                </button>
+                {canConvertLeads && (
+                  <button
+                    onClick={() => {
+                      handleOpenConvertModal(selectedLead);
+                      setSelectedLead(null);
+                    }}
+                    disabled={selectedLead.converted_to_deal}
+                    className={`flex-1 py-2.5 text-sm rounded-xl transition-colors flex items-center justify-center gap-2 ${
+                      selectedLead.converted_to_deal
+                        ? "bg-emerald-100 text-emerald-600 cursor-default"
+                        : "bg-emerald-600 text-white hover:bg-emerald-700"
+                    }`}
+                  >
+                    {selectedLead.converted_to_deal ? "✅ Converted" : "→ Convert to Deal"}
+                  </button>
+                )}
                 <a
                   href={`tel:${selectedLead.phone}`}
                   className="flex-1 py-2.5 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2"
@@ -1348,38 +1369,42 @@ useEffect(() => {
                   <Mail size={14} />
                   Email
                 </a>
-                <button
-                  onClick={() => openEdit(selectedLead)}
-                  className="flex-1 py-2.5 text-sm border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 transition-colors flex items-center justify-center gap-2"
-                >
-                  <Edit size={14} />
-                  Edit
-                </button>
+                {canEditLeads && (
+                  <button
+                    onClick={() => openEdit(selectedLead)}
+                    className="flex-1 py-2.5 text-sm border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 transition-colors flex items-center justify-center gap-2"
+                  >
+                    <Edit size={14} />
+                    Edit
+                  </button>
+                )}
               </div>
-              <div>
-                <p className="text-xs text-slate-500 mb-2 font-medium">
-                  Quick Status Update
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {STATUSES.map((s) => (
-                    <button
-                      key={s}
-                      onClick={async () => {
-                        const ok = await updateLead(selectedLead.id, {
-                          status: s,
-                        });
-                        if (ok)
-                          setSelectedLead((prev) =>
-                            prev ? { ...prev, status: s } : null,
-                          );
-                      }}
-                      className={`text-xs px-2.5 py-1 rounded-full border font-medium transition-colors ${selectedLead.status === s ? statusConfig[s].color : "bg-white text-slate-500 border-slate-200 hover:border-indigo-300"}`}
-                    >
-                      {s}
-                    </button>
-                  ))}
+              {canEditLeads && (
+                <div>
+                  <p className="text-xs text-slate-500 mb-2 font-medium">
+                    Quick Status Update
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {STATUSES.map((s) => (
+                      <button
+                        key={s}
+                        onClick={async () => {
+                          const ok = await updateLead(selectedLead.id, {
+                            status: s,
+                          });
+                          if (ok)
+                            setSelectedLead((prev) =>
+                              prev ? { ...prev, status: s } : null,
+                            );
+                        }}
+                        className={`text-xs px-2.5 py-1 rounded-full border font-medium transition-colors ${selectedLead.status === s ? statusConfig[s].color : "bg-white text-slate-500 border-slate-200 hover:border-indigo-300"}`}
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           </div>
         </div>

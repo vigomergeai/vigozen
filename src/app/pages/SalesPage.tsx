@@ -12,7 +12,7 @@ import {
 } from "recharts";
 import { Deal, LeadStatus } from "../data/mockData";
 import { useApp } from "../context/AppContext";
-import { hasModuleAccess, canWrite } from "../utils/permissions";
+import { hasModuleAccess, canWrite, canEdit } from "../utils/permissions";
 import { RevenueForecast } from '../components/RevenueForecast';
 import { formatCurrency } from '../../utils/formatters';
 
@@ -41,6 +41,7 @@ export default function SalesPage() {
   const { role, currentUser, deals, loading, addDeal, updateDeal, deleteDeal, refreshData, employees, importDeals, subscription, permissions } = useApp();
   const navigate = useNavigate();  // ← ADD THIS
   const canManageDeals = canWrite(permissions, 'deals');
+  const canEditDeals = canEdit(permissions, 'deals');
   const canDeleteDeals = hasModuleAccess(permissions, 'deals', ['full']);
   const [view, setView] = useState<"kanban" | "forecast">("kanban");
   const [draggedDeal, setDraggedDeal] = useState<string | null>(null);
@@ -125,9 +126,12 @@ export default function SalesPage() {
   const wonValue = visibleDeals.filter(d => d.stage === "Won").reduce((s, d) => s + (Number(d.value) || 0), 0);
   const activeDeals = visibleDeals.filter(d => !["Won", "Lost"].includes(d.stage)).length;
 
-  const handleDragStart = (dealId: string) => setDraggedDeal(dealId);
+  const handleDragStart = (dealId: string) => {
+    if (!canEditDeals) return;
+    setDraggedDeal(dealId);
+  };
   const handleDrop = async (stage: LeadStatus) => {
-    if (!draggedDeal) return;
+    if (!canEditDeals || !draggedDeal) return;
     setDragOverStage(null);
     await updateDeal(draggedDeal, { stage });
     setDraggedDeal(null);
@@ -211,9 +215,11 @@ export default function SalesPage() {
               </button>
             ))}
           </div>
-          <button onClick={() => openAdd()} className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl flex items-center gap-2 transition-colors">
-            <Plus size={14} />New Deal
-          </button>
+          {canManageDeals && (
+            <button onClick={() => openAdd()} className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl flex items-center gap-2 transition-colors">
+              <Plus size={14} />New Deal
+            </button>
+          )}
         </div>
       </div>
 
@@ -283,7 +289,7 @@ export default function SalesPage() {
                     )}                    {stageDeals.map(deal => (
                       <div
                         key={deal.id}
-                        draggable
+                        draggable={canEditDeals}
                         onDragStart={() => handleDragStart(deal.id)}
                         className="bg-white rounded-xl p-3 border border-slate-100 shadow-sm cursor-grab active:cursor-grabbing hover:shadow-md hover:border-indigo-200 transition-all group"
                       >
@@ -298,7 +304,7 @@ export default function SalesPage() {
                             </div>
                           </div>
                           <div className="opacity-0 group-hover:opacity-100 flex items-center gap-1 transition-all">
-                            {canManageDeals && (
+                            {canEditDeals && (
                               <button onClick={() => openEdit(deal)} className="p-1 hover:bg-indigo-50 rounded-lg transition-colors">
                                 <Edit size={11} className="text-slate-400 hover:text-indigo-600" />
                               </button>
@@ -344,9 +350,11 @@ export default function SalesPage() {
                         </div>
                       </div>
                     ))}
-                    <button onClick={() => openAdd(stage)} className="w-full py-2 text-xs text-slate-400 hover:text-slate-600 hover:bg-white rounded-xl border border-dashed border-slate-200 transition-colors flex items-center justify-center gap-1">
-                      <Plus size={11} />Add deal
-                    </button>
+                    {canManageDeals && (
+                      <button onClick={() => openAdd(stage)} className="w-full py-2 text-xs text-slate-400 hover:text-slate-600 hover:bg-white rounded-xl border border-dashed border-slate-200 transition-colors flex items-center justify-center gap-1">
+                        <Plus size={11} />Add deal
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -399,7 +407,9 @@ export default function SalesPage() {
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
             <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
               <h3 className="text-slate-800">All Deals ({visibleDeals.length})</h3>
-              <button onClick={() => openAdd()} className="px-3 py-1.5 text-xs bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 flex items-center gap-1"><Plus size={11} />New Deal</button>
+              {canManageDeals && (
+                <button onClick={() => openAdd()} className="px-3 py-1.5 text-xs bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 flex items-center gap-1"><Plus size={11} />New Deal</button>
+              )}
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -431,7 +441,7 @@ export default function SalesPage() {
                       <td className="py-3 px-4 text-xs text-slate-500">{deal.expectedClose || "—"}</td>
                       <td className="py-3 px-4">
                         <div className="flex items-center gap-1">
-                          {canManageDeals && (
+                          {canEditDeals && (
                             <button onClick={() => openEdit(deal)} className="p-1.5 hover:bg-indigo-50 rounded-lg text-slate-400 hover:text-indigo-600"><Edit size={12} /></button>
                           )}
                           {canDeleteDeals && (

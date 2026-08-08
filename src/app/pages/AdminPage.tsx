@@ -577,12 +577,14 @@ export default function AdminPage() {
           >
             <RefreshCw size={14} className={`text-slate-500 ${usersLoading ? "animate-spin" : ""}`} />
           </button>
-          <button
-            onClick={openCreate}
-            className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl flex items-center gap-2 transition-colors shadow-sm shadow-indigo-200"
-          >
-            <Plus size={15} /> Add User
-          </button>
+          {role !== 'Team Leader' && role !== 'team_leader' && (
+            <button
+              onClick={openCreate}
+              className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl flex items-center gap-2 transition-colors shadow-sm shadow-indigo-200"
+            >
+              <Plus size={15} /> Add User
+            </button>
+          )}
         </div>
       </div>
 
@@ -651,16 +653,18 @@ export default function AdminPage() {
           <Users size={14} className="inline mr-2" />
           User Management
         </button>
-        <button
-          onClick={() => { setActiveTab("audit"); fetchAuditLogs(); }}
-          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activeTab === "audit"
-            ? "border-indigo-600 text-indigo-600"
-            : "border-transparent text-slate-500 hover:text-slate-700"
-            }`}
-        >
-          <FileText size={14} className="inline mr-2" />
-          Audit Logs
-        </button>
+        {!['Team Leader', 'team_leader', 'Lead Manager', 'lead_manager'].includes(role) && (
+          <button
+            onClick={() => { setActiveTab("audit"); fetchAuditLogs(); }}
+            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activeTab === "audit"
+              ? "border-indigo-600 text-indigo-600"
+              : "border-transparent text-slate-500 hover:text-slate-700"
+              }`}
+          >
+            <FileText size={14} className="inline mr-2" />
+            Audit Logs
+          </button>
+        )}
         {isAdmin && (
           <button
             onClick={() => { setActiveTab("subscriptions" as any); fetchSubscriptions(); }}
@@ -863,8 +867,7 @@ export default function AdminPage() {
                         role === 'Super Admin' || role === 'super_admin' ||
                         ((role === 'Org Admin' || role === 'org_admin' || role === 'admin') && user.role !== 'Super Admin' && user.role !== 'super_admin') ||
                         (role === 'Sales Manager' && isTargetSubordinate && ['Team Leader', 'Sales Executive'].includes(user.role)) ||
-                        (role === 'Lead Manager' && isTargetSubordinate && ['Lead Executive', 'Telecaller', 'Lead Qualifier'].includes(user.role)) ||
-                        (role === 'Team Leader' && isTargetSubordinate && user.role === 'Sales Executive');
+                        (role === 'Lead Manager' && isTargetSubordinate && ['Lead Executive', 'Telecaller', 'Lead Qualifier'].includes(user.role));
 
                       const canDelete =
                         !isSelf && (
@@ -876,9 +879,7 @@ export default function AdminPage() {
                         !isSelf && (
                           role === 'Super Admin' || role === 'super_admin' ||
                           ((role === 'Org Admin' || role === 'org_admin' || role === 'admin') && user.role !== 'Super Admin' && user.role !== 'super_admin') ||
-                          (role === 'Sales Manager' && isTargetSubordinate && ['Team Leader', 'Sales Executive'].includes(user.role)) ||
-                          (role === 'Lead Manager' && isTargetSubordinate && ['Lead Executive', 'Telecaller', 'Lead Qualifier'].includes(user.role)) ||
-                          (role === 'Team Leader' && isTargetSubordinate && user.role === 'Sales Executive')
+                          (role === 'Sales Manager' && isTargetSubordinate && ['Team Leader', 'Sales Executive'].includes(user.role))
                         );
 
                       const canResetPassword = canEdit;

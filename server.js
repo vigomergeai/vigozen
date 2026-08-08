@@ -268,9 +268,9 @@ const upload = multer({
         { role: 'Sales Executive', module: 'settings', permission: 'none' },
         { role: 'Sales Executive', module: 'billing', permission: 'none' },
         // Lead Manager
-        { role: 'Lead Manager', module: 'leads', permission: 'full' },
-        { role: 'Lead Manager', module: 'deals', permission: 'view' },
-        { role: 'Lead Manager', module: 'reports', permission: 'own' },
+        { role: 'Lead Manager', module: 'leads', permission: 'dept' },
+        { role: 'Lead Manager', module: 'deals', permission: 'dept' },
+        { role: 'Lead Manager', module: 'reports', permission: 'dept' },
         { role: 'Lead Manager', module: 'users', permission: 'team' },
         { role: 'Lead Manager', module: 'settings', permission: 'none' },
         { role: 'Lead Manager', module: 'billing', permission: 'none' }
@@ -552,13 +552,20 @@ const authenticateToken = (req, res, next) => {
 };
 
 // ── ROLE-BASED ACCESS CONTROL ──
+const normalizeRole = (role) => {
+  if (!role) return '';
+  return role.toLowerCase().replace(/[\s_]+/g, '_').trim();
+};
+
 const requireRole = (allowedRoles) => {
   return (req, res, next) => {
     if (!req.user) {
       return res.status(401).json({ error: "Authentication required" });
     }
     const userRole = req.user.role || 'sales';
-    if (!allowedRoles.includes(userRole)) {
+    const normalizedUserRole = normalizeRole(userRole);
+    const normalizedAllowedRoles = allowedRoles.map(normalizeRole);
+    if (!normalizedAllowedRoles.includes(normalizedUserRole)) {
       return res.status(403).json({
         error: "Insufficient permissions",
         required_roles: allowedRoles,
@@ -570,24 +577,28 @@ const requireRole = (allowedRoles) => {
 };
 
 // Determine user's scope for a specific module (Static Fallback)
-const isAdminRole = (role) => role === 'Super Admin' || role === 'super_admin' || role === 'Org Admin' || role === 'admin';
+const isAdminRole = (role) => {
+  const norm = normalizeRole(role);
+  return norm === 'super_admin' || norm === 'org_admin' || norm === 'admin';
+};
 
 const getPermissionScope = (role, module) => {
-  if (role === 'Super Admin' || role === 'super_admin') return 'full';
-  if (role === 'Org Admin' || role === 'org_admin' || role === 'admin') return 'full';
+  if (!role) return 'none';
+  const norm = normalizeRole(role);
+  if (norm === 'super_admin' || norm === 'org_admin' || norm === 'admin') return 'full';
 
   const hierarchy = {
-    'Org Admin': { leads: 'full', deals: 'full', users: 'full', reports: 'full', settings: 'full', billing: 'full', tickets: 'full', activities: 'full' },
-    'Sales Manager': { leads: 'dept', deals: 'dept', users: 'team', reports: 'dept', settings: 'none', billing: 'none', tickets: 'dept', activities: 'dept' },
-    'Team Leader': { leads: 'team', deals: 'team', users: 'team', reports: 'team', settings: 'none', billing: 'none', tickets: 'team', activities: 'team' },
-    'Sales Executive': { leads: 'own', deals: 'own', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own' },
-    'Lead Manager': { leads: 'full', deals: 'view', users: 'team', reports: 'own', settings: 'none', billing: 'none', tickets: 'full', activities: 'full' },
-    'Lead Executive': { leads: 'own', deals: 'own', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own' },
-    'Telecaller': { leads: 'own', deals: 'none', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own' },
-    'Lead Qualifier': { leads: 'own', deals: 'none', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own' }
+    'org_admin': { leads: 'full', deals: 'full', users: 'full', reports: 'full', settings: 'full', billing: 'full', tickets: 'full', activities: 'full' },
+    'sales_manager': { leads: 'dept', deals: 'dept', users: 'team', reports: 'dept', settings: 'none', billing: 'none', tickets: 'dept', activities: 'dept' },
+    'team_leader': { leads: 'team', deals: 'team', users: 'team', reports: 'team', settings: 'none', billing: 'none', tickets: 'team', activities: 'team' },
+    'sales_executive': { leads: 'own', deals: 'own', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own' },
+    'lead_manager': { leads: 'dept', deals: 'dept', users: 'team', reports: 'dept', settings: 'none', billing: 'none', tickets: 'dept', activities: 'dept' },
+    'lead_executive': { leads: 'own', deals: 'own', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own' },
+    'telecaller': { leads: 'own', deals: 'none', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own' },
+    'lead_qualifier': { leads: 'own', deals: 'none', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own' }
   };
 
-  return hierarchy[role]?.[module] || 'none';
+  return hierarchy[norm]?.[module] || 'none';
 };
 
 const checkUserManagementAccess = async (currentUser, targetUserId, reqTeamId) => {
@@ -639,12 +650,7 @@ const checkUserManagementAccess = async (currentUser, targetUserId, reqTeamId) =
       return { allowed: false, error: "Lead Manager can only manage Lead Executives, Telecallers, and Lead Qualifiers" };
     }
   }
-  // - Team Leader can edit/manage only Sales Executives reporting to them
-  else if (currentRoleLower === 'team leader' || currentRoleLower === 'team_leader') {
-    if (!['sales executive', 'sales_executive'].includes(targetRoleLower)) {
-      return { allowed: false, error: "Team Leader can only manage Sales Executives" };
-    }
-  } else {
+  else {
     return { allowed: false, error: "Insufficient permissions to manage users" };
   }
 
@@ -723,6 +729,10 @@ const getSubordinateUserIds = async (userId, teamId) => {
        INNER JOIN subordinates s ON u.manager_id = s.id
      )
      SELECT id FROM subordinates
+     UNION
+     SELECT u.id FROM users u
+     INNER JOIN teams t ON u.team_id = t.id
+     WHERE t.team_leader_id = $1 OR t.manager_id = $1
   `;
   if (teamId) {
     query += ` UNION SELECT id FROM users WHERE team_id = $2`;
@@ -733,7 +743,7 @@ const getSubordinateUserIds = async (userId, teamId) => {
     return result.rows.map(r => r.id);
   } catch (err) {
     console.error("getSubordinateUserIds error:", err);
-    return [userId]; // Fallback to just the user themselves on error
+    return [userId];
   }
 };
 
@@ -1340,31 +1350,54 @@ app.delete("/calendar/:id", authenticateToken, async (req, res) => {
   }
 });
 
-// Users
+// Users - Hierarchy-based access
 app.get("/users", authenticateToken, checkPermission('users'), async (req, res) => {
   try {
     const { permissionScope, companyId, userId, teamId } = req;
-    let query = "SELECT id, name, email, role, department, manager_id, team_id, is_active, status, created_at, trial_start, trial_end, subscription_status, plan_type, payment_status FROM users";
-    let params = [];
+    const roleNorm = normalizeRole(req.user.role);
 
-    if (permissionScope === 'full') {
-      if (isAdminRole(req.user.role)) {
-        query += " ORDER BY name ASC;";
-      } else {
-        query += " WHERE company_id = $1 ORDER BY name ASC;";
+    let query = "";
+    let params = [];
+    let paramIndex = 1;
+
+    if (roleNorm === 'super_admin') {
+      // Super Administrator: Everyone across all organizations
+      query = "SELECT id, name, email, role, department, manager_id, team_id, is_active, status, created_at, trial_start, trial_end, subscription_status, plan_type, payment_status FROM users ORDER BY name ASC";
+    }
+    else if (roleNorm === 'org_admin' || roleNorm === 'admin') {
+      // Organization Admin: Everyone inside their organization
+      if (companyId) {
+        query = "SELECT id, name, email, role, department, manager_id, team_id, is_active, status, created_at, trial_start, trial_end, subscription_status, plan_type, payment_status FROM users WHERE company_id = $1 ORDER BY name ASC";
         params.push(companyId);
+        paramIndex++;
+      } else {
+        query = "SELECT id, name, email, role, department, manager_id, team_id, is_active, status, created_at, trial_start, trial_end, subscription_status, plan_type, payment_status FROM users WHERE company_id IS NULL ORDER BY name ASC";
       }
-    } else if (permissionScope === 'dept' || permissionScope === 'team') {
+    }
+    else if (permissionScope === 'full' || permissionScope === 'dept' || permissionScope === 'team') {
+      // Managers: Only users in their hierarchy + users specifically assigned to them
+      // Get subordinate user IDs (includes the user themselves)
       const subIds = await getSubordinateUserIds(userId, teamId);
-      query += " WHERE company_id = $1 AND id = ANY($2) ORDER BY name ASC;";
-      params.push(companyId, subIds);
-    } else {
+
+      // Also get users who are specifically assigned to this user via manager_id
+      // This is already covered by getSubordinateUserIds which includes the recursive hierarchy
+
+      if (companyId) {
+        query = "SELECT id, name, email, role, department, manager_id, team_id, is_active, status, created_at, trial_start, trial_end, subscription_status, plan_type, payment_status FROM users WHERE company_id = $1 AND id = ANY($2) ORDER BY name ASC";
+        params.push(companyId, subIds);
+      } else {
+        query = "SELECT id, name, email, role, department, manager_id, team_id, is_active, status, created_at, trial_start, trial_end, subscription_status, plan_type, payment_status FROM users WHERE id = ANY($1) ORDER BY name ASC";
+        params.push(subIds);
+      }
+    }
+    else {
       return res.status(403).json({ error: "Access denied to users module" });
     }
 
     const result = await pool.query(query, params);
     res.json(result.rows);
   } catch (err) {
+    console.error("GET USERS ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1469,6 +1502,46 @@ app.delete("/integrations/:id", authenticateToken, async (req, res) => {
   }
 });
 
+// Get user by ID (for profile loading)
+app.get("/users/:id", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const requestingUserId = req.user.id;
+    const isSelf = requestingUserId === id;
+
+    // Fetch user details from DB
+    const userRes = await pool.query(
+      `SELECT id, name, email, role, department, manager_id, team_id, is_active, status, 
+              created_at, trial_start, trial_end, subscription_status, plan_type, 
+              payment_status, phone, company, timezone, language, employee_id, avatar_url, company_id 
+       FROM users WHERE id = $1`,
+      [id]
+    );
+
+    if (userRes.rows.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    const targetUser = userRes.rows[0];
+
+    // If it's not self, verify the user has access to view this user's profile
+    if (!isSelf) {
+      const isAdmin = isAdminRole(req.user.role);
+      if (!isAdmin) {
+        // If not admin, check if targetUser is a subordinate of requesting user
+        const subIds = await getSubordinateUserIds(requestingUserId, req.user.team_id || null);
+        if (!subIds.includes(id)) {
+          return res.status(403).json({ error: "Access denied to view this user's profile" });
+        }
+      }
+    }
+
+    res.json(targetUser);
+  } catch (err) {
+    console.error("GET USER BY ID ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Update user (settings save)
 app.put("/users/:id", authenticateToken, async (req, res) => {
   try {
@@ -1550,7 +1623,12 @@ app.put("/users/:id", authenticateToken, async (req, res) => {
 
     let finalManagerId = existingUser.manager_id;
     if (req.body.hasOwnProperty('manager_id')) {
-      finalManagerId = manager_id || null;
+      // Handle empty string, "null", or null values
+      if (manager_id === '' || manager_id === 'null' || manager_id === null || manager_id === undefined) {
+        finalManagerId = null;
+      } else {
+        finalManagerId = manager_id;
+      }
     }
 
     const result = await pool.query(
@@ -1565,7 +1643,7 @@ app.put("/users/:id", authenticateToken, async (req, res) => {
          language = COALESCE($7, language),
          role = COALESCE($8, role),
          employee_id = COALESCE($9, employee_id),
-         manager_id = $10::uuid
+         manager_id = $10
        WHERE id = $11
        RETURNING id, name, email, phone, company, department, timezone, language, role, employee_id, manager_id`,
       [name, email, phone, company, department, timezone, language, role, employee_id, finalManagerId, id]
@@ -1629,7 +1707,6 @@ app.post("/users", authenticateToken, async (req, res) => {
       'Org Admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
       'admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
       'Sales Manager': ['Team Leader', 'Sales Executive'],
-      'Team Leader': ['Sales Executive'],
       'Lead Manager': ['Lead Executive', 'Telecaller', 'Lead Qualifier']
     };
 
@@ -1693,16 +1770,29 @@ app.post("/users", authenticateToken, async (req, res) => {
       newTeamId = teamResult.rows[0].id;
     }
 
-    // 5. Generate Invitation Token
-    const inviteToken = crypto.randomBytes(32).toString('hex');
+    // 5. Generate Invitation Token (Commented out for Testing Mode)
+    // const inviteToken = crypto.randomBytes(32).toString('hex');
 
-    // 6. Insert new user in 'invited' status
+    // Hashed default password for testing mode ('password123')
+    const defaultPasswordHash = await bcrypt.hash('password123', 10);
+
+    // 6. Insert new user directly as active with default password (Testing Mode)
+    const result = await pool.query(
+      `INSERT INTO users (name, email, password, role, company_id, manager_id, team_id, is_active, status, employee_id, department, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, true, 'active', $8, $9, NOW())
+       RETURNING id, name, email, role, employee_id AS "employeeId", department, is_active AS "isActive", status, company_id AS "companyId", created_at AS "createdAt"`,
+      [name, email, defaultPasswordHash, targetRole, companyId, manager_id, newTeamId, employeeId || null, department || "Sales"]
+    );
+
+    /* Original code for invitation-based user creation (Commented out for testing):
+    const inviteToken = crypto.randomBytes(32).toString('hex');
     const result = await pool.query(
       `INSERT INTO users (name, email, role, company_id, manager_id, team_id, is_active, status, invite_token, employee_id, department, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, false, 'invited', $7, $8, $9, NOW())
        RETURNING id, name, email, role, employee_id AS "employeeId", department, is_active AS "isActive", status, company_id AS "companyId", created_at AS "createdAt"`,
       [name, email, targetRole, companyId, manager_id, newTeamId, inviteToken, employeeId || null, department || "Sales"]
     );
+    */
 
     const newUser = result.rows[0];
 
@@ -1714,16 +1804,16 @@ app.post("/users", authenticateToken, async (req, res) => {
       ).catch(err => console.error("Update team leader error:", err));
     }
 
-    // 7. Trigger simulated invitation email
-    await sendInviteEmail(email, inviteToken);
+    // 7. Trigger simulated invitation email (Commented out for Testing Mode)
+    // await sendInviteEmail(email, inviteToken);
 
     // Company-wide notification for new user
     if (companyId) {
       await notificationService.createCompanyNotification(
         companyId,
         'user_added',
-        "👤 Team Member Invited",
-        `${name} has been invited to join the team as ${targetRole}`,
+        "👤 Team Member Joined",
+        `${name} has joined the team as ${targetRole}`,
         `/users/${newUser.id}`,
         'medium',
         { user_role: targetRole, user_email: email }
@@ -1756,10 +1846,6 @@ app.delete("/users/:id", authenticateToken, async (req, res) => {
     console.log("User:", req.user);
 
     // Only admins can delete users
-
-    function isAdminRole(role) {
-      return ['admin', 'super_admin', 'org_admin'].includes(role);
-    }
 
     if (!isAdminRole(req.user.role)) {
       return res.status(403).json({ error: "Insufficient permissions. Only admins can delete users." });
@@ -1846,7 +1932,7 @@ app.delete("/users/:id", authenticateToken, async (req, res) => {
 });
 
 // Toggle user active/inactive
-app.put("/users/:id/toggle-access", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin', 'Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager', 'Team Leader', 'team_leader']), async (req, res) => {
+app.put("/users/:id/toggle-access", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin', 'Sales Manager', 'sales_manager']), async (req, res) => {
   try {
     const access = await checkUserManagementAccess(req.user, req.params.id, req.teamId);
     if (!access.allowed) {
@@ -1872,7 +1958,7 @@ app.put("/users/:id/toggle-access", authenticateToken, requireRole(['admin', 'su
 });
 
 // Reset user password (admin/manager allowed for subordinates)
-app.put("/users/:id/password", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin', 'Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager', 'Team Leader', 'team_leader']), async (req, res) => {
+app.put("/users/:id/password", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin', 'Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager']), async (req, res) => {
   try {
     const access = await checkUserManagementAccess(req.user, req.params.id, req.teamId);
     if (!access.allowed) {
@@ -1905,7 +1991,7 @@ app.put("/users/:id/password", authenticateToken, requireRole(['admin', 'super_a
 // ── USER ACTIVATION/DEACTIVATION ──
 
 // Activate user
-app.put("/users/:id/activate", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin', 'Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager', 'Team Leader', 'team_leader']), async (req, res) => {
+app.put("/users/:id/activate", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin', 'Sales Manager', 'sales_manager']), async (req, res) => {
   try {
     const userId = req.params.id;
     const companyId = req.user.company_id;
@@ -1962,7 +2048,7 @@ app.put("/users/:id/activate", authenticateToken, requireRole(['admin', 'super_a
 });
 
 // Deactivate user
-app.put("/users/:id/deactivate", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin', 'Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager', 'Team Leader', 'team_leader']), async (req, res) => {
+app.put("/users/:id/deactivate", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin', 'Sales Manager', 'sales_manager']), async (req, res) => {
   try {
     const userId = req.params.id;
 
@@ -2082,6 +2168,11 @@ app.post("/leads", authenticateToken, async (req, res) => {
 // Leads PUT
 app.put("/leads/:id", authenticateToken, async (req, res) => {
   try {
+    const scope = getPermissionScope(req.user.role, 'leads');
+    if (scope === 'team' || scope === 'none') {
+      return res.status(403).json({ error: "You are not permitted to edit leads." });
+    }
+
     const { name, email, phone, company, value, status, source, industry, notes, converted_to_deal, deal_id } = req.body;
 
     // Fetch existing lead first to preserve missing fields
@@ -2176,6 +2267,11 @@ app.put("/leads/:id", authenticateToken, async (req, res) => {
 // Bulk delete leads
 app.delete("/leads", authenticateToken, async (req, res) => {
   try {
+    const scope = getPermissionScope(req.user.role, 'leads');
+    if (scope !== 'full') {
+      return res.status(403).json({ error: "Only administrators are permitted to delete leads." });
+    }
+
     const { ids } = req.body;
     if (!ids || !Array.isArray(ids)) {
       return res.status(400).json({ error: "ids array required" });
@@ -2206,6 +2302,11 @@ app.delete("/leads", authenticateToken, async (req, res) => {
 // Single delete lead
 app.delete("/leads/:id", authenticateToken, async (req, res) => {
   try {
+    const scope = getPermissionScope(req.user.role, 'leads');
+    if (scope !== 'full') {
+      return res.status(403).json({ error: "Only administrators are permitted to delete leads." });
+    }
+
     const { id } = req.params;
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
       return res.status(400).json({ error: "Invalid UUID format" });
@@ -2600,6 +2701,11 @@ app.delete("/notifications/:id", authenticateToken, async (req, res) => {
 
 app.put("/deals/:id", authenticateToken, async (req, res) => {
   try {
+    const scope = getPermissionScope(req.user.role, 'deals');
+    if (scope === 'team' || scope === 'view' || scope === 'none') {
+      return res.status(403).json({ error: "You are not permitted to edit deals." });
+    }
+
     console.log("Updating deal:", req.params.id);
     console.log("Body:", req.body);
 
@@ -2724,6 +2830,11 @@ app.put("/deals/:id", authenticateToken, async (req, res) => {
 
 app.delete("/deals/:id", authenticateToken, async (req, res) => {
   try {
+    const scope = getPermissionScope(req.user.role, 'deals');
+    if (scope !== 'full') {
+      return res.status(403).json({ error: "Only administrators are permitted to delete deals." });
+    }
+
     console.log("Deleting deal:", req.params.id);
     const result = await pool.query(
       "DELETE FROM deals WHERE id = $1 RETURNING *",
@@ -2751,11 +2862,6 @@ app.delete("/deals/:id", authenticateToken, async (req, res) => {
   }
 });
 app.delete("/admin/reset-database", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin']), async (req, res) => {
-
-
-  function isAdminRole(role) {
-    return ['admin', 'super_admin', 'org_admin'].includes(role);
-  }
   try {
     await pool.query("DELETE FROM leads");
     await pool.query("DELETE FROM deals");
@@ -4281,7 +4387,7 @@ app.post("/payments/verify", authenticateToken, async (req, res) => {
 // ──────────────────────────────────────────────────────────────
 
 // GET /api/audit-logs (Admin & managers allowed with dynamic filtering)
-app.get("/api/audit-logs", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin', 'Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager', 'Team Leader', 'team_leader']), async (req, res) => {
+app.get("/api/audit-logs", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin', 'Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager']), async (req, res) => {
   try {
     const { limit = 50, offset = 0, action, entity_type, user_id } = req.query;
     const companyId = req.user.company_id;
@@ -4353,7 +4459,7 @@ app.get("/api/audit-logs", authenticateToken, requireRole(['admin', 'super_admin
 
 // POST /users/bulk/action (Admin only)
 // POST /users/bulk/action (Admin & managers allowed on subordinates)
-app.post("/users/bulk/action", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin', 'Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager']), async (req, res) => {
+app.post("/users/bulk/action", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin', 'Sales Manager', 'sales_manager']), async (req, res) => {
   try {
     const { userIds, action, value } = req.body;
 
@@ -4364,7 +4470,7 @@ app.post("/users/bulk/action", authenticateToken, requireRole(['admin', 'super_a
     const { role } = req.user;
     const isSuperAdmin = role === 'Super Admin' || role === 'super_admin';
     const isOrgAdmin = role === 'Org Admin' || role === 'org_admin' || role === 'admin';
-    const isManager = ['Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager'].includes(role);
+    const isManager = ['Sales Manager', 'sales_manager'].includes(role);
 
     const companyId = req.user.company_id;
 
@@ -5145,7 +5251,7 @@ app.get("/api/company/subscription", authenticateToken, async (req, res) => {
   try {
     const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
     const isOrgAdmin = req.user.role === 'Org Admin' || req.user.role === 'org_admin' || req.user.role === 'admin';
-    
+
     if (!isSuperAdmin && !isOrgAdmin) {
       return res.status(403).json({ error: "Admin access required" });
     }
@@ -5292,7 +5398,7 @@ app.put("/api/company/subscription", authenticateToken, async (req, res) => {
   try {
     const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
     const isOrgAdmin = req.user.role === 'Org Admin' || req.user.role === 'org_admin' || req.user.role === 'admin';
-    
+
     if (!isSuperAdmin && !isOrgAdmin) {
       return res.status(403).json({ error: "Admin access required" });
     }
@@ -5436,11 +5542,11 @@ app.put('/api/pricing-config', authenticateToken, requireRole(['admin', 'super_a
   try {
     const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
     const isOrgAdmin = req.user.role === 'Org Admin' || req.user.role === 'org_admin' || req.user.role === 'admin';
-    
+
     if (!isSuperAdmin && !isOrgAdmin) {
       return res.status(403).json({ error: 'Admin access required' });
     }
-    
+
     if (!isSuperAdmin) {
       return res.status(403).json({ error: 'Only Super Admin can modify pricing configuration' });
     }

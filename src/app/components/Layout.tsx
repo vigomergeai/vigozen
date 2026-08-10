@@ -169,38 +169,45 @@ export default function Layout() {
 
         {/* Nav */}
         <nav className="flex-1 px-3 py-2 space-y-0.5 overflow-y-auto">
-          {navItems.filter(item => canView(item.module as any)).map(({ path, label, icon: Icon, end }) => (
-            <NavLink
-              key={path}
-              to={path}
-              end={end}
-              onClick={() => setMobileOpen(false)}
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-200 group relative
-                ${isActive
-                  ? "bg-indigo-600/90 text-white shadow-lg shadow-indigo-500/20"
-                  : "text-slate-400 hover:text-white hover:bg-white/8"
-                }`
-              }
-            >
-              {({ isActive }) => (
-                <>
-                  {isActive && <div className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-6 bg-indigo-300 rounded-r-full" />}
-                  <Icon size={18} className={`flex-shrink-0 transition-colors ${isActive ? "text-white" : "text-slate-400 group-hover:text-white"}`} />
-                  {!sidebarCollapsed && (
-                    <span className={`text-sm transition-colors ${isActive ? "text-white font-medium" : "text-slate-400 group-hover:text-white"}`}>
-                      {label}
-                    </span>
-                  )}
-                  {sidebarCollapsed && (
-                    <div className="absolute left-full ml-2 px-2 py-1 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50 shadow-lg">
-                      {label}
-                    </div>
-                  )}
-                </>
-              )}
-            </NavLink>
-          ))}
+          {navItems.filter(item => canView(item.module as any)).map(({ path, label, icon: Icon, end }) => {
+            const displayLabel = (label === "Sales" && (role === "Lead Manager" || role === "lead_manager"))
+              ? "Sales (View Only)"
+              : label;
+
+            return (
+              <NavLink
+                key={path}
+                to={path}
+                end={end}
+                onClick={() => setMobileOpen(false)}
+                className={({ isActive }) =>
+                  `flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-200 group relative
+                  ${isActive
+                    ? "bg-indigo-600/90 text-white shadow-lg shadow-indigo-500/20"
+                    : "text-slate-400 hover:text-white hover:bg-white/8"
+                  }`
+                }
+              >
+                {({ isActive }) => (
+                  <>
+                    {isActive && <div className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-6 bg-indigo-300 rounded-r-full" />}
+                    <Icon size={18} className={`flex-shrink-0 transition-colors ${isActive ? "text-white" : "text-slate-400 group-hover:text-white"}`} />
+                    {!sidebarCollapsed && (
+                      <span className={`text-sm transition-colors ${isActive ? "text-white font-medium" : "text-slate-400 group-hover:text-white"}`}>
+                        {displayLabel}
+                      </span>
+                    )}
+                    {sidebarCollapsed && (
+                      <div className="absolute left-full ml-2 px-2 py-1 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50 shadow-lg">
+                        {displayLabel}
+                      </div>
+                    )}
+                  </>
+                )}
+              </NavLink>
+            );
+          })}
+
 
           {/* Admin Panel link */}
           {canOpenAdminPanel && (
@@ -221,13 +228,13 @@ export default function Layout() {
                   <UserCog size={18} className={`flex-shrink-0 ${isActive ? "text-white" : "text-slate-400 group-hover:text-white"}`} />
                   {!sidebarCollapsed && (
                     <div className="flex-1 flex items-center justify-between">
-                      <span className="text-sm">Admin Panel</span>
-                      <span className="text-[9px] bg-purple-500/40 text-purple-200 px-1.5 py-0.5 rounded-full">ADMIN</span>
+                      <span className="text-sm">{(role === 'Team Leader' || role === 'team_leader' || role === 'Lead Manager' || role === 'lead_manager') ? 'Users' : 'Admin Panel'}</span>
+                      <span className="text-[9px] bg-purple-500/40 text-purple-200 px-1.5 py-0.5 rounded-full">{(role === 'Team Leader' || role === 'team_leader' || role === 'Lead Manager' || role === 'lead_manager') ? 'TEAM' : 'ADMIN'}</span>
                     </div>
                   )}
                   {sidebarCollapsed && (
                     <div className="absolute left-full ml-2 px-2 py-1 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50 shadow-lg">
-                      Admin Panel
+                      {(role === 'Team Leader' || role === 'team_leader' || role === 'Lead Manager' || role === 'lead_manager') ? 'Users' : 'Admin Panel'}
                     </div>
                   )}
                 </>

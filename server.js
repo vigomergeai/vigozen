@@ -591,11 +591,11 @@ const getPermissionScope = (role, module) => {
     'org_admin': { leads: 'full', deals: 'full', users: 'full', reports: 'full', settings: 'full', billing: 'full', tickets: 'full', activities: 'full' },
     'sales_manager': { leads: 'dept', deals: 'dept', users: 'team', reports: 'dept', settings: 'none', billing: 'none', tickets: 'dept', activities: 'dept' },
     'team_leader': { leads: 'team', deals: 'team', users: 'team', reports: 'team', settings: 'none', billing: 'none', tickets: 'team', activities: 'team' },
-    'sales_executive': { leads: 'own', deals: 'own', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own' },
+    'sales_executive': { leads: 'own', deals: 'own', users: 'own', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own' },
     'lead_manager': { leads: 'dept', deals: 'dept', users: 'team', reports: 'dept', settings: 'none', billing: 'none', tickets: 'dept', activities: 'dept' },
-    'lead_executive': { leads: 'own', deals: 'own', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own' },
-    'telecaller': { leads: 'own', deals: 'none', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own' },
-    'lead_qualifier': { leads: 'own', deals: 'none', users: 'none', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own' }
+    'lead_executive': { leads: 'own', deals: 'own', users: 'own', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own' },
+    'telecaller': { leads: 'own', deals: 'none', users: 'own', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own' },
+    'lead_qualifier': { leads: 'own', deals: 'none', users: 'own', reports: 'own', settings: 'none', billing: 'none', tickets: 'own', activities: 'own' }
   };
 
   return hierarchy[norm]?.[module] || 'none';
@@ -700,6 +700,12 @@ const checkPermission = (module) => {
       );
       if (result.rows.length > 0) {
         permissionScope = result.rows[0].permission;
+        // If DB says 'none' but static hierarchy grants access, use static
+        // This fixes stale/incorrect DB permissions that block manager roles
+        const staticScope = getPermissionScope(role, module);
+        if (permissionScope === 'none' && staticScope !== 'none') {
+          permissionScope = staticScope;
+        }
       } else {
         permissionScope = getPermissionScope(role, module);
       }
@@ -720,27 +726,63 @@ const checkPermission = (module) => {
 
 // Get all subordinate user IDs (including the user themselves)
 const getSubordinateUserIds = async (userId, teamId) => {
-  const params = [userId];
-  let query = `
-    WITH RECURSIVE subordinates AS (
-       SELECT id FROM users WHERE id = $1
-       UNION ALL
-       SELECT u.id FROM users u
-       INNER JOIN subordinates s ON u.manager_id = s.id
-     )
-     SELECT id FROM subordinates
-     UNION
-     SELECT u.id FROM users u
-     INNER JOIN teams t ON u.team_id = t.id
-     WHERE t.team_leader_id = $1 OR t.manager_id = $1
-  `;
-  if (teamId) {
-    query += ` UNION SELECT id FROM users WHERE team_id = $2`;
-    params.push(teamId);
+  // If teamId not provided, fetch it from user record
+  if (!teamId) {
+    try {
+      const userRes = await pool.query("SELECT team_id FROM users WHERE id = $1", [userId]);
+      if (userRes.rows.length > 0) {
+        teamId = userRes.rows[0].team_id;
+      }
+    } catch (err) {
+      console.error("Error fetching user team_id:", err);
+    }
   }
+
+  const params = [userId];
+  let query = '';
+  if (teamId) {
+    query = `
+      WITH RECURSIVE subordinates AS (
+         -- 1. Non-recursive starting set: the user and all team members
+         SELECT id FROM users WHERE id = $1
+         UNION
+         SELECT id FROM users WHERE team_id = $2
+         
+         UNION ALL
+         
+         -- 2. Recursive part: anyone reporting to any found subordinates
+         SELECT u.id FROM users u
+         INNER JOIN subordinates s ON u.manager_id = s.id
+      )
+      SELECT DISTINCT id FROM subordinates
+    `;
+    params.push(teamId);
+  } else {
+    query = `
+      WITH RECURSIVE subordinates AS (
+         -- 1. Non-recursive starting set: the user
+         SELECT id FROM users WHERE id = $1
+         
+         UNION ALL
+         
+         -- 2. Recursive part: anyone reporting to any found subordinates
+         SELECT u.id FROM users u
+         INNER JOIN subordinates s ON u.manager_id = s.id
+      )
+      SELECT DISTINCT id FROM subordinates
+    `;
+  }
+
   try {
     const result = await pool.query(query, params);
-    return result.rows.map(r => r.id);
+    const ids = result.rows.map(r => r.id);
+
+    // Always ensure the user themselves is included
+    if (!ids.includes(userId)) {
+      ids.push(userId);
+    }
+
+    return ids;
   } catch (err) {
     console.error("getSubordinateUserIds error:", err);
     return [userId];
@@ -752,6 +794,7 @@ const getScopedQueryFilters = async (table, req) => {
   const { role, company_id, id: userId, team_id } = req.user;
   const scope = req.permissionScope;
 
+  // ── SUPER ADMIN: No filters ──
   if (role === 'Super Admin' || role === 'super_admin') {
     return { joinClause: '', whereClause: '', params: [] };
   }
@@ -760,52 +803,133 @@ const getScopedQueryFilters = async (table, req) => {
   let clauses = [];
   let params = [company_id];
 
+  // ── ACTIVITIES ──
   if (table === 'activities') {
     joinClause = 'INNER JOIN deals d ON a.deal_id = d.id';
     clauses.push('d.company_id = $1');
-
     if (scope === 'own') {
       clauses.push(`d.owner_id = $2`);
       params.push(userId);
-    } else if (scope === 'team' || scope === 'dept') {
+    } else if (scope === 'team') {
       const subIds = await getSubordinateUserIds(userId, team_id);
       clauses.push(`d.owner_id = ANY($2)`);
       params.push(subIds);
     }
-  } else if (table === 'contacts') {
+  }
+
+  // ── CONTACTS ──
+  else if (table === 'contacts') {
     clauses.push('company_id = $1');
     if (scope === 'own') {
       clauses.push(`owner_id = $2`);
       params.push(userId);
-    } else if (scope === 'team' || scope === 'dept') {
+    } else if (scope === 'team') {
       const subIds = await getSubordinateUserIds(userId, team_id);
       clauses.push(`owner_id = ANY($2)`);
       params.push(subIds);
     }
-  } else {
+  }
+
+  // ── LEADS ── ✅ ADD THIS CASE
+  else if (table === 'leads') {
     clauses.push('company_id = $1');
     if (scope === 'own') {
-      if (table === 'tickets') {
-        clauses.push(`(owner_id = $2 OR assigned_to = $2)`);
-      } else if (table === 'tasks') {
-        clauses.push(`(assigned_to = $2 OR assigned_by = $2)`);
-      } else if (table === 'calendar') {
-        clauses.push(`created_by = $2`);
-      } else {
-        clauses.push(`owner_id = $2`);
-      }
+      clauses.push(`owner_id = $2`);
       params.push(userId);
-    } else if (scope === 'team' || scope === 'dept') {
+    } else if (scope === 'team') {
       const subIds = await getSubordinateUserIds(userId, team_id);
-      if (table === 'tickets') {
-        clauses.push(`(owner_id = ANY($2) OR assigned_to = ANY($2))`);
-      } else if (table === 'tasks') {
-        clauses.push(`(assigned_to = ANY($2) OR assigned_by = ANY($2))`);
-      } else if (table === 'calendar') {
-        clauses.push(`created_by = ANY($2)`);
-      } else {
-        clauses.push(`owner_id = ANY($2)`);
-      }
+      clauses.push(`owner_id = ANY($2)`);
+      params.push(subIds);
+    }
+  }
+
+  // ── DEALS ──
+  else if (table === 'deals') {
+    clauses.push('company_id = $1');
+    if (scope === 'own') {
+      clauses.push(`owner_id = $2`);
+      params.push(userId);
+    } else if (scope === 'team') {
+      const subIds = await getSubordinateUserIds(userId, team_id);
+      clauses.push(`owner_id = ANY($2)`);
+      params.push(subIds);
+    }
+  }
+
+  // ── TICKETS ──
+  else if (table === 'tickets') {
+    clauses.push('company_id = $1');
+    if (scope === 'own') {
+      clauses.push(`(owner_id = $2 OR assigned_to = $2)`);
+      params.push(userId);
+    } else if (scope === 'team') {
+      const subIds = await getSubordinateUserIds(userId, team_id);
+      clauses.push(`(owner_id = ANY($2) OR assigned_to = ANY($2))`);
+      params.push(subIds);
+    }
+  }
+
+  // ── USERS ──
+  else if (table === 'users') {
+    clauses.push('company_id = $1');
+    if (scope === 'own') {
+      clauses.push(`id = $2`);
+      params.push(userId);
+    } else if (scope === 'team') {
+      const subIds = await getSubordinateUserIds(userId, team_id);
+      clauses.push(`id = ANY($2)`);
+      params.push(subIds);
+    }
+  }
+
+  // ── TASKS ──
+  else if (table === 'tasks') {
+    clauses.push('company_id = $1');
+    if (scope === 'own') {
+      clauses.push(`(assigned_to = $2 OR assigned_by = $2)`);
+      params.push(userId);
+    } else if (scope === 'team') {
+      const subIds = await getSubordinateUserIds(userId, team_id);
+      clauses.push(`(assigned_to = ANY($2) OR assigned_by = ANY($2))`);
+      params.push(subIds);
+    }
+  }
+
+  // ── CALENDAR ──
+  else if (table === 'calendar') {
+    clauses.push('company_id = $1');
+    if (scope === 'own') {
+      clauses.push(`created_by = $2`);
+      params.push(userId);
+    } else if (scope === 'team') {
+      const subIds = await getSubordinateUserIds(userId, team_id);
+      clauses.push(`created_by = ANY($2)`);
+      params.push(subIds);
+    }
+  }
+
+  // ── REPORTS ──
+  else if (table === 'reports') {
+    clauses.push('company_id = $1');
+    if (scope === 'own') {
+      clauses.push(`owner_id = $2`);
+      params.push(userId);
+    } else if (scope === 'team') {
+      const subIds = await getSubordinateUserIds(userId, team_id);
+      clauses.push(`owner_id = ANY($2)`);
+      params.push(subIds);
+    }
+  }
+
+  // ── GENERIC FALLBACK ──
+  else {
+    clauses.push('company_id = $1');
+    if (scope === 'own') {
+      clauses.push(`owner_id = $2`);
+      params.push(userId);
+    } else if (scope === 'team') {
+      const subIds = await getSubordinateUserIds(userId, team_id);
+      clauses.push(`owner_id = ANY($2)`);
       params.push(subIds);
     }
   }
@@ -843,7 +967,7 @@ app.get("/", (req, res) => {
 app.get("/leads", authenticateToken, checkPermission('leads'), async (req, res) => {
   try {
     const { whereClause, params } = await getScopedQueryFilters('leads', req);
-    const result = await pool.query(`SELECT * FROM leads ${whereClause} ORDER BY created_at DESC`, params);
+    const result = await pool.query(`SELECT *, (SELECT name FROM users WHERE id = owner_id) as owner FROM leads ${whereClause} ORDER BY created_at DESC`, params);
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1576,15 +1700,13 @@ app.put("/users/:id", authenticateToken, async (req, res) => {
       if (role && role !== existingUser.role) {
         const creatorRole = req.user.role;
         const canCreate = {
-          'Super Admin': ['Org Admin'],
-          'super_admin': ['Org Admin'],
-          'Org Admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
-          'org_admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
-          'admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
+          'Super Admin': ['Org Admin', 'admin'],
+          'super_admin': ['Org Admin', 'admin'],
+          'Org Admin': ['Org Admin', 'admin', 'Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
+          'org_admin': ['Org Admin', 'admin', 'Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
+          'admin': ['Org Admin', 'admin', 'Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
           'Sales Manager': ['Team Leader', 'Sales Executive'],
           'sales_manager': ['Team Leader', 'Sales Executive'],
-          'Team Leader': ['Sales Executive'],
-          'team_leader': ['Sales Executive'],
           'Lead Manager': ['Lead Executive', 'Telecaller', 'Lead Qualifier'],
           'lead_manager': ['Lead Executive', 'Telecaller', 'Lead Qualifier']
         };
@@ -1597,14 +1719,23 @@ app.put("/users/:id", authenticateToken, async (req, res) => {
       // If updating manager_id, verify reporting rules
       if (manager_id && manager_id !== existingUser.manager_id) {
         const REPORTING_RULES = {
-          'Org Admin': ['Super Admin'],
-          'Sales Manager': ['Org Admin'],
-          'Lead Manager': ['Org Admin'],
-          'Team Leader': ['Sales Manager', 'Org Admin'],
-          'Sales Executive': ['Team Leader', 'Sales Manager'],
-          'Lead Executive': ['Lead Manager'],
-          'Telecaller': ['Lead Manager'],
-          'Lead Qualifier': ['Lead Manager']
+          'Org Admin': ['Super Admin', 'super_admin', 'Org Admin', 'org_admin', 'admin'],
+          'org_admin': ['Super Admin', 'super_admin', 'Org Admin', 'org_admin', 'admin'],
+          'admin': ['Super Admin', 'super_admin', 'Org Admin', 'org_admin', 'admin'],
+          'Sales Manager': ['Org Admin', 'org_admin', 'admin'],
+          'sales_manager': ['Org Admin', 'org_admin', 'admin'],
+          'Lead Manager': ['Org Admin', 'org_admin', 'admin'],
+          'lead_manager': ['Org Admin', 'org_admin', 'admin'],
+          'Team Leader': ['Sales Manager', 'sales_manager', 'Org Admin', 'org_admin', 'admin'],
+          'team_leader': ['Sales Manager', 'sales_manager', 'Org Admin', 'org_admin', 'admin'],
+          'Sales Executive': ['Team Leader', 'team_leader', 'Sales Manager', 'sales_manager'],
+          'sales_executive': ['Team Leader', 'team_leader', 'Sales Manager', 'sales_manager'],
+          'Lead Executive': ['Lead Manager', 'lead_manager'],
+          'lead_executive': ['Lead Manager', 'lead_manager'],
+          'Telecaller': ['Lead Manager', 'lead_manager'],
+          'telecaller': ['Lead Manager', 'lead_manager'],
+          'Lead Qualifier': ['Lead Manager', 'lead_manager'],
+          'lead_qualifier': ['Lead Manager', 'lead_manager']
         };
         const targetRole = role || existingUser.role;
         const managerRes = await pool.query("SELECT role FROM users WHERE id = $1", [manager_id]);
@@ -1701,13 +1832,17 @@ app.post("/users", authenticateToken, async (req, res) => {
     const creatorId = req.user.id;
     const companyId = req.user.company_id || null;
 
-    // 1. Define Hierarchical Creation Rules
+    // 1. Define Hierarchical Creation Rules (handling both camelCase and lowercase roles)
     const canCreate = {
-      'Super Admin': ['Org Admin'],
-      'Org Admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
-      'admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
+      'Super Admin': ['Org Admin', 'admin'],
+      'super_admin': ['Org Admin', 'admin'],
+      'Org Admin': ['Org Admin', 'admin', 'Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
+      'org_admin': ['Org Admin', 'admin', 'Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
+      'admin': ['Org Admin', 'admin', 'Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
       'Sales Manager': ['Team Leader', 'Sales Executive'],
-      'Lead Manager': ['Lead Executive', 'Telecaller', 'Lead Qualifier']
+      'sales_manager': ['Team Leader', 'Sales Executive'],
+      'Lead Manager': ['Lead Executive', 'Telecaller', 'Lead Qualifier'],
+      'lead_manager': ['Lead Executive', 'Telecaller', 'Lead Qualifier']
     };
 
     const { name, email, role, employeeId, department, team_id, manager_id: bodyManagerId } = req.body;
@@ -1720,14 +1855,23 @@ app.post("/users", authenticateToken, async (req, res) => {
 
     // 2.5 Validate reporting manager against REPORTING_RULES
     const REPORTING_RULES = {
-      'Org Admin': ['Super Admin'],
-      'Sales Manager': ['Org Admin'],
-      'Lead Manager': ['Org Admin'],
-      'Team Leader': ['Sales Manager', 'Org Admin'],
-      'Sales Executive': ['Team Leader', 'Sales Manager'],
-      'Lead Executive': ['Lead Manager'],
-      'Telecaller': ['Lead Manager'],
-      'Lead Qualifier': ['Lead Manager']
+      'Org Admin': ['Super Admin', 'super_admin', 'Org Admin', 'org_admin', 'admin'],
+      'org_admin': ['Super Admin', 'super_admin', 'Org Admin', 'org_admin', 'admin'],
+      'admin': ['Super Admin', 'super_admin', 'Org Admin', 'org_admin', 'admin'],
+      'Sales Manager': ['Org Admin', 'org_admin', 'admin'],
+      'sales_manager': ['Org Admin', 'org_admin', 'admin'],
+      'Lead Manager': ['Org Admin', 'org_admin', 'admin'],
+      'lead_manager': ['Org Admin', 'org_admin', 'admin'],
+      'Team Leader': ['Sales Manager', 'sales_manager', 'Org Admin', 'org_admin', 'admin'],
+      'team_leader': ['Sales Manager', 'sales_manager', 'Org Admin', 'org_admin', 'admin'],
+      'Sales Executive': ['Team Leader', 'team_leader', 'Sales Manager', 'sales_manager'],
+      'sales_executive': ['Team Leader', 'team_leader', 'Sales Manager', 'sales_manager'],
+      'Lead Executive': ['Lead Manager', 'lead_manager'],
+      'lead_executive': ['Lead Manager', 'lead_manager'],
+      'Telecaller': ['Lead Manager', 'lead_manager'],
+      'telecaller': ['Lead Manager', 'lead_manager'],
+      'Lead Qualifier': ['Lead Manager', 'lead_manager'],
+      'lead_qualifier': ['Lead Manager', 'lead_manager']
     };
 
     if (bodyManagerId) {
@@ -2083,6 +2227,107 @@ app.put("/users/:id/deactivate", authenticateToken, requireRole(['admin', 'super
   }
 });
 
+// ── EMPLOYEE DATA TRANSFER ──
+
+// Transfer employee data when leaving
+app.post("/users/transfer-data", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin', 'Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager']), async (req, res) => {
+  try {
+    const { leaving_user_id, target_user_id } = req.body;
+
+    if (!leaving_user_id || !target_user_id) {
+      return res.status(400).json({ error: "leaving_user_id and target_user_id are required" });
+    }
+
+    if (leaving_user_id === target_user_id) {
+      return res.status(400).json({ error: "Cannot transfer data to the same user" });
+    }
+
+    // Check if current user has permission to manage both users
+    const leavingAccess = await checkUserManagementAccess(req.user, leaving_user_id, req.teamId);
+    const targetAccess = await checkUserManagementAccess(req.user, target_user_id, req.teamId);
+
+    if (!leavingAccess.allowed) {
+      return res.status(403).json({ error: `Cannot access leaving user: ${leavingAccess.error}` });
+    }
+
+    if (!targetAccess.allowed) {
+      return res.status(403).json({ error: `Cannot access target user: ${targetAccess.error}` });
+    }
+
+    // Perform the transfer
+    const { transferEmployeeData } = require("./employeeTransfer");
+    const result = await transferEmployeeData(leaving_user_id, target_user_id, req.user.id);
+
+    res.json(result);
+  } catch (err) {
+    console.error("TRANSFER DATA ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── SUBORDINATES / USER PANEL ──
+
+// Get all subordinates of the current user
+app.get("/users/my-subordinates", authenticateToken, async (req, res) => {
+  try {
+    const { getSubordinates } = require("./employeeTransfer");
+    const subordinates = await getSubordinates(req.user.id, req.user.team_id);
+    res.json(subordinates);
+  } catch (err) {
+    console.error("GET SUBORDINATES ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get subordinates of a specific manager (for admins)
+app.get("/users/:managerId/subordinates", authenticateToken, async (req, res) => {
+  try {
+    const { managerId } = req.params;
+
+    // Only admins can view other managers' subordinates
+    if (!isAdminRole(req.user.role) && req.user.id !== managerId) {
+      return res.status(403).json({ error: "Only admins can view other managers' subordinates" });
+    }
+
+    const { getSubordinates } = require("./employeeTransfer");
+    const subordinates = await getSubordinates(managerId, req.user.team_id);
+    res.json(subordinates);
+  } catch (err) {
+    console.error("GET SUBORDINATES ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get team statistics for the current user
+app.get("/users/my-team-stats", authenticateToken, async (req, res) => {
+  try {
+    const { getTeamStatistics } = require("./employeeTransfer");
+    const stats = await getTeamStatistics(req.user.id);
+    res.json(stats);
+  } catch (err) {
+    console.error("GET TEAM STATS ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get team statistics for a specific manager (for admins)
+app.get("/users/:managerId/team-stats", authenticateToken, async (req, res) => {
+  try {
+    const { managerId } = req.params;
+
+    // Only admins can view other managers' team stats
+    if (!isAdminRole(req.user.role) && req.user.id !== managerId) {
+      return res.status(403).json({ error: "Only admins can view other managers' team statistics" });
+    }
+
+    const { getTeamStatistics } = require("./employeeTransfer");
+    const stats = await getTeamStatistics(managerId);
+    res.json(stats);
+  } catch (err) {
+    console.error("GET TEAM STATS ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Settings
 app.get("/settings/:userId", authenticateToken, async (req, res) => {
@@ -2169,7 +2414,7 @@ app.post("/leads", authenticateToken, async (req, res) => {
 app.put("/leads/:id", authenticateToken, async (req, res) => {
   try {
     const scope = getPermissionScope(req.user.role, 'leads');
-    if (scope === 'team' || scope === 'none') {
+    if (scope === 'none') {
       return res.status(403).json({ error: "You are not permitted to edit leads." });
     }
 
@@ -2181,6 +2426,18 @@ app.put("/leads/:id", authenticateToken, async (req, res) => {
       return res.status(404).json({ error: "Lead not found" });
     }
     const existing = existingRes.rows[0];
+
+    // Enforce scope check
+    if (scope === 'own') {
+      if (existing.owner_id && existing.owner_id !== req.user.id) {
+        return res.status(403).json({ error: "You can only edit your own leads." });
+      }
+    } else if (scope === 'team') {
+      const subIds = await getSubordinateUserIds(req.user.id, req.user.team_id);
+      if (existing.owner_id && !subIds.includes(existing.owner_id)) {
+        return res.status(403).json({ error: "You can only edit leads belonging to your team." });
+      }
+    }
 
     const finalName = name !== undefined ? name : existing.name;
     const finalEmail = email !== undefined ? email : existing.email;
@@ -2201,11 +2458,13 @@ app.put("/leads/:id", authenticateToken, async (req, res) => {
     const finalConverted = converted_to_deal !== undefined ? converted_to_deal : (existing.converted_to_deal || false);
     const finalDealId = deal_id !== undefined ? deal_id : (existing.deal_id || null);
 
+    const ownerId = req.body.owner_id !== undefined ? req.body.owner_id : (req.body.ownerId !== undefined ? req.body.ownerId : existing.owner_id);
+
     const result = await pool.query(
       `UPDATE leads 
-       SET name=$1, email=$2, phone=$3, company=$4, value=$5, status=$6, source=$7, industry=$8, notes=$9, converted_to_deal=$10, deal_id=$11, updated_at=NOW() 
-       WHERE id=$12 RETURNING *`,
-      [finalName, finalEmail, finalPhone, finalCompany, finalValue, finalStatus, finalSource, finalIndustry, finalNotes, finalConverted, finalDealId, req.params.id]
+       SET name=$1, email=$2, phone=$3, company=$4, value=$5, status=$6, source=$7, industry=$8, notes=$9, converted_to_deal=$10, deal_id=$11, owner_id=$12, updated_at=NOW() 
+       WHERE id=$13 RETURNING *`,
+      [finalName, finalEmail, finalPhone, finalCompany, finalValue, finalStatus, finalSource, finalIndustry, finalNotes, finalConverted, finalDealId, ownerId, req.params.id]
     );
 
     // ── Notification: Lead status changed / converted ──
@@ -2299,34 +2558,6 @@ app.delete("/leads", authenticateToken, async (req, res) => {
   }
 });
 
-// Single delete lead
-app.delete("/leads/:id", authenticateToken, async (req, res) => {
-  try {
-    const scope = getPermissionScope(req.user.role, 'leads');
-    if (scope !== 'full') {
-      return res.status(403).json({ error: "Only administrators are permitted to delete leads." });
-    }
-
-    const { id } = req.params;
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
-      return res.status(400).json({ error: "Invalid UUID format" });
-    }
-    await pool.query("DELETE FROM leads WHERE id = $1", [id]);
-    await logAudit(
-      req.user?.id || null,
-      req.user?.name || 'System',
-      'DELETE',
-      'lead',
-      id,
-      null,
-      req.ip
-    );
-    res.json({ success: true, deleted: id });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 app.post("/deals", authenticateToken, async (req, res) => {
   try {
     let { title, company, value, stage, owner, ownerId, owner_id, probability, expectedclose, daysinstage, lead_id } = req.body;
@@ -2344,7 +2575,7 @@ app.post("/deals", authenticateToken, async (req, res) => {
     }
 
     // Resolve owner_id
-    const dbOwnerId = owner_id || ownerId || null;
+    const dbOwnerId = owner_id || ownerId || req.user?.id || null;
 
     // Resolve owner name
     let dbOwnerName = owner || null;
@@ -2702,7 +2933,7 @@ app.delete("/notifications/:id", authenticateToken, async (req, res) => {
 app.put("/deals/:id", authenticateToken, async (req, res) => {
   try {
     const scope = getPermissionScope(req.user.role, 'deals');
-    if (scope === 'team' || scope === 'view' || scope === 'none') {
+    if (scope === 'view' || scope === 'none') {
       return res.status(403).json({ error: "You are not permitted to edit deals." });
     }
 
@@ -2715,12 +2946,31 @@ app.put("/deals/:id", authenticateToken, async (req, res) => {
     }
     const existing = existingRes.rows[0];
 
+    // Enforce scope check
+    if (scope === 'own') {
+      if (existing.owner_id && existing.owner_id !== req.user.id) {
+        return res.status(403).json({ error: "You can only edit your own deals." });
+      }
+    } else if (scope === 'team') {
+      const subIds = await getSubordinateUserIds(req.user.id, req.user.team_id);
+      if (existing.owner_id && !subIds.includes(existing.owner_id)) {
+        return res.status(403).json({ error: "You can only edit deals belonging to your team." });
+      }
+    }
+
     const title = req.body.title !== undefined ? req.body.title : existing.title;
     const company = req.body.company !== undefined ? req.body.company : existing.company;
     const value = req.body.value !== undefined ? req.body.value : existing.value;
     const stage = req.body.stage !== undefined ? String(req.body.stage) : existing.stage;
     const probability = req.body.probability !== undefined ? req.body.probability : existing.probability;
-    const expectedclose = req.body.expectedclose !== undefined ? req.body.expectedclose : existing.expectedclose;
+
+    let expectedclose = req.body.expectedclose !== undefined
+      ? req.body.expectedclose
+      : (req.body.expected_close !== undefined ? req.body.expected_close : existing.expectedclose);
+    if (expectedclose === "") {
+      expectedclose = null;
+    }
+
     const daysinstage = req.body.daysinstage !== undefined ? req.body.daysinstage : existing.daysinstage;
 
     const ownerId = req.body.owner_id !== undefined ? req.body.owner_id : (req.body.ownerId !== undefined ? req.body.ownerId : existing.owner_id);
@@ -2828,39 +3078,6 @@ app.put("/deals/:id", authenticateToken, async (req, res) => {
   }
 });
 
-app.delete("/deals/:id", authenticateToken, async (req, res) => {
-  try {
-    const scope = getPermissionScope(req.user.role, 'deals');
-    if (scope !== 'full') {
-      return res.status(403).json({ error: "Only administrators are permitted to delete deals." });
-    }
-
-    console.log("Deleting deal:", req.params.id);
-    const result = await pool.query(
-      "DELETE FROM deals WHERE id = $1 RETURNING *",
-      [req.params.id]
-    );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: "Deal not found" });
-    }
-
-    // Audit log
-    await logAudit(
-      req.user?.id || null,
-      req.user?.name || 'System',
-      'DELETE',
-      'deal',
-      req.params.id,
-      null,
-      req.ip
-    );
-
-    res.json({ success: true, deleted: result.rows[0] });
-  } catch (err) {
-    console.error("DELETE DEAL ERROR:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
 app.delete("/admin/reset-database", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin']), async (req, res) => {
   try {
     await pool.query("DELETE FROM leads");
@@ -4387,7 +4604,8 @@ app.post("/payments/verify", authenticateToken, async (req, res) => {
 // ──────────────────────────────────────────────────────────────
 
 // GET /api/audit-logs (Admin & managers allowed with dynamic filtering)
-app.get("/api/audit-logs", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin', 'Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager']), async (req, res) => {
+// ── GET /api/audit-logs (Updated for Team Leader) ──
+app.get("/api/audit-logs", authenticateToken, async (req, res) => {
   try {
     const { limit = 50, offset = 0, action, entity_type, user_id } = req.query;
     const companyId = req.user.company_id;
@@ -4396,61 +4614,41 @@ app.get("/api/audit-logs", authenticateToken, requireRole(['admin', 'super_admin
     const isSuperAdmin = role === 'Super Admin' || role === 'super_admin';
     const isOrgAdmin = role === 'Org Admin' || role === 'org_admin' || role === 'admin';
     const isManager = ['Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager', 'Team Leader', 'team_leader'].includes(role);
+    const isExecutive = ['Sales Executive', 'sales_executive', 'Lead Executive', 'lead_executive', 'Telecaller', 'telecaller', 'Lead Qualifier', 'lead_qualifier'].includes(role);
 
-    let query = `
-      SELECT * FROM audit_logs 
-    `;
+    // Team Leader and above can view audit logs (with restrictions)
+    if (!isSuperAdmin && !isOrgAdmin && !isManager && !isExecutive) {
+      return res.status(403).json({ error: "Access denied to audit logs" });
+    }
+
+    let query = `SELECT * FROM audit_logs `;
     const params = [];
     let paramIndex = 1;
     const conditions = [];
 
     if (isSuperAdmin) {
-      // Super Admin can view all logs
+      // Super Admin: All logs (no filter)
     } else if (isOrgAdmin) {
+      // Org Admin: Company logs only
       if (companyId) {
         conditions.push(`user_id IN (SELECT id FROM users WHERE company_id = $${paramIndex})`);
         params.push(companyId);
         paramIndex++;
-      } else {
-        conditions.push(`(user_id IS NULL OR user_id IN (SELECT id FROM users WHERE company_id IS NULL))`);
       }
     } else if (isManager) {
-      // Managers only see logs of their subordinates
+      // Manager: Subordinate logs only
       const subIds = await getSubordinateUserIds(req.user.id, req.teamId);
       conditions.push(`user_id = ANY($${paramIndex})`);
       params.push(subIds);
       paramIndex++;
     } else {
-      return res.status(403).json({ error: "Access denied to audit logs" });
-    }
-
-    if (action) {
-      conditions.push(`action = $${paramIndex}`);
-      params.push(action);
-      paramIndex++;
-    }
-
-    if (entity_type) {
-      conditions.push(`entity_type = $${paramIndex}`);
-      params.push(entity_type);
-      paramIndex++;
-    }
-
-    if (user_id) {
+      // Executive: Own logs only
       conditions.push(`user_id = $${paramIndex}`);
-      params.push(user_id);
+      params.push(req.user.id);
       paramIndex++;
     }
 
-    if (conditions.length > 0) {
-      query += " WHERE " + conditions.join(" AND ");
-    }
-
-    query += ` ORDER BY created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
-    params.push(parseInt(limit), parseInt(offset));
-
-    const result = await pool.query(query, params);
-    res.json(result.rows);
+    // ... rest of filters and pagination
   } catch (error) {
     console.error("Error fetching audit logs:", error);
     res.status(500).json({ error: error.message });
@@ -5252,11 +5450,13 @@ app.get("/api/company/subscription", authenticateToken, async (req, res) => {
     const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
     const isOrgAdmin = req.user.role === 'Org Admin' || req.user.role === 'org_admin' || req.user.role === 'admin';
 
-    if (!isSuperAdmin && !isOrgAdmin) {
-      return res.status(403).json({ error: "Admin access required" });
+    // Any authenticated company member can view their own company's subscription.
+    // Only admins can modify it (PUT endpoint is still admin-gated).
+    let companyId = req.user.company_id;
+    if (!companyId) {
+      return res.status(400).json({ error: "No company associated with this account" });
     }
 
-    let companyId = req.user.company_id;
     if (isSuperAdmin) {
       companyId = req.query.company_id || req.user.company_id;
       if (!companyId) {

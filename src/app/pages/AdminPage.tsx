@@ -30,11 +30,11 @@ const ALL_HIERARCHY_ROLES = [
 
 // Who can create whom (Creation Rules)
 export const ROLE_CREATION_RULES: Record<string, string[]> = {
-  'Super Admin': ['Org Admin'],
-  'super_admin': ['Org Admin'],
-  'Org Admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
-  'org_admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
-  'admin': ['Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
+  'Super Admin': ['Org Admin', 'admin'],
+  'super_admin': ['Org Admin', 'admin'],
+  'Org Admin': ['Org Admin', 'admin', 'Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
+  'org_admin': ['Org Admin', 'admin', 'Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
+  'admin': ['Org Admin', 'admin', 'Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
   'Sales Manager': ['Team Leader', 'Sales Executive'],
   'sales_manager': ['Team Leader', 'Sales Executive'],
   'Lead Manager': ['Lead Executive', 'Telecaller', 'Lead Qualifier'],
@@ -49,21 +49,22 @@ export const ROLE_CREATION_RULES: Record<string, string[]> = {
 
 // Who reports to whom (Reporting Rules)
 export const REPORTING_RULES: Record<string, string[]> = {
-  'Org Admin': ['Super Admin'],
-  'org_admin': ['Super Admin', 'super_admin'],
-  'Sales Manager': ['Org Admin'],
-  'sales_manager': ['Org Admin', 'org_admin'],
-  'Lead Manager': ['Org Admin'],
-  'lead_manager': ['Org Admin', 'org_admin'],
-  'Team Leader': ['Sales Manager', 'Org Admin'],
-  'team_leader': ['Sales Manager', 'sales_manager', 'Org Admin', 'org_admin'],
-  'Sales Executive': ['Team Leader', 'Sales Manager'],
+  'Org Admin': ['Super Admin', 'super_admin', 'Org Admin', 'org_admin', 'admin'],
+  'org_admin': ['Super Admin', 'super_admin', 'Org Admin', 'org_admin', 'admin'],
+  'admin': ['Super Admin', 'super_admin', 'Org Admin', 'org_admin', 'admin'],
+  'Sales Manager': ['Org Admin', 'org_admin', 'admin'],
+  'sales_manager': ['Org Admin', 'org_admin', 'admin'],
+  'Lead Manager': ['Org Admin', 'org_admin', 'admin'],
+  'lead_manager': ['Org Admin', 'org_admin', 'admin'],
+  'Team Leader': ['Sales Manager', 'sales_manager', 'Org Admin', 'org_admin', 'admin'],
+  'team_leader': ['Sales Manager', 'sales_manager', 'Org Admin', 'org_admin', 'admin'],
+  'Sales Executive': ['Team Leader', 'team_leader', 'Sales Manager', 'sales_manager'],
   'sales_executive': ['Team Leader', 'team_leader', 'Sales Manager', 'sales_manager'],
-  'Lead Executive': ['Lead Manager'],
+  'Lead Executive': ['Lead Manager', 'lead_manager'],
   'lead_executive': ['Lead Manager', 'lead_manager'],
-  'Telecaller': ['Lead Manager'],
+  'Telecaller': ['Lead Manager', 'lead_manager'],
   'telecaller': ['Lead Manager', 'lead_manager'],
-  'Lead Qualifier': ['Lead Manager'],
+  'Lead Qualifier': ['Lead Manager', 'lead_manager'],
   'lead_qualifier': ['Lead Manager', 'lead_manager']
 };
 
@@ -71,6 +72,7 @@ export const REPORTING_RULES: Record<string, string[]> = {
 export const ALL_ROLES = [
   'Super Admin',
   'Org Admin',
+  'admin',
   'Sales Manager',
   'Lead Manager',
   'Team Leader',
@@ -675,16 +677,6 @@ export default function AdminPage() {
             Subscriptions
           </button>
         )}
-        {(role === 'Super Admin' || role === 'super_admin') && (
-          <button
-            onClick={() => { setActiveTab("permissions"); fetchRolePermissions(); }}
-            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activeTab === "permissions" ? "border-indigo-600 text-indigo-600" : "border-transparent text-slate-500"
-              }`}
-          >
-            <Shield size={14} className="inline mr-2" />
-            Role Permissions
-          </button>
-        )}
       </div>
 
 
@@ -1215,79 +1207,7 @@ export default function AdminPage() {
                     );
                   })
                 )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {activeTab === "permissions" && (
-        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm p-6 mb-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-slate-800">Role Permissions Matrix</h3>
-            <button
-              onClick={fetchRolePermissions}
-              className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 flex items-center gap-2"
-            >
-              <RefreshCw size={14} className={rolePermissionsLoading ? "animate-spin" : ""} />
-              Refresh
-            </button>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-slate-100 bg-slate-50">
-                  <th className="text-left py-3 px-4 text-xs text-slate-500 font-medium">Role</th>
-                  <th className="text-left py-3 px-3 text-xs text-slate-500 font-medium">Module</th>
-                  <th className="text-left py-3 px-3 text-xs text-slate-500 font-medium">Permission</th>
-                  <th className="text-left py-3 px-3 text-xs text-slate-500 font-medium">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50">
-                {rolePermissionsLoading ? (
-                  <tr>
-                    <td colSpan={4} className="py-12 text-center text-slate-400">
-                      <Loader2 size={24} className="animate-spin mx-auto mb-2 text-indigo-400" />
-                      Loading permissions...
-                    </td>
-                  </tr>
-                ) : rolePermissions.length === 0 ? (
-                  <tr>
-                    <td colSpan={4} className="py-12 text-center text-slate-400">No permissions found</td>
-                  </tr>
-                ) : (
-                  rolePermissions.map((perm: any) => (
-                    <tr key={perm.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="py-3 px-4 text-xs font-medium text-slate-800">{perm.role}</td>
-                      <td className="py-3 px-3 text-xs text-slate-600">{perm.module}</td>
-                      <td className="py-3 px-3">
-                        <select
-                          value={perm.permission}
-                          onChange={(e) => updateRolePermission(perm.id, e.target.value)}
-                          className="text-xs px-2 py-1 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                        >
-                          <option value="none">None</option>
-                          <option value="view">View</option>
-                          <option value="own">Own</option>
-                          <option value="team">Team</option>
-                          <option value="dept">Dept</option>
-                          <option value="full">Full</option>
-                        </select>
-                      </td>
-                      <td className="py-3 px-3">
-                        <button
-                          onClick={() => deleteRolePermission(perm.id)}
-                          className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500 transition-colors"
-                          title="Delete Permission"
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
+               </tbody>
             </table>
           </div>
         </div>

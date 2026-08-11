@@ -104,6 +104,46 @@ async function createCompanyNotification(companyId, type, title, message, link =
 }
 
 /**
+ * Notify only Super Admin(s) — used when a regular admin/user creates a lead/deal/etc.
+ */
+async function notifySuperAdmins(type, title, message, link = null, priority = 'medium', metadata = {}) {
+    try {
+        const superAdmins = await pool.query(
+            `SELECT id FROM users WHERE role IN ('super_admin', 'Super Admin')`
+        );
+        const results = [];
+        for (const admin of superAdmins.rows) {
+            const notif = await createNotification(admin.id, type, title, message, link, priority, metadata);
+            if (notif) results.push(notif);
+        }
+        console.log(`✅ Notified ${results.length} super admin(s): "${title}"`);
+        return results;
+    } catch (error) {
+        console.error('Failed to notify super admins:', error);
+        return [];
+    }
+}
+
+/**
+ * Notify ALL users (used when Super Admin assigns something or sends a broadcast notice)
+ */
+async function notifyAllUsers(type, title, message, link = null, priority = 'medium', metadata = {}) {
+    try {
+        const allUsers = await pool.query(`SELECT id FROM users`);
+        const results = [];
+        for (const u of allUsers.rows) {
+            const notif = await createNotification(u.id, type, title, message, link, priority, metadata);
+            if (notif) results.push(notif);
+        }
+        console.log(`✅ Broadcast notification sent to ${results.length} user(s): "${title}"`);
+        return results;
+    } catch (error) {
+        console.error('Failed to notify all users:', error);
+        return [];
+    }
+}
+
+/**
  * Create bulk notifications for multiple specific users
  */
 async function createBulkNotifications(userIds, type, title, message, link = null, priority = 'medium', metadata = {}) {
@@ -155,6 +195,8 @@ function getTypeLabel(type) {
 module.exports = {
     createNotification,
     createCompanyNotification,
+    notifySuperAdmins,
+    notifyAllUsers,
     createBulkNotifications,
     NOTIFICATION_TYPES,
     getPriority,

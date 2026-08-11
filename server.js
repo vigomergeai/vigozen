@@ -1089,8 +1089,7 @@ app.post("/tickets", authenticateToken, async (req, res) => {
     const ticket = result.rows[0];
 
     // Company-wide notification for new ticket
-    await notificationService.createCompanyNotification(
-      companyId,
+    await notificationService.notifySuperAdmins(
       'ticket_created',
       "🎫 New Support Ticket",
       `New ticket "${ticket.title}" has been created`,
@@ -1140,8 +1139,7 @@ app.put("/tickets/:id", authenticateToken, async (req, res) => {
 
     // ── Notification: Ticket closed ──
     if (status && existing.status !== status && (String(status).toLowerCase() === 'closed')) {
-      await notificationService.createCompanyNotification(
-        companyId,
+      await notificationService.notifySuperAdmins(
         'ticket_closed',
         "Ticket Closed",
         `Ticket "${ticket.title}" has been closed`,
@@ -1975,8 +1973,7 @@ app.post("/users", authenticateToken, async (req, res) => {
 
     // Company-wide notification for new user
     if (companyId) {
-      await notificationService.createCompanyNotification(
-        companyId,
+      await notificationService.notifySuperAdmins(
         'user_added',
         "👤 Team Member Joined",
         `${name} has joined the team as ${targetRole}`,
@@ -2445,8 +2442,7 @@ app.post("/leads", authenticateToken, enforceStorageLimit(0.01), async (req, res
       }
 
       // Company-wide notification for all new leads
-      await notificationService.createCompanyNotification(
-        companyId,
+      await notificationService.notifySuperAdmins(
         leadValue >= 50000 ? 'high_value_lead' : 'lead_created',
         leadValue >= 50000 ? "⭐ High Value Lead Created" : "🆕 New Lead Created",
         `New lead "${lead.name}" ${leadValue > 0 ? `worth ₹${leadValue.toLocaleString()}` : ''} has been created`,
@@ -2531,8 +2527,7 @@ app.put("/leads/:id", authenticateToken, async (req, res) => {
 
       // Notify if status changed
       if (status && existing.status !== finalStatus) {
-        await notificationService.createCompanyNotification(
-          companyId,
+        await notificationService.notifySuperAdmins(
           'lead_status_changed',
           "Lead Status Updated",
           `Lead "${lead.name}" status changed from ${existing.status} to ${finalStatus}`,
@@ -2544,8 +2539,7 @@ app.put("/leads/:id", authenticateToken, async (req, res) => {
 
       // Notify if converted to deal
       if (finalConverted && !existing.converted_to_deal) {
-        await notificationService.createCompanyNotification(
-          companyId,
+        await notificationService.notifySuperAdmins(
           'lead_converted',
           "🎉 Lead Converted to Deal",
           `Lead "${lead.name}" has been converted to a deal`,
@@ -2717,8 +2711,7 @@ app.post("/deals", authenticateToken, async (req, res) => {
 
     // Notify company about new deal
     if (isWon) {
-      await notificationService.createCompanyNotification(
-        companyId,
+      await notificationService.notifySuperAdmins(
         'deal_won',
         "🎉 Deal Won!",
         `Deal "${deal.title}" worth ₹${parseFloat(deal.value || 0).toLocaleString()} has been closed`,
@@ -2727,8 +2720,7 @@ app.post("/deals", authenticateToken, async (req, res) => {
         { deal_value: deal.value, deal_title: deal.title }
       ).catch(err => console.error("Deal won notification error:", err));
     } else {
-      await notificationService.createCompanyNotification(
-        companyId,
+      await notificationService.notifySuperAdmins(
         'deal_created',
         "💼 New Deal Created",
         `New deal "${deal.title}" for ${deal.company || 'client'} has been created`,
@@ -3131,8 +3123,7 @@ app.put("/deals/:id", authenticateToken, async (req, res) => {
       const lowerStage = String(deal.stage).toLowerCase();
       if (lowerStage === 'won') {
         // Deal won notification
-        await notificationService.createCompanyNotification(
-          companyId,
+        await notificationService.notifySuperAdmins(
           'deal_won',
           "🎉 Deal Won!",
           `Deal "${deal.title}" worth ₹${parseFloat(deal.value || 0).toLocaleString()} has been won`,
@@ -3142,8 +3133,7 @@ app.put("/deals/:id", authenticateToken, async (req, res) => {
         ).catch(err => console.error("Company deal won notification error:", err));
       } else if (lowerStage === 'lost') {
         // Deal lost notification
-        await notificationService.createCompanyNotification(
-          companyId,
+        await notificationService.notifySuperAdmins(
           'deal_lost',
           "Deal Lost",
           `Deal "${deal.title}" has been marked as lost`,
@@ -3153,8 +3143,7 @@ app.put("/deals/:id", authenticateToken, async (req, res) => {
         ).catch(err => console.error("Deal lost notification error:", err));
       } else {
         // Stage changed notification
-        await notificationService.createCompanyNotification(
-          companyId,
+        await notificationService.notifySuperAdmins(
           'deal_status_changed',
           "Deal Stage Updated",
           `Deal "${deal.title}" moved from ${existing.stage} to ${deal.stage}`,

@@ -2396,6 +2396,11 @@ const enforceStorageLimit = (estimateMb = 0.01) => async (req, res, next) => {
 
 app.post("/leads", authenticateToken, enforceStorageLimit(0.01), async (req, res) => {
   try {
+    // ── Permission check ──
+    const scope = getPermissionScope(req.user.role, 'leads');
+    if (scope === 'none') {
+      return res.status(403).json({ error: "You are not permitted to create leads." });
+    }
     const { name, email, phone, company, value, status, source, industry, notes, probability, aiscore } = req.body;
 
     // Get owner_id and company_id
@@ -2610,8 +2615,57 @@ app.delete("/leads", authenticateToken, async (req, res) => {
   }
 });
 
+// Single lead delete
+app.delete("/leads/:id", authenticateToken, async (req, res) => {
+  try {
+    const scope = getPermissionScope(req.user.role, 'leads');
+    if (scope !== 'full') {
+      return res.status(403).json({ error: "Only administrators are permitted to delete leads." });
+    }
+
+    const { id } = req.params;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      return res.status(400).json({ error: "Invalid lead ID" });
+    }
+
+    // Verify the lead exists and belongs to the same company (Super Admin bypasses)
+    const existingRes = await pool.query("SELECT id, company_id FROM leads WHERE id = $1", [id]);
+    if (existingRes.rows.length === 0) {
+      return res.status(404).json({ error: "Lead not found" });
+    }
+    const existing = existingRes.rows[0];
+
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    if (!isSuperAdmin && existing.company_id !== req.user.company_id) {
+      return res.status(403).json({ error: "You can only delete leads within your company." });
+    }
+
+    await pool.query("DELETE FROM leads WHERE id = $1", [id]);
+
+    await logAudit(
+      req.user?.id || null,
+      req.user?.name || 'System',
+      'DELETE',
+      'lead',
+      id,
+      { id },
+      req.ip
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Delete lead error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post("/deals", authenticateToken, async (req, res) => {
   try {
+    // ── Permission check ──
+    const scope = getPermissionScope(req.user.role, 'deals');
+    if (scope === 'none') {
+      return res.status(403).json({ error: "You are not permitted to create deals." });
+    }
     let { title, company, value, stage, owner, ownerId, owner_id, probability, expectedclose, daysinstage, lead_id } = req.body;
 
     // Normalize stage
@@ -3130,7 +3184,51 @@ app.put("/deals/:id", authenticateToken, async (req, res) => {
   }
 });
 
+// Single deal delete
+app.delete("/deals/:id", authenticateToken, async (req, res) => {
+  try {
+    const scope = getPermissionScope(req.user.role, 'deals');
+    if (scope !== 'full') {
+      return res.status(403).json({ error: "Only administrators are permitted to delete deals." });
+    }
+
+    const { id } = req.params;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      return res.status(400).json({ error: "Invalid deal ID" });
+    }
+
+    const existingRes = await pool.query("SELECT id, company_id FROM deals WHERE id = $1", [id]);
+    if (existingRes.rows.length === 0) {
+      return res.status(404).json({ error: "Deal not found" });
+    }
+    const existing = existingRes.rows[0];
+
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    if (!isSuperAdmin && existing.company_id !== req.user.company_id) {
+      return res.status(403).json({ error: "You can only delete deals within your company." });
+    }
+
+    await pool.query("DELETE FROM deals WHERE id = $1", [id]);
+
+    await logAudit(
+      req.user?.id || null,
+      req.user?.name || 'System',
+      'DELETE',
+      'deal',
+      id,
+      { id },
+      req.ip
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Delete deal error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.delete("/admin/reset-database", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin']), async (req, res) => {
+
   try {
     await pool.query("DELETE FROM leads");
     await pool.query("DELETE FROM deals");
@@ -6387,7 +6485,137 @@ app.post("/api/invoices/:id/mark-paid", authenticateToken, async (req, res) => {
   }
 });
 
+// ── EMPLOYEE DATA TRANSFER ──
+// Transfer only active leads and open deals. History stays with original employee.
+app.post("/admin/users/:userId/transfer-data", authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { transfer_to } = req.body;
+    const currentUser = req.user;
+
+    if (!transfer_to) {
+      return res.status(400).json({ error: "transfer_to is required" });
+    }
+
+    // 1. Authorization – only Super Admin and Org Admin / admin
+    const isSuperAdmin = currentUser.role === 'Super Admin' || currentUser.role === 'super_admin';
+    const isOrgAdmin   = currentUser.role === 'Org Admin'   || currentUser.role === 'org_admin' || currentUser.role === 'admin';
+    if (!isSuperAdmin && !isOrgAdmin) {
+      return res.status(403).json({ error: "Only Super Admin or Org Admin can transfer employee data" });
+    }
+
+    // 2. Prevent self-transfer
+    if (userId === currentUser.id) {
+      return res.status(400).json({ error: "Cannot transfer data to yourself" });
+    }
+
+    // 3. Find the leaving employee
+    const leavingRes = await pool.query(
+      "SELECT id, name, email, role, company_id FROM users WHERE id = $1",
+      [userId]
+    );
+    if (leavingRes.rows.length === 0) {
+      return res.status(404).json({ error: "Employee not found" });
+    }
+    const leaving = leavingRes.rows[0];
+
+    // 4. Org Admin scope check
+    if (isOrgAdmin && !isSuperAdmin && leaving.company_id !== currentUser.company_id) {
+      return res.status(403).json({ error: "Cannot transfer data from another company" });
+    }
+
+    // 5. Find the receiving employee
+    const receivingRes = await pool.query(
+      "SELECT id, name, email, role, company_id FROM users WHERE id = $1",
+      [transfer_to]
+    );
+    if (receivingRes.rows.length === 0) {
+      return res.status(404).json({ error: "Receiving employee not found" });
+    }
+    const receiving = receivingRes.rows[0];
+
+    // 6. Both must be in the same company
+    if (leaving.company_id !== receiving.company_id) {
+      return res.status(400).json({ error: "Both employees must be in the same company" });
+    }
+
+    // 7. Count & transfer active leads (change only owner_id, nothing else)
+    const leadsRes = await pool.query(
+      `UPDATE leads
+         SET owner_id  = $1,
+             updated_at = NOW()
+       WHERE owner_id = $2
+         AND LOWER(status) NOT IN ('won', 'lost')
+       RETURNING id`,
+      [transfer_to, userId]
+    );
+    const leadsCount = leadsRes.rowCount ?? 0;
+
+    // 8. Count & transfer open deals (change only owner_id, nothing else)
+    const dealsRes = await pool.query(
+      `UPDATE deals
+         SET owner_id  = $1,
+             updated_at = NOW()
+       WHERE owner_id = $2
+         AND stage NOT IN ('Won', 'Lost')
+       RETURNING id`,
+      [transfer_to, userId]
+    );
+    const dealsCount = dealsRes.rowCount ?? 0;
+
+    // 9. Create transfer log
+    await pool.query(
+      `INSERT INTO employee_transfer_logs
+         (from_user_id, to_user_id, transferred_by, leads_transferred, deals_transferred, transferred_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())`,
+      [userId, transfer_to, currentUser.id, leadsCount, dealsCount]
+    );
+
+    // 10. Deactivate the leaving employee
+    await pool.query(
+      `UPDATE users
+         SET is_active      = false,
+             status         = 'Inactive',
+             deactivated_at = NOW()
+       WHERE id = $1`,
+      [userId]
+    );
+
+    // 11. Audit log
+    await logAudit(
+      currentUser.id,
+      currentUser.name || 'System',
+      'TRANSFER_EMPLOYEE_DATA',
+      'user',
+      userId,
+      {
+        from_user: leaving.name,
+        to_user: receiving.name,
+        leads_transferred: leadsCount,
+        deals_transferred: dealsCount
+      },
+      req.ip
+    );
+
+    res.json({
+      success: true,
+      message: `Successfully transferred ${leadsCount} leads and ${dealsCount} deals from ${leaving.name} to ${receiving.name}`,
+      transferred: {
+        from: leaving.name,
+        to: receiving.name,
+        leads: leadsCount,
+        deals: dealsCount
+      }
+    });
+
+  } catch (error) {
+    console.error("Employee data transfer error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.listen(5000, "0.0.0.0", () => {
+
   console.log("Server running on port 5000");
   startNotificationWorker();
  startInsightCron();

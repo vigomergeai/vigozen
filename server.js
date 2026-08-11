@@ -1,3 +1,4 @@
+require("dotenv").config();
 const express = require("express");
 const multer = require("multer");
 const XLSX = require("xlsx");
@@ -11,12 +12,33 @@ const pool = require("./db");
 const { getPriorityLeads } = require("./leadScoring");
 const { generateInsight } = require("./geminiInsight");
 const { getTeamStats } = require("./teamStats");
+const { startInsightCron } = require("./insightCron");
 const notificationQueue = require("./server/notificationQueue");
 const notificationService = require("./server/notificationService");
 const { startNotificationWorker } = require("./server/notificationWorker");
 const path = require("path");
 
 require("dotenv").config();
+async function generateWithRetry(model, prompt, retries = 3, delay = 2000) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await model.generateContent(prompt);
+    } catch (err) {
+      const isRetryable = err.status === 503 || err.status === 429;
+      if (!isRetryable || attempt === retries) throw err;
+     let waitTime = delay;
+      const retryInfo = err.errorDetails?.find(d => d['@type']?.includes('RetryInfo'));
+      if (retryInfo?.retryDelay) {
+        const parsed = parseInt(retryInfo.retryDelay);
+        waitTime = Math.min(parsed * 1000, 8000); // cap so users aren't stuck too long
+      }
+      console.log(`Gemini ${err.status} error, retrying in ${waitTime}ms (attempt ${attempt}/${retries})`);
+      await new Promise(res => setTimeout(res, waitTime));
+      delay *= 2;
+    }
+  }
+}
+
 
 
 
@@ -2343,7 +2365,36 @@ app.get("/settings/:userId", authenticateToken, async (req, res) => {
   res.json(result.rows[0]);
 });
 // Leads POST
-app.post("/leads", authenticateToken, async (req, res) => {
+const checkStorageLimit = async (companyId, addMb = 0) => {
+  const { rows } = await pool.query(
+    "SELECT storage_limit_mb, storage_used_mb FROM companies WHERE id = $1",
+    [companyId]
+  );
+  if (!rows.length) return { allowed: false, message: "Company not found." };
+  const { storage_limit_mb, storage_used_mb } = rows[0];
+  if (storage_used_mb + addMb > storage_limit_mb) {
+    return { allowed: false, message: "Storage limit reached. Please upgrade your plan." };
+  }
+  return { allowed: true };
+};
+
+const incrementStorageUsed = async (companyId, addMb) => {
+  await pool.query(
+    "UPDATE companies SET storage_used_mb = storage_used_mb + $1 WHERE id = $2",
+    [addMb, companyId]
+  );
+};
+
+const enforceStorageLimit = (estimateMb = 0.01) => async (req, res, next) => {
+  const check = await checkStorageLimit(req.user.company_id, estimateMb);
+  if (!check.allowed) {
+    return res.status(402).json({ error: check.message });
+  }
+  req.storageMbToAdd = estimateMb;
+  next();
+};
+
+app.post("/leads", authenticateToken, enforceStorageLimit(0.01), async (req, res) => {
   try {
     const { name, email, phone, company, value, status, source, industry, notes, probability, aiscore } = req.body;
 
@@ -2402,6 +2453,7 @@ app.post("/leads", authenticateToken, async (req, res) => {
       console.error("Notification error:", notifErr);
     }
 
+    await incrementStorageUsed(companyId, 0.01);
     res.json(result.rows[0]);
   } catch (err) {
     console.error("POST LEAD ERROR:", err);
@@ -3236,6 +3288,84 @@ app.get("/trial/:userId", async (req, res) => {
   }
 });
 // Signup
+const seedCompanyPermissions = async (compId) => {
+  const permissions = [
+    { role: 'Super Admin', module: 'leads', permission: 'full' },
+    { role: 'Super Admin', module: 'deals', permission: 'full' },
+    { role: 'Super Admin', module: 'users', permission: 'full' },
+    { role: 'Super Admin', module: 'reports', permission: 'full' },
+    { role: 'Super Admin', module: 'settings', permission: 'full' },
+    { role: 'Super Admin', module: 'billing', permission: 'full' },
+    { role: 'Super Admin', module: 'tickets', permission: 'full' },
+    { role: 'Super Admin', module: 'activities', permission: 'full' },
+    { role: 'Org Admin', module: 'leads', permission: 'full' },
+    { role: 'Org Admin', module: 'deals', permission: 'full' },
+    { role: 'Org Admin', module: 'users', permission: 'full' },
+    { role: 'Org Admin', module: 'reports', permission: 'full' },
+    { role: 'Org Admin', module: 'settings', permission: 'full' },
+    { role: 'Org Admin', module: 'billing', permission: 'full' },
+    { role: 'Org Admin', module: 'tickets', permission: 'full' },
+    { role: 'Org Admin', module: 'activities', permission: 'full' },
+    { role: 'Sales Manager', module: 'leads', permission: 'dept' },
+    { role: 'Sales Manager', module: 'deals', permission: 'dept' },
+    { role: 'Sales Manager', module: 'users', permission: 'team' },
+    { role: 'Sales Manager', module: 'reports', permission: 'dept' },
+    { role: 'Sales Manager', module: 'settings', permission: 'none' },
+    { role: 'Sales Manager', module: 'billing', permission: 'none' },
+    { role: 'Sales Manager', module: 'tickets', permission: 'dept' },
+    { role: 'Sales Manager', module: 'activities', permission: 'dept' },
+    { role: 'Team Leader', module: 'leads', permission: 'team' },
+    { role: 'Team Leader', module: 'deals', permission: 'team' },
+    { role: 'Team Leader', module: 'users', permission: 'team' },
+    { role: 'Team Leader', module: 'reports', permission: 'team' },
+    { role: 'Team Leader', module: 'settings', permission: 'none' },
+    { role: 'Team Leader', module: 'billing', permission: 'none' },
+    { role: 'Team Leader', module: 'tickets', permission: 'team' },
+    { role: 'Team Leader', module: 'activities', permission: 'team' },
+    { role: 'Sales Executive', module: 'leads', permission: 'own' },
+    { role: 'Sales Executive', module: 'deals', permission: 'own' },
+    { role: 'Sales Executive', module: 'users', permission: 'none' },
+    { role: 'Sales Executive', module: 'reports', permission: 'own' },
+    { role: 'Sales Executive', module: 'settings', permission: 'none' },
+    { role: 'Sales Executive', module: 'billing', permission: 'none' },
+    { role: 'Lead Manager', module: 'leads', permission: 'dept' },
+    { role: 'Lead Manager', module: 'deals', permission: 'dept' },
+    { role: 'Lead Manager', module: 'reports', permission: 'dept' },
+    { role: 'Lead Manager', module: 'users', permission: 'team' },
+    { role: 'Lead Manager', module: 'settings', permission: 'none' },
+    { role: 'Lead Manager', module: 'billing', permission: 'none' },
+    { role: 'admin', module: 'leads', permission: 'full' },
+    { role: 'admin', module: 'deals', permission: 'full' },
+    { role: 'admin', module: 'users', permission: 'full' },
+    { role: 'admin', module: 'reports', permission: 'full' },
+    { role: 'admin', module: 'settings', permission: 'full' },
+    { role: 'admin', module: 'billing', permission: 'full' },
+    { role: 'admin', module: 'tickets', permission: 'full' },
+    { role: 'admin', module: 'activities', permission: 'full' },
+    { role: 'sales', module: 'leads', permission: 'own' },
+    { role: 'sales', module: 'deals', permission: 'own' },
+    { role: 'sales', module: 'users', permission: 'none' },
+    { role: 'sales', module: 'reports', permission: 'own' },
+    { role: 'sales', module: 'settings', permission: 'none' },
+    { role: 'sales', module: 'billing', permission: 'none' },
+    { role: 'sales', module: 'tickets', permission: 'own' },
+    { role: 'sales', module: 'activities', permission: 'own' }
+  ];
+
+  for (const p of permissions) {
+    const check = await pool.query(
+      "SELECT 1 FROM role_permissions WHERE company_id = $1 AND role = $2 AND module = $3",
+      [compId, p.role, p.module]
+    );
+    if (check.rows.length === 0) {
+      await pool.query(
+        "INSERT INTO role_permissions (company_id, role, module, permission) VALUES ($1, $2, $3, $4)",
+        [compId, p.role, p.module, p.permission]
+      ).catch(() => { });
+    }
+  }
+};
+
 app.post("/auth/signup", async (req, res) => {
   try {
     const { name, email, password, adminKey } = req.body;
@@ -3257,8 +3387,13 @@ app.post("/auth/signup", async (req, res) => {
     const isAdmin = !!(process.env.ADMIN_KEY && adminKey === process.env.ADMIN_KEY);
     const role = isAdmin ? "admin" : "sales";
     const department = isAdmin ? "Admin" : "Sales"; // ← ADD THIS
-    const companyResult = await pool.query("SELECT id FROM companies ORDER BY created_at ASC LIMIT 1");
-    const companyId = companyResult.rows[0] ? companyResult.rows[0].id : null;
+    const companyName = req.body.companyName || `${name}'s Company`;
+    const newCompanyResult = await pool.query(
+      "INSERT INTO companies (name) VALUES ($1) RETURNING id",
+      [companyName]
+    );
+    const companyId = newCompanyResult.rows[0].id;
+    await seedCompanyPermissions(companyId);
     const result = await pool.query(
       `INSERT INTO users
       (name, email, password, role, company_id)
@@ -5359,6 +5494,32 @@ app.get("/ai-insights", authenticateToken, async (req, res) => {
     res.status(500).json({ error: "Failed to fetch AI insights" });
   }
 });
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+const supportGenAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+app.post("/support/ai-chat", authenticateToken, async (req, res) => {
+  try {
+    const { message } = req.body;
+    if (!message || !message.trim()) {
+      return res.status(400).json({ error: "Message is required" });
+    }
+
+    const model = supportGenAI.getGenerativeModel({ model: "gemini-flash-latest" });
+    const prompt = `You are the Vigozen CRM AI Assistant. Answer the user's question about using the CRM (leads, deals, pipeline, integrations, reports, billing) concisely and helpfully, in 2-4 sentences. If unrelated to the CRM, politely redirect them to ask about CRM features.
+
+User question: ${message}`;
+
+    const result = await generateWithRetry(model, prompt);
+    res.json({ reply: result.response.text() });
+  } catch (err) {
+    console.error("SUPPORT AI CHAT ERROR:", err);
+    if (err.status === 429 || err.status === 503) {
+      return res.status(503).json({ error: "Our AI assistant is getting a lot of requests right now. Please wait about a minute and try again." });
+    }
+    res.status(500).json({ error: "AI assistant is temporarily unavailable" });
+  }
+});
+
 app.post("/ai-insights/generate", authenticateToken, async (req, res) => {
   try {
     const stats = await getTeamStats();
@@ -6229,6 +6390,7 @@ app.post("/api/invoices/:id/mark-paid", authenticateToken, async (req, res) => {
 app.listen(5000, "0.0.0.0", () => {
   console.log("Server running on port 5000");
   startNotificationWorker();
+ startInsightCron();
 });
 
 // Start cron job for background sync
@@ -6236,3 +6398,46 @@ require('./server/cronSync');
 console.log('⏰ Cron sync job started');
 
 // Nodemon trigger restart comment
+
+// ── Facebook Lead Ads Webhook ──
+const FB_WEBHOOK_VERIFY_TOKEN = process.env.FB_WEBHOOK_VERIFY_TOKEN || "vigozen_fb_verify_2026";
+
+// Verification handshake (Facebook calls this once when you set up the webhook)
+app.get("/api/integrations/facebook/webhook", (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+  if (mode === "subscribe" && token === FB_WEBHOOK_VERIFY_TOKEN) {
+    console.log("Facebook webhook verified");
+    return res.status(200).send(challenge);
+  }
+  return res.sendStatus(403);
+});
+
+// Receives real-time lead notifications
+app.post("/api/integrations/facebook/webhook", async (req, res) => {
+  try {
+    console.log("Facebook webhook payload:", JSON.stringify(req.body));
+    const entries = req.body.entry || [];
+    for (const entry of entries) {
+      const changes = entry.changes || [];
+      for (const change of changes) {
+        if (change.field === "leadgen") {
+          const leadgenId = change.value.leadgen_id;
+          const pageId = change.value.page_id;
+          const formId = change.value.form_id;
+          await pool.query(
+            `INSERT INTO ad_sync_log (platform, external_lead_id, page_id, form_id, status, created_at)
+             VALUES ($1, $2, $3, $4, 'received', NOW())`,
+            ["facebook", leadgenId, pageId, formId]
+          );
+          console.log("New Facebook lead received:", leadgenId);
+        }
+      }
+    }
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("Facebook webhook error:", err);
+    res.sendStatus(500);
+  }
+});

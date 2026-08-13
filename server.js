@@ -6554,7 +6554,7 @@ app.post("/admin/users/:userId/transfer-data", authenticateToken, async (req, re
          SET owner_id  = $1,
              updated_at = NOW()
        WHERE owner_id = $2
-         AND LOWER(status) NOT IN ('won', 'lost')
+         AND LOWER(status::text) NOT IN ('won', 'lost')
        RETURNING id`,
       [transfer_to, userId]
     );

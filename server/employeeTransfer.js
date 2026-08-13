@@ -24,7 +24,7 @@ const transferEmployeeData = async (leavingUserId, targetUserId, performedBy) =>
         // Verify both users exist
         const userCheck = await pool.query(
             "SELECT id, name, email FROM users WHERE id = ANY($1::uuid[])",
-            [leavingUserId, targetUserId]
+            [[leavingUserId, targetUserId]]
         );
 
         if (userCheck.rows.length !== 2) {

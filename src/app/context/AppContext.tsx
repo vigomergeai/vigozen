@@ -24,7 +24,7 @@ export interface UserProfile {
   id: string;
   email: string;
   name: string;
-  role: "super_admin" | "admin" | "manager" | "sales" | "viewer" | "user" | "Sales Executive" | "Sales Manager" | "Team Leader" | "Lead Manager" | "Org Admin" | "Super Admin" | string;
+  role: "super_admin" | "org_admin" | "manager" | "sales" | "viewer" | "user" | "Sales Executive" | "Sales Manager" | "Team Leader" | "Lead Manager" | "Org Admin" | "Super Admin" | string;
   employeeId: string | null;
   department: string;
   isActive: boolean;
@@ -224,6 +224,9 @@ interface AppContextType {
   toggleUserAccess: (userId: string, isActive: boolean) => Promise<boolean>;
   resetUserPassword: (userId: string, password: string) => Promise<boolean>;
   loadUsers: () => Promise<void>;
+  userMap: Record<string, UserProfile>;
+  getUserById: (userId: string) => UserProfile | undefined;
+  fetchUser: (userId: string) => Promise<UserProfile | null>;
 
   leadComments: LeadComment[];
   loadingComments: boolean;
@@ -340,6 +343,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [authLoading, setAuthLoading] = useState(true);
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
+  const [userMap, setUserMap] = useState<Record<string, UserProfile>>({});
+
+  useEffect(() => {
+    const map: Record<string, UserProfile> = {};
+    for (const u of users) {
+      map[u.id] = u;
+    }
+    setUserMap(map);
+  }, [users]);
   const [leadComments, setLeadComments] = useState<LeadComment[]>([]);
   const [loadingComments, setLoadingComments] = useState(false);
   const [notificationItems, setNotificationItems] = useState<any[]>([]);
@@ -347,7 +359,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [subscription, setSubscription] = useState<SubscriptionStatus | null>(null);
   const [subscriptionLoading, setSubscriptionLoading] = useState(false);
   // ── App State ──────────────────────────────────────────────────────────────
-  const [role, setRole] = useState<Role>("admin");
+  const [role, setRole] = useState<Role>("org_admin");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [deals, setDeals] = useState<Deal[]>([]);
@@ -586,6 +598,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             createdAt: user.created_at || new Date().toISOString(),
             lastLogin: user.last_login || null,
             avatar_url: user.avatar_url || null,
+            company_id: user.company_id || null,
           });
           setRole((user.role as Role) || "user");
           // Load saved settings from localStorage
@@ -689,7 +702,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         isActive: true,
         createdAt: new Date().toISOString(),
         lastLogin: new Date().toISOString(),
-        avatar_url: data.user.avatar_url || null,  // ← ADD THIS
+        avatar_url: data.user.avatar_url || null,
+        company_id: data.user.company_id || null,
       });
       setRole((data.user.role as Role) || "user");
       setTimeout(() => fetchSubscriptionStatus(), 100);
@@ -751,7 +765,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         isActive: true,
         createdAt: new Date().toISOString(),
         lastLogin: new Date().toISOString(),
-        avatar_url: data.user.avatar_url || null,  // ✅ ADD THIS
+        avatar_url: data.user.avatar_url || null,
+        company_id: data.user.company_id || null,
       });
       setRole((data.user.role as Role) || "user");
       setTimeout(() => fetchSubscriptionStatus(), 100);
@@ -827,9 +842,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
             importActivities(),
           ]);
 
-          // Fetch employees/users from backend
+          // Fetch employees/users from backend (scoped to visible users)
           const empRes = await fetch(
-            `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/users`,
+            `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/users/visible`,
             { headers: { Authorization: `Bearer ${token}` } }
           );
           if (empRes.ok) {
@@ -862,7 +877,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    const isPowerRole = ['Super Admin', 'super_admin', 'Org Admin', 'admin', 'Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager', 'Team Leader', 'team_leader'].includes(role) || isAdminRole(role);
+    const isPowerRole = ['Super Admin', 'super_admin', 'Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager', 'Team Leader', 'team_leader'].includes(role) || isAdminRole(role);
     if (userProfile?.id && isPowerRole) {
       fetchCompanySubscription();
       fetchPaymentMethods();
@@ -882,10 +897,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       loadSettings();
     }
   }, [session, userProfile?.id]); // Add userProfile.id dependency
-  // Auto-refresh revenue forecast when deals change
+  // Auto-refresh revenue forecast only after session is established
   useEffect(() => {
-    refreshRevenueForecast();
-  }, []);
+    if (session) {
+      refreshRevenueForecast();
+    }
+  }, [session]);
+
   // ── Sync helpers ───────────────────────────────────────────────────────────
   async function trySyncCreate<T>(apiFn: () => Promise<T>): Promise<T | null> {
     if (!backendOnline) return null;
@@ -901,14 +919,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return token || null;
   };
   // ── User Management (Admin) ────────────────────────────────────────────────
+
+
   const loadUsers = async () => {
     const token = getToken();
-    const isAllowed = ['Super Admin', 'super_admin', 'Org Admin', 'admin', 'Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager', 'Team Leader', 'team_leader'].includes(role) || isAdminRole(role);
+    const isAllowed = ['Super Admin', 'super_admin', 'Sales Manager', 'sales_manager', 'Lead Manager', 'lead_manager', 'Team Leader', 'team_leader'].includes(role) || isAdminRole(role);
     if (!token || !isAllowed) return;
     setUsersLoading(true);
     try {
       const res = await fetch(
-        `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/users`,
+        `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/users/visible`,  // ← CHANGE THIS TO /users/visible
         { headers: { Authorization: `Bearer ${token}` } }
       );
       if (!res.ok) throw new Error("Failed to load users");
@@ -930,6 +950,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           isActive: row.is_active !== false,
           createdAt: row.created_at ?? "",
           lastLogin: row.last_login ?? null,
+          company_id: row.company_id || null,
+          manager_id: row.manager_id || null,
+          team_id: row.team_id || null,
         }));
 
       console.log("🔍 MAPPED USERS:", mapped);
@@ -941,6 +964,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } finally {
       setUsersLoading(false);
     }
+  };
+
+  const fetchUser = async (userId: string): Promise<UserProfile | null> => {
+    const token = getToken();
+    if (!token) return null;
+    try {
+      const res = await fetch(
+        `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/users/${userId}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (data?.id) {
+        setUserMap(prev => ({ ...prev, [data.id]: data }));
+        return data as UserProfile;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
+  const getUserById = (userId: string): UserProfile | undefined => {
+    return userMap[userId];
   };
 
   const createUser = async (data: {
@@ -969,7 +1016,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       const newProfile = await api.users.create(data, token);
       setUsers(prev => [...prev, newProfile]);
-      toast.success(`User "${data.name}" created successfully!`);
       return newProfile;
     } catch (e: any) {
       toast.error(`Failed to create user: ${e.message}`);
@@ -986,6 +1032,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (data.department !== undefined) payload.department = data.department;
       if (data.employeeId !== undefined) payload.employee_id = data.employeeId;
       if (data.name !== undefined) payload.name = data.name;
+      if (data.manager_id !== undefined) payload.manager_id = data.manager_id;
 
       const res = await fetch(
         `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/users/${userId}`,
@@ -1002,7 +1049,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
 
       setUsers(prev => prev.map(u => u.id === userId ? { ...u, ...data } : u));
-      toast.success("User updated successfully!");
       return true;
     } catch (e: any) {
       toast.error(`Failed to update user: ${e.message}`);
@@ -1190,8 +1236,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const updateLead = async (id: string, data: Partial<Lead>): Promise<boolean> => {
+    // Sanitize payload: convert empty strings to null for UUID fields to avoid
+    // "invalid input syntax for type uuid" errors on the backend
+    const sanitizedData: Record<string, any> = { ...data };
+    for (const key of ['ownerId', 'owner_id', 'deal_id', 'manager_id', 'team_id']) {
+      if (sanitizedData[key] === "" || sanitizedData[key] === null || sanitizedData[key] === undefined) {
+        delete sanitizedData[key];
+      }
+    }
+
     const dbPayload = {
-      ...data,
+      ...sanitizedData,
       status: data.status ? (toDbStatus[data.status as keyof typeof toDbStatus] ?? "new") : "new",
       source: data.source ? (toDbSource[data.source as keyof typeof toDbSource] ?? "website") : "website",
       industry: data.industry ? (toDbIndustry[data.industry as keyof typeof toDbIndustry] ?? "technology") : "technology",
@@ -1209,7 +1264,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
 
     if (!response.ok) {
-      toast.error("Cannot Update Lead");
+      // Log the actual error body from the server to help debugging
+      const errorData = await response.json().catch(() => ({}));
+      console.error("Server Error Details:", errorData);
+      toast.error(errorData.error || "Cannot Update Lead");
       return false;
     }
     toast.success("Lead updated successfully!");
@@ -2127,8 +2185,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       leads, deals, employees, integrations, tickets, activities, userSettings,
       loading, dataReady, backendOnline,
       // Users
-      users, usersLoading, createUser, updateUser, deleteUser,
-      toggleUserAccess, resetUserPassword, loadUsers,
+      users, usersLoading, userMap, createUser, updateUser, deleteUser,
+      toggleUserAccess, resetUserPassword, loadUsers, getUserById, fetchUser,
       // ✅ ADD NEW USER FUNCTIONS
       activateUser,
       deactivateUser,

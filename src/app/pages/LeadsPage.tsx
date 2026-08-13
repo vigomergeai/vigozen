@@ -100,6 +100,7 @@ export default function LeadsPage() {
   const [editingCommentText, setEditingCommentText] = useState<string>("");
   const [newCommentText, setNewCommentText] = useState<string>("");
   const [submittingComment, setSubmittingComment] = useState(false);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
   const commentsEndRef = useRef<HTMLDivElement>(null);
 
@@ -184,11 +185,13 @@ export default function LeadsPage() {
 
   const openAdd = () => {
     setForm({ ...emptyForm, owner: currentUser.name, ownerId: currentUser.employeeId });
+    setFormErrors({});
     setEditLead(null);
     setShowAddModal(true);
   };
 
   const openEdit = (lead: Lead) => {
+    setFormErrors({});
     setForm({
       name: lead.name, company: lead.company, email: lead.email, phone: lead.phone,
       status: lead.status, source: lead.source, industry: lead.industry,
@@ -201,7 +204,15 @@ export default function LeadsPage() {
   };
 
   const handleSave = async () => {
-    if (!form.name.trim() || !form.company.trim()) return;
+    const errors: Record<string, string> = {};
+    if (!form.name.trim()) errors.name = "Full Name is required";
+    if (!form.company.trim()) errors.company = "Company is required";
+    if (!form.email.trim()) errors.email = "Email is required";
+    if (!form.phone.trim()) errors.phone = "Phone Number is required";
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      return;
+    }
     setSaving(true);
     const payload: Partial<Lead> = {
   name: form.name.trim(),
@@ -233,6 +244,7 @@ export default function LeadsPage() {
     setShowAddModal(false);
     setEditLead(null);
     setForm(emptyForm);
+    setFormErrors({});
   };
 
   const handleDelete = async (id: string) => {
@@ -1478,71 +1490,67 @@ useEffect(() => {
                 <input
                   placeholder="John Doe"
                   value={form.name}
-                  onChange={(e) =>
-                    setForm((f) => ({
-                      ...f,
-                      name: e.target.value,
-                    }))
-                  }
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-slate-50"
+                  onChange={(e) => {
+                    setForm((f) => ({ ...f, name: e.target.value }));
+                    if (formErrors.name) setFormErrors((prev) => { const n = { ...prev }; delete n.name; return n; });
+                  }}
+                  className={`w-full px-3 py-2 text-sm border rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-slate-50 ${formErrors.name ? "border-red-400" : "border-slate-200"}`}
                 />
+                {formErrors.name && <p className="text-xs text-red-500 mt-1">{formErrors.name}</p>}
               </div>
 
               <div>
                 <label className="block text-xs text-slate-500 mb-1.5">
-                  Company
+                  Company *
                 </label>
                 <input
                   type="text"
                   required={true}
                   placeholder="Acme Corp"
                   value={form.company}
-                  onChange={(e) =>
-                    setForm((f) => ({
-                      ...f,
-                      company: e.target.value,
-                    }))
-                  }
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-slate-50"
+                  onChange={(e) => {
+                    setForm((f) => ({ ...f, company: e.target.value }));
+                    if (formErrors.company) setFormErrors((prev) => { const n = { ...prev }; delete n.company; return n; });
+                  }}
+                  className={`w-full px-3 py-2 text-sm border rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-slate-50 ${formErrors.company ? "border-red-400" : "border-slate-200"}`}
                 />
+                {formErrors.company && <p className="text-xs text-red-500 mt-1">{formErrors.company}</p>}
               </div>
 
               <div>
                 <label className="block text-xs text-slate-500 mb-1.5">
-                  Email
+                  Email *
                 </label>
                 <input
                   type="email"
                   required={true}
                   placeholder="john@acme.com"
                   value={form.email}
-                  onChange={(e) =>
-                    setForm((f) => ({
-                      ...f,
-                      email: e.target.value,
-                    }))
-                  }
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-slate-50"
+                  onChange={(e) => {
+                    setForm((f) => ({ ...f, email: e.target.value }));
+                    if (formErrors.email) setFormErrors((prev) => { const n = { ...prev }; delete n.email; return n; });
+                  }}
+                  className={`w-full px-3 py-2 text-sm border rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-slate-50 ${formErrors.email ? "border-red-400" : "border-slate-200"}`}
                 />
+                {formErrors.email && <p className="text-xs text-red-500 mt-1">{formErrors.email}</p>}
               </div>
 
               <div>
                 <label className="block text-xs text-slate-500 mb-1.5">
-                  Phone
+                  Phone *
                 </label>
                 <input
                   type="text"
                   required={true}
                   placeholder="+919876543210"
                   value={form.phone}
-                  onChange={(e) =>
-                    setForm((f) => ({
-                      ...f,
-                      phone: e.target.value,
-                    }))
-                  }
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-slate-50"
+                  onChange={(e) => {
+                    setForm((f) => ({ ...f, phone: e.target.value }));
+                    if (formErrors.phone) setFormErrors((prev) => { const n = { ...prev }; delete n.phone; return n; });
+                  }}
+                  className={`w-full px-3 py-2 text-sm border rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-slate-50 ${formErrors.phone ? "border-red-400" : "border-slate-200"}`}
                 />
+                {formErrors.phone && <p className="text-xs text-red-500 mt-1">{formErrors.phone}</p>}
               </div>
 
               <div>
@@ -1717,7 +1725,7 @@ useEffect(() => {
               </button>
               <button
                 onClick={handleSave}
-                disabled={saving || !form.name.trim() || !form.company.trim()}
+                disabled={saving || !form.name.trim() || !form.company.trim() || !form.email.trim() || !form.phone.trim()}
                 className="flex-1 py-2.5 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {saving ? (

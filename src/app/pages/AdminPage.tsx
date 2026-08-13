@@ -13,7 +13,7 @@ import { useApp } from "../context/AppContext";
 import type { UserProfile } from "../context/AppContext";
 import { useNavigate } from "react-router";
 import { usePermissions } from "../hooks/usePermissions";
-import { isAdminRole, hasModuleAccess, canWrite } from "../utils/permissions";
+import { isAdminRole, hasModuleAccess, canWrite, normalizeRole } from "../utils/permissions";
 
 // All hierarchy roles available to create
 
@@ -24,17 +24,15 @@ const ALL_HIERARCHY_ROLES = [
   { value: "Team Leader", label: "Team Leader" },
   { value: "Sales Executive", label: "Sales Executive" },
   { value: "Lead Manager", label: "Lead Manager" },
-  { value: "admin", label: "Admin (Full)" },
 ];
 // ── ROLE HIERARCHY CONFIGURATION ── (Add this after the existing constants)
 
 // Who can create whom (Creation Rules)
 export const ROLE_CREATION_RULES: Record<string, string[]> = {
-  'Super Admin': ['Org Admin', 'admin'],
-  'super_admin': ['Org Admin', 'admin'],
-  'Org Admin': ['Org Admin', 'admin', 'Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
-  'org_admin': ['Org Admin', 'admin', 'Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
-  'admin': ['Org Admin', 'admin', 'Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
+  'Super Admin': ['Super Admin', 'Org Admin', 'Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
+  'super_admin': ['Super Admin', 'Org Admin', 'Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
+  'Org Admin': ['Org Admin', 'Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
+  'org_admin': ['Org Admin', 'Sales Manager', 'Lead Manager', 'Team Leader', 'Sales Executive', 'Lead Executive', 'Telecaller', 'Lead Qualifier'],
   'Sales Manager': ['Team Leader', 'Sales Executive'],
   'sales_manager': ['Team Leader', 'Sales Executive'],
   'Lead Manager': ['Lead Executive', 'Telecaller', 'Lead Qualifier'],
@@ -49,15 +47,14 @@ export const ROLE_CREATION_RULES: Record<string, string[]> = {
 
 // Who reports to whom (Reporting Rules)
 export const REPORTING_RULES: Record<string, string[]> = {
-  'Org Admin': ['Super Admin', 'super_admin', 'Org Admin', 'org_admin', 'admin'],
-  'org_admin': ['Super Admin', 'super_admin', 'Org Admin', 'org_admin', 'admin'],
-  'admin': ['Super Admin', 'super_admin', 'Org Admin', 'org_admin', 'admin'],
-  'Sales Manager': ['Org Admin', 'org_admin', 'admin'],
-  'sales_manager': ['Org Admin', 'org_admin', 'admin'],
-  'Lead Manager': ['Org Admin', 'org_admin', 'admin'],
-  'lead_manager': ['Org Admin', 'org_admin', 'admin'],
-  'Team Leader': ['Sales Manager', 'sales_manager', 'Org Admin', 'org_admin', 'admin'],
-  'team_leader': ['Sales Manager', 'sales_manager', 'Org Admin', 'org_admin', 'admin'],
+  'Org Admin': ['Super Admin', 'super_admin', 'Org Admin', 'org_admin'],
+  'org_admin': ['Super Admin', 'super_admin', 'Org Admin', 'org_admin'],
+  'Sales Manager': ['Org Admin', 'org_admin'],
+  'sales_manager': ['Org Admin', 'org_admin'],
+  'Lead Manager': ['Org Admin', 'org_admin'],
+  'lead_manager': ['Org Admin', 'org_admin'],
+  'Team Leader': ['Sales Manager', 'sales_manager', 'Org Admin', 'org_admin'],
+  'team_leader': ['Sales Manager', 'sales_manager', 'Org Admin', 'org_admin'],
   'Sales Executive': ['Team Leader', 'team_leader', 'Sales Manager', 'sales_manager'],
   'sales_executive': ['Team Leader', 'team_leader', 'Sales Manager', 'sales_manager'],
   'Lead Executive': ['Lead Manager', 'lead_manager'],
@@ -72,7 +69,6 @@ export const REPORTING_RULES: Record<string, string[]> = {
 export const ALL_ROLES = [
   'Super Admin',
   'Org Admin',
-  'admin',
   'Sales Manager',
   'Lead Manager',
   'Team Leader',
@@ -91,7 +87,6 @@ const getAvatarColor = (role: string): string => {
     'super_admin': 'bg-gradient-to-br from-purple-600 to-indigo-600',
     'Org Admin': 'bg-gradient-to-br from-indigo-600 to-blue-600',
     'org_admin': 'bg-gradient-to-br from-indigo-600 to-blue-600',
-    'admin': 'bg-gradient-to-br from-red-600 to-rose-600',
 
     // ── SALES MANAGEMENT ROLES ──
     'Sales Manager': 'bg-gradient-to-br from-blue-600 to-cyan-600',
@@ -115,6 +110,23 @@ const getAvatarColor = (role: string): string => {
   return colors[role] || 'bg-gradient-to-br from-gray-500 to-slate-500';
 };
 
+// Prettify snake_case / raw DB role values → human-readable display labels
+const ROLE_DISPLAY: Record<string, string> = {
+  'super_admin':    'Super Admin',
+  'org_admin':      'Org Admin',
+  'admin':          'Admin',
+  'sales_manager':  'Sales Manager',
+  'lead_manager':   'Lead Manager',
+  'team_leader':    'Team Leader',
+  'sales_executive':'Sales Executive',
+  'lead_executive': 'Lead Executive',
+  'telecaller':     'Telecaller',
+  'lead_qualifier': 'Lead Qualifier',
+};
+const prettifyRole = (role: string): string =>
+  ROLE_DISPLAY[role] ?? ROLE_DISPLAY[role?.toLowerCase()] ?? role;
+
+
 // Role color helper
 const getRoleColor = (role: string): string => {
   const colors: Record<string, string> = {
@@ -123,7 +135,6 @@ const getRoleColor = (role: string): string => {
     'super_admin': 'bg-purple-100 text-purple-700',
     'Org Admin': 'bg-indigo-100 text-indigo-700',
     'org_admin': 'bg-indigo-100 text-indigo-700',
-    'admin': 'bg-red-100 text-red-700',
 
     // ── SALES MANAGEMENT ROLES ──
     'Sales Manager': 'bg-blue-100 text-blue-700',
@@ -148,7 +159,7 @@ const getRoleColor = (role: string): string => {
 };
 
 // Legacy constant (kept for compatibility)
-const ROLE_OPTIONS = ["admin", "user"] as const;
+const ROLE_OPTIONS = ["user"] as const;
 const DEPT_OPTIONS = [
   {
     value: "sales",
@@ -212,22 +223,78 @@ const emptyForm: UserForm = {
   manager_id: "",
 };
 
+const ManagerCell = ({ managerId, userMap, managerCache }: {
+  managerId: string;
+  userMap: Record<string, any>;
+  managerCache: Record<string, { name: string; role: string }>;
+}) => {
+  const cached = managerCache[managerId];
+  const local = userMap[managerId];
+
+  if (cached) {
+    return (
+      <span className="flex items-center gap-1">
+        <span className="font-medium text-slate-700">{cached.name || 'Unknown'}</span>
+        <span className="text-[10px] text-slate-400">({prettifyRole(cached.role) || 'N/A'})</span>
+      </span>
+    );
+  }
+
+  if (local) {
+    return (
+      <span className="flex items-center gap-1">
+        <span className="font-medium text-slate-700">{local.name || 'Unknown'}</span>
+        <span className="text-[10px] text-slate-400">({prettifyRole(local.role) || 'N/A'})</span>
+      </span>
+    );
+  }
+
+  return <span className="text-slate-400 text-[10px]">Loading...</span>;
+};
+
 export default function AdminPage() {
-  const { role, users, usersLoading, loadUsers, createUser, updateUser, deleteUser, toggleUserAccess, resetUserPassword, activateUser, deactivateUser, userProfile, } = useApp();
+  const { role, users, usersLoading, userMap, loadUsers, createUser, updateUser, deleteUser, toggleUserAccess, resetUserPassword, activateUser, deactivateUser, userProfile, getUserById, fetchUser, } = useApp();
   const navigate = useNavigate();
   const { canCreate, isAdmin } = usePermissions();
 
   // Filter role options based on the creator's permission level
   const availableRoles = useMemo(() => {
-    const userRole = userProfile?.role || 'Sales Executive';
-    const roles = ROLE_CREATION_RULES[userRole] || ['Sales Executive'];
+    const rawRole = userProfile?.role || 'Sales Executive';
+    const userRole = normalizeRole(rawRole);
+    const roles = ROLE_CREATION_RULES[userRole] || ROLE_CREATION_RULES[rawRole] || ['Sales Executive'];
     return roles.map(r => ({ value: r, label: r }));
   }, [userProfile]);
 
   const [activeTab, setActiveTab] = useState<"users" | "audit" | "subscriptions" | "permissions">("users");
   const [rolePermissions, setRolePermissions] = useState<any[]>([]);
   const [rolePermissionsLoading, setRolePermissionsLoading] = useState(false);
+
+  const [availableManagers, setAvailableManagers] = useState<any[]>([]);
+  const [managersLoading, setManagersLoading] = useState(false);
+  const [managerCache, setManagerCache] = useState<Record<string, { name: string; role: string }>>({});
   const permsLoading = rolePermissionsLoading;
+
+  const fetchManager = async (managerId: string) => {
+    if (!managerId || managerCache[managerId]) return;
+    const cached = getUserById(managerId);
+    if (cached) {
+      setManagerCache(prev => ({ ...prev, [managerId]: { name: cached.name, role: cached.role } }));
+      return;
+    }
+    const user = await fetchUser(managerId);
+    if (user) {
+      setManagerCache(prev => ({ ...prev, [managerId]: { name: user.name, role: user.role } }));
+    }
+  };
+
+  useEffect(() => {
+    const missingIds = users
+      .map(u => u.manager_id)
+      .filter((id): id is string => !!id && !managerCache[id] && !userMap[id]);
+    if (missingIds.length === 0) return;
+    const unique = Array.from(new Set(missingIds));
+    unique.forEach(id => fetchManager(id));
+  }, [users, userMap, managerCache, fetchManager]);
 
   const fetchRolePermissions = async () => {
     const token = localStorage.getItem('token');
@@ -302,7 +369,7 @@ export default function AdminPage() {
     if (!token) return;
     setSubLoading(true);
     try {
-      const res = await fetch(`${getApiBaseUrl()}/users`, {
+      const res = await fetch(`${getApiBaseUrl()}/users/visible`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
@@ -328,6 +395,12 @@ export default function AdminPage() {
   const [showPasswordModal, setShowPasswordModal] = useState<UserProfile | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<UserProfile | null>(null);
 
+  // ── Transfer Data State ──
+  const [showTransferModal, setShowTransferModal] = useState(false);
+  const [transferFrom, setTransferFrom] = useState<UserProfile | null>(null);
+  const [transferTo, setTransferTo] = useState<string>("");
+  const [transferLoading, setTransferLoading] = useState(false);
+
   const [form, setForm] = useState<UserForm>(emptyForm);
   const [newPassword, setNewPassword] = useState("");
   const [showPass, setShowPass] = useState(false);
@@ -336,7 +409,7 @@ export default function AdminPage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    const allowed = ['Super Admin', 'super_admin', 'Org Admin', 'org_admin', 'admin', 'Sales Manager', 'Lead Manager', 'Team Leader'];
+    const allowed = ['Super Admin', 'super_admin', 'Org Admin', 'org_admin', 'Sales Manager', 'Lead Manager', 'Team Leader'];
     if (!allowed.includes(role)) { navigate("/"); return; }
     loadUsers();
   }, [role]);
@@ -380,6 +453,43 @@ export default function AdminPage() {
       u.isActive
     );
   };
+
+  // ── Fetch available managers from backend ──
+  const fetchAvailableManagers = async (selectedRole: string, excludeUserId?: string) => {
+    if (!selectedRole) return;
+    setManagersLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const companyId = editUser ? (editUser as any).company_id : userProfile?.company_id;
+      const params = new URLSearchParams({ role: selectedRole });
+      if (companyId) params.set('company_id', companyId);
+      const res = await fetch(
+        `${getApiBaseUrl()}/users/available-managers?${params.toString()}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (!res.ok) throw new Error('Failed to fetch managers');
+      const data = await res.json();
+      const isSuperAdmin = userProfile?.role === 'Super Admin' || userProfile?.role === 'super_admin';
+      const allowedManagerRoles = REPORTING_RULES[selectedRole] || [];
+      let filtered = data.filter((m: any) => {
+        if (excludeUserId && m.id === excludeUserId) return false;
+        if (!isSuperAdmin && !allowedManagerRoles.includes(m.role)) return false;
+        return true;
+      });
+      setAvailableManagers(filtered);
+    } catch (error) {
+      console.error('Failed to fetch managers:', error);
+      setAvailableManagers([]);
+    } finally {
+      setManagersLoading(false);
+    }
+  };
+  // ── Fetch managers when role changes ──
+  useEffect(() => {
+    if (form.role) {
+      fetchAvailableManagers(form.role, editUser?.id);
+    }
+  }, [form.role, editUser?.id]);
 
   const fetchAuditLogs = async () => {
     const token = localStorage.getItem('token');
@@ -461,7 +571,7 @@ export default function AdminPage() {
       email: user.email,
       password: "",
       confirmPassword: "",
-      role: user.role,
+      role: normalizeRole(user.role) || user.role,
       department: user.department || "Sales",
       manager_id: user.manager_id || "",
     });
@@ -478,6 +588,17 @@ export default function AdminPage() {
       setFormError("Please select a role for the new user");
       return;
     }
+
+    // ── REPORTING MANAGER VALIDATION (RELAXED) ──
+    // Manager is optional - backend will auto-assign if not provided
+    const noManagerRoles = ['Org Admin', 'org_admin', 'Super Admin', 'super_admin'];
+    if (!noManagerRoles.includes(form.role) && !form.manager_id) {
+      // ⚠️ Warning only - not blocking
+      console.warn(`No manager selected for ${form.role}. Backend will auto-assign.`);
+    }
+
+
+
     setSaving(true);
     setFormError("");
     const result = await createUser({
@@ -488,10 +609,22 @@ export default function AdminPage() {
       department: form.department,
     });
     setSaving(false);
+
     if (result) {
       setShowCreateModal(false);
       setForm(emptyForm);
-      toast.success(`Invitation sent to ${form.email}`);
+
+      // ── SHOW AUTO-ASSIGN INFO ──
+      if (result.manager_id) {
+        const manager = getUserById(result.manager_id);
+        const managerName = manager?.name || 'Unknown';
+        toast.success(`User created! Reporting manager: ${managerName}`);
+      } else {
+        toast.success(`User created successfully!`);
+      }
+
+      // Refresh users to show the new user with auto-assigned manager
+      await loadUsers();
     } else {
       setFormError("Failed to invite user. Email may already be registered.");
     }
@@ -500,24 +633,58 @@ export default function AdminPage() {
   const handleEdit = async () => {
     if (!editUser) return;
 
+    const userId = editUser.id; // ← Store ID before it's cleared
     const validation = editUserSchema.safeParse({ name: form.name.trim() });
-
     if (!validation.success) {
       setFormError(validation.error.issues[0].message);
       return;
     }
 
+    // ── REPORTING MANAGER VALIDATION (RELAXED) ──
+    const noManagerRoles = ['Org Admin', 'org_admin', 'Super Admin', 'super_admin'];
+    if (!noManagerRoles.includes(form.role) && !form.manager_id) {
+      console.warn(`No manager selected for ${form.role}. Backend will auto-assign.`);
+    }
+
     setSaving(true);
     setFormError("");
 
-    await updateUser(editUser.id, {
+    const updated = await updateUser(editUser.id, {
       name: form.name.trim(),
       role: form.role as any,
       manager_id: form.manager_id || null,
       department: form.department,
     });
+
     setSaving(false);
     setEditUser(null);
+
+    if (updated) {
+      // ── SHOW AUTO-ASSIGN INFO ──
+      // Use stored userId instead of editUser.id
+      const token = localStorage.getItem('token');
+      try {
+        const res = await fetch(`${getApiBaseUrl()}/users/${userId}`, {  // ← Use stored userId
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const updatedUser = await res.json();
+          if (updatedUser.manager_id) {
+            const manager = getUserById(updatedUser.manager_id);
+            const managerName = manager?.name || 'Unknown';
+            toast.success(`User updated! Reporting manager: ${managerName}`);
+          } else {
+            toast.success(`User updated successfully!`);
+          }
+        } else {
+          toast.success(`User updated successfully!`);
+        }
+      } catch {
+        toast.success(`User updated successfully!`);
+      }
+
+      await loadUsers();
+    }
   };
 
   const handleResetPassword = async () => {
@@ -545,8 +712,45 @@ export default function AdminPage() {
     setDeleteConfirm(null);
   };
 
+  // ── Transfer Data Handlers ──
+  const openTransferModal = (user: UserProfile) => {
+    setTransferFrom(user);
+    setTransferTo("");
+    setShowTransferModal(true);
+  };
+
+  const handleTransferData = async () => {
+    if (!transferFrom || !transferTo) return;
+    setTransferLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(
+        `${getApiBaseUrl()}/admin/users/${transferFrom.id}/transfer-data`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({ transfer_to: transferTo })
+        }
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Transfer failed');
+      toast.success(
+        `Transferred ${data.transferred?.leads ?? 0} leads and ${data.transferred?.deals ?? 0} deals from ${transferFrom.name}`
+      );
+      setShowTransferModal(false);
+      loadUsers();
+    } catch (error: any) {
+      toast.error(error.message || 'Transfer failed');
+    } finally {
+      setTransferLoading(false);
+    }
+  };
+
   const getRoleBadge = (r: string) => {
-    if (r === "admin") return "bg-purple-50 text-purple-700 border-purple-200";
+    if (r === "org_admin") return "bg-purple-50 text-purple-700 border-purple-200";
     return "bg-emerald-50 text-emerald-700 border-emerald-200";
   };
 
@@ -594,10 +798,10 @@ export default function AdminPage() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {[
           {
-            label: isAdmin ? "Total Users" : 
-                   (role === "Sales Manager" ? "Department Users" :
-                    role === "Lead Manager" ? "Lead Team Users" :
-                    role === "Team Leader" ? "Team Members" : "Total Users"),
+            label: isAdmin ? "Total Users" :
+              (role === "Sales Manager" ? "Department Users" :
+                role === "Lead Manager" ? "Lead Team Users" :
+                  role === "Team Leader" ? "Team Members" : "Total Users"),
             value: stats.total,
             icon: Users,
             color: "from-blue-500 to-indigo-500",
@@ -642,6 +846,23 @@ export default function AdminPage() {
           );
         })}
       </div>
+
+      {/* ── TEAM LEADER HEADING ── */}
+      {role === 'Team Leader' || role === 'team_leader' ? (
+        <div className="flex items-center gap-2 mb-2">
+          <Users size={16} className="text-indigo-600" />
+          <h2 className="text-sm font-semibold text-slate-700">My Team</h2>
+          <span className="text-xs text-slate-400">({filtered.length} members)</span>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 mb-2">
+          <Users size={16} className="text-indigo-600" />
+          <h2 className="text-sm font-semibold text-slate-700">
+            {isAdminRole(role) ? 'All Users' : 'Team Members'}
+          </h2>
+          <span className="text-xs text-slate-400">({filtered.length} users)</span>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-2 border-b border-slate-200">
@@ -707,7 +928,6 @@ export default function AdminPage() {
               <optgroup label="Admin">
                 <option value="Super Admin">Super Admin</option>
                 <option value="Org Admin">Org Admin</option>
-                <option value="admin">Admin</option>
               </optgroup>
 
               <optgroup label="Management">
@@ -857,20 +1077,20 @@ export default function AdminPage() {
 
                       const canEdit =
                         role === 'Super Admin' || role === 'super_admin' ||
-                        ((role === 'Org Admin' || role === 'org_admin' || role === 'admin') && user.role !== 'Super Admin' && user.role !== 'super_admin') ||
+                         ((role === 'Org Admin' || role === 'org_admin') && user.role !== 'Super Admin' && user.role !== 'super_admin') ||
                         (role === 'Sales Manager' && isTargetSubordinate && ['Team Leader', 'Sales Executive'].includes(user.role)) ||
                         (role === 'Lead Manager' && isTargetSubordinate && ['Lead Executive', 'Telecaller', 'Lead Qualifier'].includes(user.role));
 
                       const canDelete =
                         !isSelf && (
                           role === 'Super Admin' || role === 'super_admin' ||
-                          ((role === 'Org Admin' || role === 'org_admin' || role === 'admin') && user.role !== 'Super Admin' && user.role !== 'super_admin')
+                          ((role === 'Org Admin' || role === 'org_admin') && user.role !== 'Super Admin' && user.role !== 'super_admin')
                         );
 
                       const canActivateDeactivate =
                         !isSelf && (
                           role === 'Super Admin' || role === 'super_admin' ||
-                          ((role === 'Org Admin' || role === 'org_admin' || role === 'admin') && user.role !== 'Super Admin' && user.role !== 'super_admin') ||
+                          ((role === 'Org Admin' || role === 'org_admin') && user.role !== 'Super Admin' && user.role !== 'super_admin') ||
                           (role === 'Sales Manager' && isTargetSubordinate && ['Team Leader', 'Sales Executive'].includes(user.role))
                         );
 
@@ -923,23 +1143,16 @@ export default function AdminPage() {
                           </td>
                           <td className="py-3 px-3">
                             <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${getRoleColor(user.role)}`}>
-                              {user.role}
+                              {prettifyRole(user.role)}
                             </span>
                           </td>
-                          <td className="py-3 px-3 text-xs text-slate-500">
-                            {user.manager_id ? (
-                              <span className="flex items-center gap-1">
-                                <span className="font-medium text-slate-700">
-                                  {users.find(u => u.id === user.manager_id)?.name || 'Unknown'}
-                                </span>
-                                <span className="text-[10px] text-slate-400">
-                                  ({users.find(u => u.id === user.manager_id)?.role || 'N/A'})
-                                </span>
-                              </span>
-                            ) : (
-                              <span className="text-slate-300">—</span>
-                            )}
-                          </td>
+                           <td className="py-3 px-3 text-xs text-slate-500">
+                             {user.manager_id ? (
+                               <ManagerCell managerId={user.manager_id} userMap={userMap} managerCache={managerCache} />
+                             ) : (
+                               <span className="text-slate-300">—</span>
+                             )}
+                           </td>
                           <td className="py-3 px-3">
                             <button
                               onClick={() =>
@@ -949,9 +1162,9 @@ export default function AdminPage() {
                               className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border font-medium transition-colors ${!canActivateDeactivate ? "opacity-50 cursor-not-allowed" : ""} ${user.isActive ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100" : "bg-red-50 text-red-600 border-red-200 hover:bg-red-100"}`}
                               title={
                                 !canActivateDeactivate ? "You don't have permission to toggle access for this user" :
-                                user.isActive
-                                  ? "Click to deactivate"
-                                  : "Click to activate"
+                                  user.isActive
+                                    ? "Click to deactivate"
+                                    : "Click to activate"
                               }
                             >
                               <div
@@ -993,6 +1206,16 @@ export default function AdminPage() {
                               {canDelete && (
                                 <button onClick={() => setDeleteConfirm(user)} className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500 transition-colors" title="Delete">
                                   <Trash2 size={13} />
+                                </button>
+                              )}
+                              {/* Transfer Data - only Super Admin / Org Admin */}
+                              {(role === 'Super Admin' || role === 'super_admin' || role === 'Org Admin' || role === 'org_admin') && !isSelf && (
+                                <button
+                                  onClick={() => openTransferModal(user)}
+                                  className="p-1.5 rounded-lg hover:bg-indigo-50 text-slate-400 hover:text-indigo-600 transition-colors"
+                                  title="Transfer Data"
+                                >
+                                  <Users size={13} />
                                 </button>
                               )}
                             </div>
@@ -1207,7 +1430,7 @@ export default function AdminPage() {
                     );
                   })
                 )}
-               </tbody>
+              </tbody>
             </table>
           </div>
         </div>
@@ -1384,7 +1607,7 @@ export default function AdminPage() {
                 <label className="block text-xs text-slate-500 mb-1.5">
                   Reporting Manager
                   <span className="text-[10px] text-slate-400 ml-2">
-                    (Based on role hierarchy)
+                    (Optional - auto-assigned if left blank)
                   </span>
                 </label>
                 <select
@@ -1392,21 +1615,26 @@ export default function AdminPage() {
                   onChange={(e) => setForm((f) => ({ ...f, manager_id: e.target.value }))}
                   className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                 >
-                  <option value="">— No manager —</option>
-                  {getAvailableManagers(form.role).map((manager) => (
-                    <option key={manager.id} value={manager.id}>
-                      {manager.name} ({manager.role})
-                    </option>
-                  ))}
+                  <option value="">— Select Reporting Manager —</option>
+                  {managersLoading ? (
+                    <option value="" disabled>Loading managers...</option>
+                  ) : (
+                    availableManagers.map((manager) => (
+                      <option key={manager.id} value={manager.id}>
+                        {manager.name} ({manager.role})
+                      </option>
+                    ))
+                  )}
                 </select>
                 {form.manager_id && (
                   <p className="text-[10px] text-emerald-600 mt-1">
                     ✅ Valid reporting relationship
                   </p>
                 )}
-                {!form.manager_id && getAvailableManagers(form.role).length > 0 && (
-                  <p className="text-[10px] text-amber-600 mt-1">
-                    ⚠️ {form.role} should report to: {REPORTING_RULES[form.role]?.join(' or ') || 'No one'}
+                {!form.manager_id && !['Org Admin', 'org_admin', 'Super Admin', 'super_admin'].includes(form.role) && (
+                  <p className="text-[10px] text-amber-600 mt-1 flex items-center gap-1">
+                    <span>⚡</span>
+                    {form.role} will be auto-assigned to the nearest higher role in the organization.
                   </p>
                 )}
               </div>
@@ -1441,326 +1669,444 @@ export default function AdminPage() {
       )}
 
       {/* ── Edit User Modal ── */}
-      {editUser && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
-              <h2 className="text-slate-800 flex items-center gap-2">
-                <Edit size={16} className="text-indigo-600" />
-                Edit User
-              </h2>
-              <button
-                onClick={() => setEditUser(null)}
-                className="p-2 rounded-xl hover:bg-slate-100"
-              >
-                <X size={16} />
-              </button>
-            </div>
-            <div className="p-6 space-y-4">
-              {formError && (
-                <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-600">
-                  <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
-                  {formError}
-                </div>
-              )}
-              <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold">
-                  {editUser.name
-                    .split(" ")
-                    .map((n) => n[0])
-                    .join("")
-                    .slice(0, 2)
-                    .toUpperCase()}
+      {
+        editUser && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden">
+              <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
+                <h2 className="text-slate-800 flex items-center gap-2">
+                  <Edit size={16} className="text-indigo-600" />
+                  Edit User
+                </h2>
+                <button
+                  onClick={() => setEditUser(null)}
+                  className="p-2 rounded-xl hover:bg-slate-100"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="p-6 space-y-4">
+                {formError && (
+                  <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-600">
+                    <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
+                    {formError}
+                  </div>
+                )}
+                <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold">
+                    {editUser.name
+                      .split(" ")
+                      .map((n) => n[0])
+                      .join("")
+                      .slice(0, 2)
+                      .toUpperCase()}
+                  </div>
+                  <div>
+                    <div className="text-sm font-semibold text-slate-800">
+                      {editUser.email}
+                    </div>
+                    <div className="text-xs text-slate-400">
+                      Created {editUser.createdAt}
+                    </div>
+                  </div>
                 </div>
                 <div>
-                  <div className="text-sm font-semibold text-slate-800">
-                    {editUser.email}
+                  <label className="block text-xs text-slate-500 mb-1.5">
+                    Full Name
+                  </label>
+                  <input
+                    value={form.name}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, name: e.target.value }))
+                    }
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1.5">Role *</label>
+                    <select
+                      value={form.role}
+                      onChange={(e) => {
+                        const newRole = e.target.value;
+                        setForm((f) => ({
+                          ...f,
+                          role: newRole,
+                          manager_id: '' // Reset manager when role changes
+                        }));
+                      }}
+                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    >
+                      {availableRoles.length > 0 ? (
+                        availableRoles.map((r) => (
+                          <option key={r.value} value={r.value}>{r.label}</option>
+                        ))
+                      ) : (
+                        <option value="Sales Executive">Sales Executive</option>
+                      )}
+                    </select>
                   </div>
-                  <div className="text-xs text-slate-400">
-                    Created {editUser.createdAt}
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1.5">Department</label>
+                    <select
+                      value={form.department}
+                      onChange={(e) => setForm((f) => ({ ...f, department: e.target.value }))}
+                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none"
+                    >
+                      {DEPT_OPTIONS.map((d) => (
+                        <option key={d.value} value={d.value}>{d.label}</option>
+                      ))}
+                    </select>
                   </div>
                 </div>
-              </div>
-              <div>
-                <label className="block text-xs text-slate-500 mb-1.5">
-                  Full Name
-                </label>
-                <input
-                  value={form.name}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, name: e.target.value }))
-                  }
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
+
+                {/* ── REPORTING MANAGER ── */}
                 <div>
-                  <label className="block text-xs text-slate-500 mb-1.5">Role *</label>
+                  <label className="block text-xs text-slate-500 mb-1.5">
+                    Reporting Manager
+                    <span className="text-[10px] text-slate-400 ml-2">
+                      (Optional - auto-assigned if left blank)
+                    </span>
+                  </label>
                   <select
-                    value={form.role}
-                    onChange={(e) => {
-                      const newRole = e.target.value;
-                      setForm((f) => ({
-                        ...f,
-                        role: newRole,
-                        manager_id: '' // Reset manager when role changes
-                      }));
-                    }}
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none"
+                    value={form.manager_id}
+                    onChange={(e) => setForm((f) => ({ ...f, manager_id: e.target.value }))}
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                   >
-                    {availableRoles.length > 0 ? (
-                      availableRoles.map(r => (
-                        <option key={r.value} value={r.value}>{r.label}</option>
-                      ))
+                    <option value="">— Auto-assign —</option>
+                    {managersLoading ? (
+                      <option value="" disabled>Loading managers...</option>
                     ) : (
-                      <option value="Sales Executive">Sales Executive</option>
+                      availableManagers.map((manager) => (
+                        <option key={manager.id} value={manager.id}>
+                          {manager.name} ({manager.role})
+                        </option>
+                      ))
                     )}
                   </select>
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1.5">Department</label>
-                  <select
-                    value={form.department}
-                    onChange={(e) => setForm((f) => ({ ...f, department: e.target.value }))}
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none"
-                  >
-                    {DEPT_OPTIONS.map((d) => (
-                      <option key={d.value} value={d.value}>{d.label}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
 
-              {/* ── REPORTING MANAGER ── */}
-              <div>
-                <label className="block text-xs text-slate-500 mb-1.5">
-                  Reporting Manager
-                </label>
-                <select
-                  value={form.manager_id}
-                  onChange={(e) => setForm((f) => ({ ...f, manager_id: e.target.value }))}
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none"
-                >
-                  <option value="">None</option>
-                  {getAvailableManagers(form.role, editUser?.id).map(manager => (
-                    <option key={manager.id} value={manager.id}>
-                      {manager.name} ({manager.role})
-                    </option>
-                  ))}
-                </select>
-                <p className="text-[10px] text-slate-400 mt-1">
-                  {form.role} reports to: {REPORTING_RULES[form.role]?.join(', ') || 'No one'}
-                </p>
-              </div>
-            </div>
-            <div className="px-6 py-4 border-t border-slate-100 flex justify-end gap-3">
-              <button
-                onClick={() => setEditUser(null)}
-                className="px-4 py-2 text-sm border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleEdit}
-                disabled={saving}
-                className="px-6 py-2 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 flex items-center gap-2 disabled:opacity-50"
-              >
-                {saving ? (
-                  <>
-                    <Loader2 size={13} className="animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  <>
-                    <Edit size={13} />
-                    Save Changes
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Password Reset Modal ── */}
-      {showPasswordModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden">
-            <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
-              <h2 className="text-slate-800 flex items-center gap-2">
-                <Key size={16} className="text-amber-600" />
-                Reset Password
-              </h2>
-              <button
-                onClick={() => setShowPasswordModal(null)}
-                className="p-2 rounded-xl hover:bg-slate-100"
-              >
-                <X size={16} />
-              </button>
-            </div>
-            <div className="p-6 space-y-4">
-              {error && (
-                <div className="mb-4 flex items-start gap-3 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-sm text-red-300">
-                  <AlertCircle size={16} className="flex-shrink-0 mt-0.5" />
-                  <span>{error}</span>
-                </div>
-              )}
-              <p className="text-sm text-slate-500">
-                Setting new password for{" "}
-                <span className="font-medium text-slate-800">
-                  {showPasswordModal.name}
-                </span>
-              </p>
-              <div>
-                <label className="block text-xs text-slate-500 mb-1.5">
-                  New Password
-                </label>
-                <div className="relative">
-                  <input
-                    type={showPass ? "text" : "password"}
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    placeholder="Min 6 characters"
-                    className="w-full px-3 py-2 pr-9 text-sm border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPass((s) => !s)}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400"
-                  >
-                    {showPass ? <EyeOff size={13} /> : <Eye size={13} />}
-                  </button>
+                  {/* ── AUTO-ASSIGN HINT ── */}
+                  {!form.manager_id && (
+                    <p className="text-[10px] text-amber-600 mt-1 flex items-center gap-1">
+                      <span>⚡</span>
+                      {form.role} will be auto-assigned to the nearest higher role in the organization.
+                    </p>
+                  )}
+                  {form.manager_id && (
+                    <p className="text-[10px] text-emerald-600 mt-1">
+                      ✅ Reporting manager selected manually
+                    </p>
+                  )}
                 </div>
               </div>
-            </div>
-            <div className="px-6 py-4 border-t border-slate-100 flex justify-end gap-3">
-              <button
-                onClick={() => setShowPasswordModal(null)}
-                className="px-4 py-2 text-sm border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleResetPassword}
-                disabled={saving || !newPassword}
-                className="px-6 py-2 text-sm bg-amber-600 text-white rounded-xl hover:bg-amber-700 flex items-center gap-2 disabled:opacity-50"
-              >
-                {saving ? (
-                  <>
-                    <Loader2 size={13} className="animate-spin" />
-                    Resetting...
-                  </>
-                ) : (
-                  <>
-                    <Lock size={13} />
-                    Reset Password
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Delete Confirm Modal ── */}
-      {deleteConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden">
-            <div className="p-6 text-center">
-              <div className="w-14 h-14 rounded-full bg-red-50 border border-red-100 flex items-center justify-center mx-auto mb-4">
-                <AlertTriangle size={24} className="text-red-500" />
-              </div>
-              <h3 className="text-lg font-bold text-slate-800 mb-2">
-                Remove User Access
-              </h3>
-              <p className="text-sm text-slate-500 mb-1">
-                Are you sure you want to remove{" "}
-                <span className="font-medium text-slate-800">
-                  {deleteConfirm.name}
-                </span>
-                ?
-              </p>
-              <p className="text-xs text-slate-400">
-                This will deactivate their account and revoke all access.
-              </p>
-              <div className="flex gap-3 mt-6">
+              <div className="px-6 py-4 border-t border-slate-100 flex justify-end gap-3">
                 <button
-                  onClick={() => setDeleteConfirm(null)}
-                  className="flex-1 py-2.5 text-sm border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50"
+                  onClick={() => setEditUser(null)}
+                  className="px-4 py-2 text-sm border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50"
                 >
                   Cancel
                 </button>
                 <button
-                  onClick={handleDelete}
+                  onClick={handleEdit}
                   disabled={saving}
-                  className="flex-1 py-2.5 text-sm bg-red-600 text-white rounded-xl hover:bg-red-700 flex items-center justify-center gap-2 disabled:opacity-50"
+                  className="px-6 py-2 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 flex items-center gap-2 disabled:opacity-50"
                 >
                   {saving ? (
-                    <Loader2 size={13} className="animate-spin" />
+                    <>
+                      <Loader2 size={13} className="animate-spin" />
+                      Saving...
+                    </>
                   ) : (
-                    <Trash2 size={13} />
+                    <>
+                      <Edit size={13} />
+                      Save Changes
+                    </>
                   )}
-                  Remove
                 </button>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
-
-
-      {/* ── Bulk Delete Confirmation Modal ── */}
-      {showBulkDeleteConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/40" onClick={() => setShowBulkDeleteConfirm(false)} />
-          <div className="relative bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm text-center">
-            <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
-              <AlertTriangle size={22} className="text-red-500" />
-            </div>
-            <h3 className="text-slate-800 mb-2">Delete {selectedUsers.length} Users?</h3>
-            <p className="text-sm text-slate-500 mb-5">This action cannot be undone. All selected users will be permanently deactivated.</p>
-            <div className="flex gap-3">
-              <button
-                onClick={() => setShowBulkDeleteConfirm(false)}
-                className="flex-1 py-2.5 border border-slate-200 text-slate-700 rounded-xl text-sm hover:bg-slate-50 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={async () => {
-                  setShowBulkDeleteConfirm(false);
-                  // Proceed with delete
-                  const token = localStorage.getItem('token');
-                  if (!token) return;
-
-                  setBulkActionLoading(true);
-                  try {
-                    await api.users.bulkAction({
-                      userIds: selectedUsers,
-                      action: 'delete',
-                      value: undefined
-                    }, token);
-
-                    toast.success(`${selectedUsers.length} users deleted successfully`);
-                    await loadUsers();
-                    setSelectedUsers([]);
-                    setBulkAction("");
-                  } catch (error) {
-                    console.error("Bulk delete failed:", error);
-                    toast.error('Failed to delete users');
-                  } finally {
-                    setBulkActionLoading(false);
-                  }
-                }}
-                className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm hover:bg-red-700 transition-colors"
-              >
-                Delete All
-              </button>
+      {/* ── Password Reset Modal ── */}
+      {
+        showPasswordModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden">
+              <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
+                <h2 className="text-slate-800 flex items-center gap-2">
+                  <Key size={16} className="text-amber-600" />
+                  Reset Password
+                </h2>
+                <button
+                  onClick={() => setShowPasswordModal(null)}
+                  className="p-2 rounded-xl hover:bg-slate-100"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="p-6 space-y-4">
+                {error && (
+                  <div className="mb-4 flex items-start gap-3 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-sm text-red-300">
+                    <AlertCircle size={16} className="flex-shrink-0 mt-0.5" />
+                    <span>{error}</span>
+                  </div>
+                )}
+                <p className="text-sm text-slate-500">
+                  Setting new password for{" "}
+                  <span className="font-medium text-slate-800">
+                    {showPasswordModal.name}
+                  </span>
+                </p>
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1.5">
+                    New Password
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showPass ? "text" : "password"}
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder="Min 6 characters"
+                      className="w-full px-3 py-2 pr-9 text-sm border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPass((s) => !s)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400"
+                    >
+                      {showPass ? <EyeOff size={13} /> : <Eye size={13} />}
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div className="px-6 py-4 border-t border-slate-100 flex justify-end gap-3">
+                <button
+                  onClick={() => setShowPasswordModal(null)}
+                  className="px-4 py-2 text-sm border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleResetPassword}
+                  disabled={saving || !newPassword}
+                  className="px-6 py-2 text-sm bg-amber-600 text-white rounded-xl hover:bg-amber-700 flex items-center gap-2 disabled:opacity-50"
+                >
+                  {saving ? (
+                    <>
+                      <Loader2 size={13} className="animate-spin" />
+                      Resetting...
+                    </>
+                  ) : (
+                    <>
+                      <Lock size={13} />
+                      Reset Password
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
-    </div>
+        )
+      }
+
+      {/* ── Delete Confirm Modal ── */}
+      {
+        deleteConfirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden">
+              <div className="p-6 text-center">
+                <div className="w-14 h-14 rounded-full bg-red-50 border border-red-100 flex items-center justify-center mx-auto mb-4">
+                  <AlertTriangle size={24} className="text-red-500" />
+                </div>
+                <h3 className="text-lg font-bold text-slate-800 mb-2">
+                  Remove User Access
+                </h3>
+                <p className="text-sm text-slate-500 mb-1">
+                  Are you sure you want to remove{" "}
+                  <span className="font-medium text-slate-800">
+                    {deleteConfirm.name}
+                  </span>
+                  ?
+                </p>
+                <p className="text-xs text-slate-400">
+                  This will deactivate their account and revoke all access.
+                </p>
+                <div className="flex gap-3 mt-6">
+                  <button
+                    onClick={() => setDeleteConfirm(null)}
+                    className="flex-1 py-2.5 text-sm border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleDelete}
+                    disabled={saving}
+                    className="flex-1 py-2.5 text-sm bg-red-600 text-white rounded-xl hover:bg-red-700 flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    {saving ? (
+                      <Loader2 size={13} className="animate-spin" />
+                    ) : (
+                      <Trash2 size={13} />
+                    )}
+                    Remove
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+
+
+      {/* ── Transfer Data Modal ── */}
+      {
+        showTransferModal && transferFrom && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden">
+              {/* Header */}
+              <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
+                <h2 className="text-base font-semibold text-slate-800 flex items-center gap-2">
+                  <Users size={16} className="text-indigo-600" />
+                  Transfer Employee Data
+                </h2>
+                <button
+                  onClick={() => setShowTransferModal(false)}
+                  className="p-2 rounded-xl hover:bg-slate-100 transition-colors"
+                >
+                  <X size={16} className="text-slate-400" />
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="p-6 space-y-4">
+                {/* From */}
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1.5">Employee Leaving</label>
+                  <div className="p-3 bg-slate-50 rounded-xl text-sm text-slate-700 font-medium">
+                    {transferFrom.name}
+                    <span className="text-xs text-slate-400 font-normal ml-1">({transferFrom.role})</span>
+                  </div>
+                </div>
+
+                {/* To */}
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1.5">Transfer To *</label>
+                  <select
+                    value={transferTo}
+                    onChange={(e) => setTransferTo(e.target.value)}
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                  >
+                    <option value="">Select Employee</option>
+                    {users
+                      .filter(u =>
+                        u.id !== transferFrom.id &&
+                        u.isActive &&
+                        (u as any).company_id === (transferFrom as any).company_id
+                      )
+                      .map((u) => (
+                        <option key={u.id} value={u.id}>
+                          {u.name} ({u.role})
+                        </option>
+                      ))}
+                  </select>
+                </div>
+
+                {/* Info box */}
+                <div className="p-4 bg-indigo-50 rounded-xl border border-indigo-100">
+                  <p className="text-xs font-medium text-indigo-700 mb-2">
+                    The following active business data will be transferred:
+                  </p>
+                  <ul className="text-xs text-indigo-600 space-y-1">
+                    <li>✓ Active Leads (non-won / non-lost)</li>
+                    <li>✓ Open Deals (non-won / non-lost)</li>
+                  </ul>
+                  <p className="text-[10px] text-indigo-400 mt-2 pt-2 border-t border-indigo-200">
+                    Historical ownership, activities, performance and audit records will remain unchanged.
+                  </p>
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="px-6 py-4 border-t border-slate-100 flex justify-end gap-3">
+                <button
+                  onClick={() => setShowTransferModal(false)}
+                  className="px-4 py-2 text-sm border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleTransferData}
+                  disabled={!transferTo || transferLoading}
+                  className="px-6 py-2 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 flex items-center gap-2 disabled:opacity-50 transition-colors"
+                >
+                  {transferLoading ? (
+                    <><Loader2 size={13} className="animate-spin" /> Transferring...</>
+                  ) : (
+                    <><Users size={13} /> Transfer Data</>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {/* ── Bulk Delete Confirmation Modal ── */}
+      {
+        showBulkDeleteConfirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/40" onClick={() => setShowBulkDeleteConfirm(false)} />
+            <div className="relative bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm text-center">
+              <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <AlertTriangle size={22} className="text-red-500" />
+              </div>
+              <h3 className="text-slate-800 mb-2">Delete {selectedUsers.length} Users?</h3>
+              <p className="text-sm text-slate-500 mb-5">This action cannot be undone. All selected users will be permanently deactivated.</p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowBulkDeleteConfirm(false)}
+                  className="flex-1 py-2.5 border border-slate-200 text-slate-700 rounded-xl text-sm hover:bg-slate-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    setShowBulkDeleteConfirm(false);
+                    // Proceed with delete
+                    const token = localStorage.getItem('token');
+                    if (!token) return;
+
+                    setBulkActionLoading(true);
+                    try {
+                      await api.users.bulkAction({
+                        userIds: selectedUsers,
+                        action: 'delete',
+                        value: undefined
+                      }, token);
+
+                      toast.success(`${selectedUsers.length} users deleted successfully`);
+                      await loadUsers();
+                      setSelectedUsers([]);
+                      setBulkAction("");
+                    } catch (error) {
+                      console.error("Bulk delete failed:", error);
+                      toast.error('Failed to delete users');
+                    } finally {
+                      setBulkActionLoading(false);
+                    }
+                  }}
+                  className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm hover:bg-red-700 transition-colors"
+                >
+                  Delete All
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
+    </div >
   );
 }

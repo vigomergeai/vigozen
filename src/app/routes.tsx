@@ -4,22 +4,24 @@ import { AppProvider } from "./context/AppContext";
 import { useApp } from "./context/AppContext";
 
 import Layout from "./components/Layout";
-
+import ErrorPage from "./pages/ErrorPage";
+import ErrorBoundary from "./components/ErrorBoundary";
+import { lazyRetry } from "./utils/lazyRetry";
 import { Loader2, Zap } from "lucide-react";
 
 import logo from "../assets/Media.png";
 // Lazy load route pages
-const DashboardPage = lazy(() => import("./pages/DashboardPage"));
-const LeadsPage = lazy(() => import("./pages/LeadsPage"));
-const SalesPage = lazy(() => import("./pages/SalesPage"));
-const AnalysisPage = lazy(() => import("./pages/AnalysisPage"));
-const SupportPage = lazy(() => import("./pages/SupportPage"));
-const SettingsPage = lazy(() => import("./pages/SettingsPage"));
-const LoginPage = lazy(() => import("./pages/LoginPage"));
-const AdminPage = lazy(() => import("./pages/AdminPage"));
-const PaymentSuccess = lazy(() => import("./pages/PaymentSuccess"));  
-const PaymentFailure = lazy(() => import("./pages/PaymentFailure")); 
-const BillingPage = lazy(() => import("./pages/BillingPage"));
+const DashboardPage = lazy(lazyRetry(() => import("./pages/DashboardPage")));
+const LeadsPage = lazy(lazyRetry(() => import("./pages/LeadsPage")));
+const SalesPage = lazy(lazyRetry(() => import("./pages/SalesPage")));
+const AnalysisPage = lazy(lazyRetry(() => import("./pages/AnalysisPage")));
+const SupportPage = lazy(lazyRetry(() => import("./pages/SupportPage")));
+const SettingsPage = lazy(lazyRetry(() => import("./pages/SettingsPage")));
+const LoginPage = lazy(lazyRetry(() => import("./pages/LoginPage")));
+const AdminPage = lazy(lazyRetry(() => import("./pages/AdminPage")));
+const PaymentSuccess = lazy(lazyRetry(() => import("./pages/PaymentSuccess")));
+const PaymentFailure = lazy(lazyRetry(() => import("./pages/PaymentFailure")));
+const BillingPage = lazy(lazyRetry(() => import("./pages/BillingPage")));
 
 
 function NotFound() {
@@ -57,9 +59,27 @@ function AuthLoadingScreen() {
 // Helper to wrap lazy-loaded components with Suspense
 function LazyRoute({ Component }: { Component: React.ComponentType<any> }) {
   return (
-    <Suspense fallback={<AuthLoadingScreen />}>
-      <Component />
-    </Suspense>
+    <ErrorBoundary
+      resetKeys={[window.location.pathname]}
+      fallback={
+        <div className="p-8 text-center">
+          <p className="text-slate-500">Failed to load this page. Please try again.</p>
+          <button
+            onClick={() => window.location.reload()}
+            className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-lg"
+          >
+            Retry
+          </button>
+        </div>
+      }
+      onError={(error, errorInfo) => {
+        console.error('Route error:', error, errorInfo);
+      }}
+    >
+      <Suspense fallback={<AuthLoadingScreen />}>
+        <Component />
+      </Suspense>
+    </ErrorBoundary>
   );
 }
 
@@ -160,14 +180,17 @@ export const router = createBrowserRouter([
   {
     path: "/login",
     Component: LoginWrapper,
+    errorElement: <ErrorPage />,
   },
   {
     path: "/payment-success",
     Component: () => <LazyRoute Component={PaymentSuccess} />,
+    errorElement: <ErrorPage />,
   },
   {
     path: "/payment-failure",
     Component: () => <LazyRoute Component={PaymentFailure} />,
+    errorElement: <ErrorPage />,
   },
   // ── BILLING ROUTE ──
   {
@@ -179,29 +202,34 @@ export const router = createBrowserRouter([
         </RequireAuth>
       </AppProvider>
     ),
+    errorElement: <ErrorPage />,
   },
   {
     path: "/",
     Component: Root,
+    errorElement: <ErrorPage />,
     children: [
-      { 
-        index: true, 
+      {
+        index: true,
         Component: () => (
           <RequireSubscription>
             <LazyRoute Component={DashboardPage} />
           </RequireSubscription>
-        )
+        ),
+        errorElement: <ErrorPage />,
       },
-      { 
-        path: "leads", 
+      {
+        path: "leads",
+        errorElement: <ErrorPage />,
         Component: () => (
           <RequireSubscription>
             <LazyRoute Component={LeadsPage} />
           </RequireSubscription>
         )
       },
-      { 
-        path: "sales", 
+      {
+        path: "sales",
+        errorElement: <ErrorPage />,
         Component: () => (
           <RequireSubscription>
             <LazyRoute Component={SalesPage} />
@@ -209,8 +237,9 @@ export const router = createBrowserRouter([
         )
       },
 
-      { 
-        path: "analysis", 
+      {
+        path: "analysis",
+        errorElement: <ErrorPage />,
         Component: () => (
           <RequireSubscription>
             <LazyRoute Component={AnalysisPage} />
@@ -218,8 +247,16 @@ export const router = createBrowserRouter([
         )
       },
       // Help and Settings - No subscription required
-      { path: "help", Component: () => <LazyRoute Component={SupportPage} /> },
-      { path: "settings", Component: () => <LazyRoute Component={SettingsPage} /> },
+      {
+        path: "help",
+        Component: () => <LazyRoute Component={SupportPage} />,
+        errorElement: <ErrorPage />,
+      },
+      {
+        path: "settings",
+        Component: () => <LazyRoute Component={SettingsPage} />,
+        errorElement: <ErrorPage />,
+      },
       // Admin - Admin only
       {
         path: "admin",
@@ -229,7 +266,7 @@ export const router = createBrowserRouter([
           </RequireAdmin>
         ),
       },
-      { path: "*", Component: NotFound },
+      { path: "*", Component: () => <LazyRoute Component={NotFound} />, errorElement: <ErrorPage /> },
     ],
   },
 ]);

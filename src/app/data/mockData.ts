@@ -1,6 +1,6 @@
 // Mock Data for LeadOps360 CRM
 
-export type Role = "admin" | "user" | "Sales Executive" | "Sales Manager" | "Team Leader" | "Lead Manager" | "Org Admin" | "Super Admin" | string;
+export type Role = "user" | "Sales Executive" | "Sales Manager" | "Team Leader" | "Lead Manager" | "Org Admin" | "Super Admin" | string;
 export type LeadStatus = "New" | "Contacted" | "Qualified" | "Proposal" | "Negotiation" | "Won" | "Lost";
 export type LeadSource = "Facebook" | "Website" | "CRM Import" | "LinkedIn" | "Referral" | "Cold Call" | "Email Campaign";
 export type Industry = "Technology" | "Healthcare" | "Finance" | "Retail" | "Manufacturing" | "Real Estate" | "Education" | "Others";

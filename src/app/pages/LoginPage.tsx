@@ -133,7 +133,7 @@ export default function LoginPage() {
         createUserSession(user.id, token);
 
         const role = user.role;
-        if (role === "admin") {
+        if (role === "org_admin") {
           navigate("/admin", { replace: true });
         } else {
           navigate("/", { replace: true });

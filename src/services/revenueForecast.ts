@@ -59,9 +59,18 @@ const calculateConfidence = (deals: any[], period: string): number => {
   return Math.min(Math.round(confidence), 95);
 };
 
+const emptyForecast: RevenueForecast = {
+  currentMonth: { amount: 0, confidence: 0, deals: 0 },
+  nextMonth: { amount: 0, confidence: 0, deals: 0 },
+  quarter: { amount: 0, confidence: 0, deals: 0 },
+  byStage: [],
+};
+
 export const fetchRevenueForecast = async (): Promise<RevenueForecast> => {
   try {
     const token = localStorage.getItem("vigo_token") || localStorage.getItem("auth_token") || localStorage.getItem("token") || undefined;
+    // Don't make the API call if user is not authenticated
+    if (!token) return emptyForecast;
     const rawDeals = await api.deals.list(token);
     
     // Map stage formatting if necessary, and filter stage != 'Lost'

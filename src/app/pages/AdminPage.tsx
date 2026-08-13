@@ -328,6 +328,12 @@ export default function AdminPage() {
   const [showPasswordModal, setShowPasswordModal] = useState<UserProfile | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<UserProfile | null>(null);
 
+  // ── Transfer Data State ──
+  const [showTransferModal, setShowTransferModal] = useState(false);
+  const [transferFrom, setTransferFrom] = useState<UserProfile | null>(null);
+  const [transferTo, setTransferTo] = useState<string>("");
+  const [transferLoading, setTransferLoading] = useState(false);
+
   const [form, setForm] = useState<UserForm>(emptyForm);
   const [newPassword, setNewPassword] = useState("");
   const [showPass, setShowPass] = useState(false);
@@ -543,6 +549,43 @@ export default function AdminPage() {
     await deleteUser(deleteConfirm.id);
     setSaving(false);
     setDeleteConfirm(null);
+  };
+
+  // ── Transfer Data Handlers ──
+  const openTransferModal = (user: UserProfile) => {
+    setTransferFrom(user);
+    setTransferTo("");
+    setShowTransferModal(true);
+  };
+
+  const handleTransferData = async () => {
+    if (!transferFrom || !transferTo) return;
+    setTransferLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(
+        `${getApiBaseUrl()}/admin/users/${transferFrom.id}/transfer-data`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({ transfer_to: transferTo })
+        }
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Transfer failed');
+      toast.success(
+        `Transferred ${data.transferred?.leads ?? 0} leads and ${data.transferred?.deals ?? 0} deals from ${transferFrom.name}`
+      );
+      setShowTransferModal(false);
+      loadUsers();
+    } catch (error: any) {
+      toast.error(error.message || 'Transfer failed');
+    } finally {
+      setTransferLoading(false);
+    }
   };
 
   const getRoleBadge = (r: string) => {
@@ -993,6 +1036,16 @@ export default function AdminPage() {
                               {canDelete && (
                                 <button onClick={() => setDeleteConfirm(user)} className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500 transition-colors" title="Delete">
                                   <Trash2 size={13} />
+                                </button>
+                              )}
+                              {/* Transfer Data — only Super Admin / Org Admin / admin */}
+                              {(role === 'Super Admin' || role === 'super_admin' || role === 'Org Admin' || role === 'org_admin' || role === 'admin') && !isSelf && (
+                                <button
+                                  onClick={() => openTransferModal(user)}
+                                  className="p-1.5 rounded-lg hover:bg-indigo-50 text-slate-400 hover:text-indigo-600 transition-colors"
+                                  title="Transfer Data"
+                                >
+                                  <Users size={13} />
                                 </button>
                               )}
                             </div>
@@ -1709,6 +1762,97 @@ export default function AdminPage() {
       )}
 
 
+
+      {/* ── Transfer Data Modal ── */}
+      {showTransferModal && transferFrom && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden">
+            {/* Header */}
+            <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
+              <h2 className="text-base font-semibold text-slate-800 flex items-center gap-2">
+                <Users size={16} className="text-indigo-600" />
+                Transfer Employee Data
+              </h2>
+              <button
+                onClick={() => setShowTransferModal(false)}
+                className="p-2 rounded-xl hover:bg-slate-100 transition-colors"
+              >
+                <X size={16} className="text-slate-400" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 space-y-4">
+              {/* From */}
+              <div>
+                <label className="block text-xs text-slate-500 mb-1.5">Employee Leaving</label>
+                <div className="p-3 bg-slate-50 rounded-xl text-sm text-slate-700 font-medium">
+                  {transferFrom.name}
+                  <span className="text-xs text-slate-400 font-normal ml-1">({transferFrom.role})</span>
+                </div>
+              </div>
+
+              {/* To */}
+              <div>
+                <label className="block text-xs text-slate-500 mb-1.5">Transfer To *</label>
+                <select
+                  value={transferTo}
+                  onChange={(e) => setTransferTo(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                >
+                  <option value="">Select Employee</option>
+                  {users
+                    .filter(u =>
+                      u.id !== transferFrom.id &&
+                      u.isActive &&
+                      (u as any).company_id === (transferFrom as any).company_id
+                    )
+                    .map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.name} ({u.role})
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              {/* Info box */}
+              <div className="p-4 bg-indigo-50 rounded-xl border border-indigo-100">
+                <p className="text-xs font-medium text-indigo-700 mb-2">
+                  The following active business data will be transferred:
+                </p>
+                <ul className="text-xs text-indigo-600 space-y-1">
+                  <li>✓ Active Leads (non-won / non-lost)</li>
+                  <li>✓ Open Deals (non-won / non-lost)</li>
+                </ul>
+                <p className="text-[10px] text-indigo-400 mt-2 pt-2 border-t border-indigo-200">
+                  Historical ownership, activities, performance and audit records will remain unchanged.
+                </p>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-4 border-t border-slate-100 flex justify-end gap-3">
+              <button
+                onClick={() => setShowTransferModal(false)}
+                className="px-4 py-2 text-sm border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleTransferData}
+                disabled={!transferTo || transferLoading}
+                className="px-6 py-2 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 flex items-center gap-2 disabled:opacity-50 transition-colors"
+              >
+                {transferLoading ? (
+                  <><Loader2 size={13} className="animate-spin" /> Transferring...</>
+                ) : (
+                  <><Users size={13} /> Transfer Data</>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Bulk Delete Confirmation Modal ── */}
       {showBulkDeleteConfirm && (

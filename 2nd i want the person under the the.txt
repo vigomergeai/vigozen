@@ -1,0 +1,30 @@
+2nd i want the person under the the person he or she could be able to 
+like b,c,d is under A (as per roles and other things)
+A should be able to montiter them like in user panel they should be visble to him A can only see them and 
+
+he can report of people who are working under him like his team report should be displayed to rather than whole report these has to be done of like this hierarchy
+(│   ├── Sales Manager
+│   │   │
+│   │   ├── Team Leader
+│   │   │   │
+│   │   │   ├── Sales Executive
+│   │   │   ├── Sales Executive
+│   │   │   └── Sales Executive
+│   │   │
+│   │   └── Senior Sales Executive
+│   │
+│   ├── Lead Manager
+│   │   │
+│   │   ├── Lead Executive
+│   │   ├── Telecaller
+│   │   └── Lead Qualifier
+)
+
+
+Email Address
+
+User@vigomerge.com
+
+Password
+
+user@1234

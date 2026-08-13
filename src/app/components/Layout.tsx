@@ -157,7 +157,7 @@ export default function Layout() {
               {/* Demo-mode role switcher */}
               {!userProfile && (
                 <button
-                  onClick={() => setRole(role === "admin" ? "user" : "admin")}
+                  onClick={() => setRole(role === "org_admin" ? "user" : "org_admin")}
                   className="ml-auto text-[10px] bg-white/20 hover:bg-white/30 px-2 py-0.5 rounded-full transition-colors"
                 >
                   Switch
@@ -460,10 +460,10 @@ export default function Layout() {
                     {/* Demo role switcher */}
                     {!userProfile && (
                       <button
-                        onClick={() => { setRole(role === "admin" ? "user" : "admin"); setShowUserMenu(false); }}
+                        onClick={() => { setRole(role === "org_admin" ? "user" : "org_admin"); setShowUserMenu(false); }}
                         className="w-full text-left px-4 py-2 text-sm text-slate-600 hover:bg-slate-50"
                       >
-                        Switch to {role === "admin" ? "User" : "Admin"} (demo)
+                        Switch to {role === "org_admin" ? "User" : "Org Admin"} (demo)
                       </button>
                     )}
                     <div className="border-t border-slate-100 mt-1 pt-1">

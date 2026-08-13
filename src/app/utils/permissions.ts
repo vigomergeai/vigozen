@@ -6,7 +6,7 @@ export const normalizeRole = (role: string | null | undefined): string => {
 export const isAdminRole = (role: string | null | undefined): boolean => {
   if (!role) return false;
   const norm = normalizeRole(role);
-  return ["admin", "super_admin", "org_admin"].includes(norm);
+  return ["super_admin", "org_admin"].includes(norm);
 };
 
 export const hasModuleAccess = (

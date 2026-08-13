@@ -143,14 +143,12 @@ export const api = {
       request("PUT", `/users/${userId}/change-password`, data, token),
     updateAvatar: (userId: string, avatarUrl: string | null, token: string) =>
       request("PUT", `/users/${userId}/avatar`, { avatar_url: avatarUrl }, token),
-    // ✅ ADD THIS NEW METHOD
     uploadAvatar: async (userId: string, formData: FormData, token: string) => {
       const BASE = getApiBaseUrl();
       const response = await fetch(`${BASE}/users/${userId}/avatar/upload`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
-          // DO NOT set Content-Type - browser sets it with boundary for FormData
         },
         body: formData
       });
@@ -203,6 +201,15 @@ export const api = {
     // ── Bulk User Actions ──
     bulkAction: (data: { userIds: string[]; action: string; value?: any }, token: string) =>
       request("POST", "/users/bulk/action", data, token),
+    visibleUsers: (token: string) => request("GET", "/users/visible", undefined, token),
+
+    /**
+     * Get available managers for a specific role
+     * @param role - The role to find managers for (e.g., "Sales Executive")
+     * @param token - Auth token
+     */
+    availableManagers: (role: string, token: string) =>
+      request("GET", `/users/available-managers?role=${encodeURIComponent(role)}`, undefined, token),
   },
 
 

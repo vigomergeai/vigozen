@@ -812,7 +812,7 @@ export default function SettingsPage() {
 
   // ── Load subscription data ──
   useEffect(() => {
-    if (userProfile?.id && role === "admin") {
+    if (userProfile?.id && role === "org_admin") {
       fetchCompanySubscription();
       fetchPaymentMethods();
       fetchInvoices();
@@ -2348,7 +2348,7 @@ export default function SettingsPage() {
             </div>
           )}
           {/* ===== SYSTEM (Admin only) ===== */}
-          {activeTab === "system" && role === "admin" && (
+          {activeTab === "system" && role === "org_admin" && (
             <div className="space-y-5">
               {/* Admin Panel Quick Link */}
               <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-2xl p-5 flex items-center gap-4">
@@ -2407,7 +2407,7 @@ export default function SettingsPage() {
             </div>
           )}
           {/* ===== SUBSCRIPTION ===== */}
-          {activeTab === "subscription" && role === "admin" && (
+          {activeTab === "subscription" && role === "org_admin" && (
             <div className="space-y-5">
               {/* Subscription Overview */}
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
@@ -2501,7 +2501,7 @@ export default function SettingsPage() {
                   {users?.slice(0, 10).map(user => (
                     <div key={user.id} className="flex items-center justify-between py-2 border-b border-slate-50">
                       <div className="flex items-center gap-3">
-                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold text-white ${user.role === "admin"
+                            <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold text-white ${user.role === "org_admin"
                           ? "bg-gradient-to-br from-purple-500 to-indigo-600"
                           : "bg-gradient-to-br from-emerald-500 to-teal-600"
                           }`}>

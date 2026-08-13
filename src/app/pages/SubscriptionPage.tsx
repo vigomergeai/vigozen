@@ -97,7 +97,7 @@ export default function SubscriptionPage() {
     // ── Load Data ──
     useEffect(() => {
         // Redirect if not admin or super_admin
-        if ((role as any) !== "admin" && (role as any) !== "super_admin") {
+        if ((role as any) !== "org_admin" && (role as any) !== "super_admin") {
             navigate("/");
             return;
         }
@@ -528,7 +528,7 @@ export default function SubscriptionPage() {
                                             <td className="py-3 px-4">
                                                 <div className="flex items-center gap-3">
                                                     <div
-                                                        className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold text-white ${user.role === "admin"
+                                                         className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold text-white ${user.role === "org_admin"
                                                             ? "bg-gradient-to-br from-purple-500 to-indigo-600"
                                                             : "bg-gradient-to-br from-emerald-500 to-teal-600"
                                                             }`}

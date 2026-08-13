@@ -190,8 +190,7 @@ const DEPT_OPTIONS = [
 const newPasswordSchema = z.object({
   password: z
     .string()
-    .min(6, "Password must be atleast 6 characters")
-    .max(12, "Password must be at most 12 characters"),
+    .min(1, "Password is Required"),
 });
 
 
@@ -1868,7 +1867,7 @@ export default function AdminPage() {
                       type={showPass ? "text" : "password"}
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
-                      placeholder="Min 6 characters"
+                      placeholder="Enter new password"
                       className="w-full px-3 py-2 pr-9 text-sm border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                     />
                     <button

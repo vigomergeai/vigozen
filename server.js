@@ -1115,6 +1115,12 @@ app.put("/tickets/:id", authenticateToken, async (req, res) => {
     }
     const existing = existingRes.rows[0];
 
+    // Verify ticket belongs to same company (Super Admin bypasses)
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    if (!isSuperAdmin && existing.company_id !== req.user.company_id) {
+      return res.status(403).json({ error: "Access Denied: Ticket belongs to another company" });
+    }
+
     const result = await pool.query(
       `UPDATE tickets
        SET title = COALESCE($1, title),
@@ -1158,9 +1164,20 @@ app.put("/tickets/:id", authenticateToken, async (req, res) => {
 
 app.delete("/tickets/:id", authenticateToken, async (req, res) => {
   try {
+    const { id } = req.params;
+    // Verify ticket exists and belongs to same company (Super Admin bypasses)
+    const existingRes = await pool.query("SELECT company_id FROM tickets WHERE id = $1", [id]);
+    if (existingRes.rows.length === 0) {
+      return res.status(404).json({ error: "Ticket not found" });
+    }
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    if (!isSuperAdmin && existingRes.rows[0].company_id !== req.user.company_id) {
+      return res.status(403).json({ error: "Access Denied: Ticket belongs to another company" });
+    }
+
     const result = await pool.query(
       "DELETE FROM tickets WHERE id = $1 RETURNING *",
-      [req.params.id]
+      [id]
     );
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "Ticket not found" });
@@ -1802,6 +1819,11 @@ app.get("/users/:id", authenticateToken, async (req, res) => {
 
     // If it's not self, verify the user has access to view this user's profile
     if (!isSelf) {
+      const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+      if (!isSuperAdmin && targetUser.company_id !== req.user.company_id) {
+        return res.status(403).json({ error: "Access Denied: User belongs to another company" });
+      }
+
       const isAdmin = isAdminRole(req.user.role);
       if (!isAdmin) {
         // If not admin, check if targetUser is a subordinate of requesting user
@@ -1999,10 +2021,47 @@ app.post("/users", authenticateToken, async (req, res) => {
       'lead_manager': ['Lead Executive', 'Telecaller', 'Lead Qualifier']
     };
 
-    const { name, email, role, employeeId, department, team_id, manager_id: bodyManagerId } = req.body;
+    const { name, email, role, employeeId, department, team_id, manager_id: bodyManagerId, company_name, companyName, company_id: bodyCompanyId, companyId: bodyCompanyIdCamel } = req.body;
     const targetRole = role || 'Sales Executive';
 
     const isSuperAdmin = creatorRole === 'Super Admin' || creatorRole === 'super_admin';
+
+    // Validate that Super Admin must enter/select a company when creating an Org Admin
+    const targetRoleLower = targetRole.toLowerCase();
+    if (isSuperAdmin && (targetRoleLower === 'org_admin' || targetRoleLower === 'admin' || targetRoleLower === 'org admin')) {
+      const targetCompanyName = company_name || companyName;
+      const targetCompanyId = bodyCompanyId || bodyCompanyIdCamel;
+      if (!targetCompanyName && !targetCompanyId) {
+        return res.status(400).json({ error: "Company Name or Company ID is required when creating an Org Admin" });
+      }
+    }
+
+    // Resolve finalCompanyId
+    let finalCompanyId = companyId; // req.user.company_id || null
+    if (isSuperAdmin) {
+      const targetCompanyName = company_name || companyName;
+      const targetCompanyId = bodyCompanyId || bodyCompanyIdCamel;
+
+      if (targetCompanyId) {
+        finalCompanyId = targetCompanyId;
+      } else if (targetCompanyName) {
+        // Look up by name (case-insensitive)
+        const compRes = await pool.query(
+          "SELECT id FROM companies WHERE LOWER(name) = LOWER($1)",
+          [targetCompanyName.trim()]
+        );
+        if (compRes.rows.length > 0) {
+          finalCompanyId = compRes.rows[0].id;
+        } else {
+          // Create new company
+          const newCompRes = await pool.query(
+            "INSERT INTO companies (name, plan_type, subscription_status, allowed_users) VALUES ($1, 'starter', 'trial', 10) RETURNING id",
+            [targetCompanyName.trim()]
+          );
+          finalCompanyId = newCompRes.rows[0].id;
+        }
+      }
+    }
 
     // 2. Validate Creator Permissions
     if (!isSuperAdmin) {
@@ -2067,9 +2126,38 @@ app.post("/users", authenticateToken, async (req, res) => {
       const teamResult = await pool.query(
         `INSERT INTO teams (company_id, team_name, team_leader_id, manager_id) 
         VALUES ($1, $2, $3, $4) RETURNING id`,
-        [companyId, finalTeamName, null, manager_id]
+        [finalCompanyId, finalTeamName, null, manager_id]
       );
       newTeamId = teamResult.rows[0].id;
+    }
+
+    // ── USER LIMIT CHECK ──
+    // Check if the company has reached its user limit before creating a new active user
+    if (finalCompanyId) {
+      const activeCountRes = await pool.query(
+        "SELECT COUNT(*) as count FROM users WHERE company_id = $1 AND is_active = true AND (status = 'Active' OR status = 'active')",
+        [finalCompanyId]
+      );
+      const activeUsersCount = parseInt(activeCountRes.rows[0].count);
+
+      const companyRes = await pool.query(
+        "SELECT allowed_users, purchased_users FROM companies WHERE id = $1",
+        [finalCompanyId]
+      );
+      
+      if (companyRes.rows.length > 0) {
+        const company = companyRes.rows[0];
+        const allowedUsers = company.allowed_users || company.purchased_users || 10;
+
+        if (activeUsersCount >= allowedUsers) {
+          return res.status(400).json({
+            error: `User Limit Reached. Your plan allows ${allowedUsers} active users. Please upgrade your subscription to add more users.`,
+            limit: allowedUsers,
+            active_users: activeUsersCount,
+            can_upgrade: true
+          });
+        }
+      }
     }
 
     // 5. Generate Invitation Token (Commented out for Testing Mode)
@@ -2083,7 +2171,7 @@ app.post("/users", authenticateToken, async (req, res) => {
       `INSERT INTO users (name, email, password, role, company_id, manager_id, team_id, is_active, status, employee_id, department, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, true, 'active', $8, $9, NOW())
        RETURNING id, name, email, role, employee_id AS "employeeId", department, is_active AS "isActive", status, company_id AS "companyId", created_at AS "createdAt"`,
-      [name, email, defaultPasswordHash, targetRole, companyId, manager_id, newTeamId, employeeId || null, department || "Sales"]
+      [name, email, defaultPasswordHash, targetRole, finalCompanyId, manager_id, newTeamId, employeeId || null, department || "Sales"]
     );
 
     /* Original code for invitation-based user creation (Commented out for testing):
@@ -2092,7 +2180,7 @@ app.post("/users", authenticateToken, async (req, res) => {
       `INSERT INTO users (name, email, role, company_id, manager_id, team_id, is_active, status, invite_token, employee_id, department, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, false, 'invited', $7, $8, $9, NOW())
        RETURNING id, name, email, role, employee_id AS "employeeId", department, is_active AS "isActive", status, company_id AS "companyId", created_at AS "createdAt"`,
-      [name, email, targetRole, companyId, manager_id, newTeamId, inviteToken, employeeId || null, department || "Sales"]
+      [name, email, targetRole, finalCompanyId, manager_id, newTeamId, inviteToken, employeeId || null, department || "Sales"]
     );
     */
 
@@ -2128,7 +2216,7 @@ app.post("/users", authenticateToken, async (req, res) => {
       'INVITE_USER',
       'user',
       newUser.id,
-      { email, role: targetRole, company_id: companyId }
+      { email, role: targetRole, company_id: finalCompanyId }
     );
 
     res.json(newUser);
@@ -2273,10 +2361,55 @@ app.put("/users/:id/toggle-access", authenticateToken, requireRole(['admin', 'su
     }
 
     const { isActive } = req.body;
+    const userId = req.params.id;
+    const companyId = req.user.company_id;
+
+    // ── USER LIMIT CHECK FOR ACTIVATION ──
+    // Only check when activating (isActive = true)
+    if (isActive === true) {
+      // Get the current user's status
+      const userRes = await pool.query(
+        "SELECT is_active, company_id FROM users WHERE id = $1",
+        [userId]
+      );
+      
+      // Only check if the user is currently inactive (activation)
+      if (userRes.rows.length > 0 && userRes.rows[0].is_active === false) {
+        const targetCompanyId = userRes.rows[0].company_id || companyId;
+        if (targetCompanyId) {
+          // Count active users in the company
+          const activeCountRes = await pool.query(
+            "SELECT COUNT(*) as count FROM users WHERE company_id = $1 AND is_active = true AND (status = 'Active' OR status = 'active')",
+            [targetCompanyId]
+          );
+          const activeUsersCount = parseInt(activeCountRes.rows[0].count);
+
+          // Get the allowed users limit
+          const companyRes = await pool.query(
+            "SELECT allowed_users, purchased_users FROM companies WHERE id = $1",
+            [targetCompanyId]
+          );
+          
+          if (companyRes.rows.length > 0) {
+            const company = companyRes.rows[0];
+            const allowedUsers = company.allowed_users || company.purchased_users || 10;
+
+            if (activeUsersCount >= allowedUsers) {
+              return res.status(400).json({
+                error: `User Limit Reached. Your plan allows ${allowedUsers} active users. Please upgrade your subscription to activate this user.`,
+                limit: allowedUsers,
+                active_users: activeUsersCount,
+                can_upgrade: true
+              });
+            }
+          }
+        }
+      }
+    }
 
     const result = await pool.query(
       "UPDATE users SET is_active = $1 WHERE id = $2 RETURNING id, is_active AS \"isActive\"",
-      [isActive, req.params.id]
+      [isActive, userId]
     );
 
     if (result.rows.length === 0) {
@@ -2524,8 +2657,17 @@ app.get("/settings/:userId", authenticateToken, async (req, res) => {
   const requestingUserId = req.user.id;
   const isAdmin = isAdminRole(req.user.role);
 
-  if (userId !== requestingUserId && !isAdmin) {
-    return res.status(403).json({ error: "Access denied" });
+  if (userId !== requestingUserId) {
+    if (!isAdmin) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    if (!isSuperAdmin) {
+      const userRes = await pool.query("SELECT company_id FROM users WHERE id = $1", [userId]);
+      if (userRes.rows.length === 0 || userRes.rows[0].company_id !== req.user.company_id) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+    }
   }
 
   const result = await pool.query("SELECT * FROM settings WHERE user_id = $1", [userId]);
@@ -2649,6 +2791,12 @@ app.put("/leads/:id", authenticateToken, async (req, res) => {
       return res.status(404).json({ error: "Lead not found" });
     }
     const existing = existingRes.rows[0];
+
+    // Verify lead belongs to same company (Super Admin bypasses)
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    if (!isSuperAdmin && existing.company_id !== req.user.company_id) {
+      return res.status(403).json({ error: "Access Denied: Lead belongs to another company" });
+    }
 
     // Enforce scope check
     if (scope === 'own') {
@@ -2911,6 +3059,16 @@ app.get("/leads/:id/comments", authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
 
+    // Verify lead belongs to same company (Super Admin bypasses)
+    const leadCheck = await pool.query("SELECT company_id FROM leads WHERE id = $1", [id]);
+    if (leadCheck.rows.length === 0) {
+      return res.status(404).json({ error: "Lead not found" });
+    }
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    if (!isSuperAdmin && leadCheck.rows[0].company_id !== req.user.company_id) {
+      return res.status(403).json({ error: "Access Denied: Lead belongs to another company" });
+    }
+
     const result = await pool.query(
       `SELECT 
                 lc.id,
@@ -2942,6 +3100,16 @@ app.post("/leads/:id/comments", authenticateToken, async (req, res) => {
     const { id } = req.params;
     const { comment, parent_comment_id } = req.body;
     const user_id = req.user.id;
+
+    // Verify lead belongs to same company (Super Admin bypasses)
+    const leadCheck = await pool.query("SELECT company_id FROM leads WHERE id = $1", [id]);
+    if (leadCheck.rows.length === 0) {
+      return res.status(404).json({ error: "Lead not found" });
+    }
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    if (!isSuperAdmin && leadCheck.rows[0].company_id !== req.user.company_id) {
+      return res.status(403).json({ error: "Access Denied: Lead belongs to another company" });
+    }
 
     if (!comment || comment.trim() === '') {
       return res.status(400).json({ error: "Comment cannot be empty" });
@@ -3004,6 +3172,16 @@ app.put("/leads/:id/comments/:commentId", authenticateToken, async (req, res) =>
     const { id, commentId } = req.params;
     const { comment } = req.body;
 
+    // Verify lead belongs to same company (Super Admin bypasses)
+    const leadCheck = await pool.query("SELECT company_id FROM leads WHERE id = $1", [id]);
+    if (leadCheck.rows.length === 0) {
+      return res.status(404).json({ error: "Lead not found" });
+    }
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    if (!isSuperAdmin && leadCheck.rows[0].company_id !== req.user.company_id) {
+      return res.status(403).json({ error: "Access Denied: Lead belongs to another company" });
+    }
+
     if (req.user.role !== 'admin') {
       return res.status(403).json({ error: "Only admins are allowed to edit comments" });
     }
@@ -3047,6 +3225,16 @@ app.put("/leads/:id/comments/:commentId", authenticateToken, async (req, res) =>
 app.delete("/leads/:id/comments/:commentId", authenticateToken, async (req, res) => {
   try {
     const { id, commentId } = req.params;
+
+    // Verify lead belongs to same company (Super Admin bypasses)
+    const leadCheck = await pool.query("SELECT company_id FROM leads WHERE id = $1", [id]);
+    if (leadCheck.rows.length === 0) {
+      return res.status(404).json({ error: "Lead not found" });
+    }
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    if (!isSuperAdmin && leadCheck.rows[0].company_id !== req.user.company_id) {
+      return res.status(403).json({ error: "Access Denied: Lead belongs to another company" });
+    }
 
     if (req.user.role !== 'admin') {
       return res.status(403).json({ error: "Only admins are allowed to delete comments" });
@@ -3213,6 +3401,12 @@ app.put("/deals/:id", authenticateToken, async (req, res) => {
       return res.status(404).json({ error: "Deal not found" });
     }
     const existing = existingRes.rows[0];
+
+    // Verify deal belongs to same company (Super Admin bypasses)
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    if (!isSuperAdmin && existing.company_id !== req.user.company_id) {
+      return res.status(403).json({ error: "Access Denied: Deal belongs to another company" });
+    }
 
     // Enforce scope check
     if (scope === 'own') {
@@ -4782,9 +4976,18 @@ app.delete("/users/:id/avatar", authenticateToken, async (req, res) => {
 // ── Billing History ────────────────────────────────────────
 app.get("/invoices/:userId", authenticateToken, async (req, res) => {
   try {
+    const targetUserId = req.params.userId;
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    if (!isSuperAdmin && targetUserId !== req.user.id) {
+      const userCheck = await pool.query("SELECT company_id FROM users WHERE id = $1", [targetUserId]);
+      if (userCheck.rows.length === 0 || userCheck.rows[0].company_id !== req.user.company_id) {
+        return res.status(403).json({ error: "Access Denied: Invoices belong to another company" });
+      }
+    }
+
     const result = await pool.query(
       "SELECT * FROM invoices WHERE user_id = $1 ORDER BY created_at DESC",
-      [req.params.userId]
+      [targetUserId]
     );
     res.json(result.rows);
   } catch (err) {
@@ -4796,9 +4999,18 @@ app.get("/invoices/:userId", authenticateToken, async (req, res) => {
 // ── Active Sessions ────────────────────────────────────────
 app.get("/user-sessions/:userId", authenticateToken, async (req, res) => {
   try {
+    const targetUserId = req.params.userId;
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    if (!isSuperAdmin && targetUserId !== req.user.id) {
+      const userCheck = await pool.query("SELECT company_id FROM users WHERE id = $1", [targetUserId]);
+      if (userCheck.rows.length === 0 || userCheck.rows[0].company_id !== req.user.company_id) {
+        return res.status(403).json({ error: "Access Denied: Sessions belong to another company" });
+      }
+    }
+
     const result = await pool.query(
       "SELECT * FROM user_sessions WHERE user_id = $1 ORDER BY last_active DESC",
-      [req.params.userId]
+      [targetUserId]
     );
     res.json(result.rows);
   } catch (err) {
@@ -4809,7 +5021,19 @@ app.get("/user-sessions/:userId", authenticateToken, async (req, res) => {
 
 app.delete("/user-sessions/:id", authenticateToken, async (req, res) => {
   try {
-    await pool.query("DELETE FROM user_sessions WHERE id = $1", [req.params.id]);
+    const sessionId = req.params.id;
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    if (!isSuperAdmin) {
+      const sessionCheck = await pool.query(
+        "SELECT u.company_id FROM user_sessions us JOIN users u ON us.user_id = u.id WHERE us.id = $1",
+        [sessionId]
+      );
+      if (sessionCheck.rows.length === 0 || sessionCheck.rows[0].company_id !== req.user.company_id) {
+        return res.status(403).json({ error: "Access Denied: Session belongs to another company" });
+      }
+    }
+
+    await pool.query("DELETE FROM user_sessions WHERE id = $1", [sessionId]);
     res.json({ success: true });
   } catch (err) {
     console.error("REVOKE SESSION ERROR:", err);
@@ -4820,6 +5044,15 @@ app.delete("/user-sessions/:id", authenticateToken, async (req, res) => {
 // ── Cancel Subscription ────────────────────────────────────
 app.put("/users/:id/subscription", authenticateToken, async (req, res) => {
   try {
+    const targetUserId = req.params.id;
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    if (!isSuperAdmin) {
+      const userCheck = await pool.query("SELECT company_id FROM users WHERE id = $1", [targetUserId]);
+      if (userCheck.rows.length === 0 || userCheck.rows[0].company_id !== req.user.company_id) {
+        return res.status(403).json({ error: "Access Denied: User belongs to another company" });
+      }
+    }
+
     const { subscription_status } = req.body;
 
     // Update subscription_status and sync is_active field
@@ -4833,7 +5066,7 @@ app.put("/users/:id/subscription", authenticateToken, async (req, res) => {
            updated_at = NOW()
        WHERE id = $3 
        RETURNING id, subscription_status, is_active`,
-      [subscription_status, isActive, req.params.id]
+      [subscription_status, isActive, targetUserId]
     );
 
     res.json(result.rows[0]);
@@ -4846,10 +5079,19 @@ app.put("/users/:id/subscription", authenticateToken, async (req, res) => {
 // ── Remove Payment Method ──────────────────────────────────
 app.put("/users/:id/payment-method", authenticateToken, async (req, res) => {
   try {
+    const targetUserId = req.params.id;
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    if (!isSuperAdmin) {
+      const userCheck = await pool.query("SELECT company_id FROM users WHERE id = $1", [targetUserId]);
+      if (userCheck.rows.length === 0 || userCheck.rows[0].company_id !== req.user.company_id) {
+        return res.status(403).json({ error: "Access Denied: User belongs to another company" });
+      }
+    }
+
     const result = await pool.query(
       `UPDATE users SET payment_last4 = NULL, payment_brand = NULL, payment_expiry = NULL
        WHERE id = $1 RETURNING id`,
-      [req.params.id]
+      [targetUserId]
     );
     res.json({ success: true, id: result.rows[0]?.id });
   } catch (err) {
@@ -5117,6 +5359,56 @@ app.post("/users/bulk/action", authenticateToken, requireRole(['admin', 'super_a
 
     switch (action) {
       case 'activate':
+        // ── USER LIMIT CHECK FOR BULK ACTIVATION ──
+        let bulkCompanyId = companyId;
+        if (!bulkCompanyId && userIds.length > 0) {
+          const firstUserRes = await pool.query(
+            "SELECT company_id FROM users WHERE id = $1",
+            [userIds[0]]
+          );
+          if (firstUserRes.rows.length > 0) {
+            bulkCompanyId = firstUserRes.rows[0].company_id;
+          }
+        }
+
+        if (bulkCompanyId) {
+          // Count currently active users
+          const activeCountRes = await pool.query(
+            "SELECT COUNT(*) as count FROM users WHERE company_id = $1 AND is_active = true AND (status = 'Active' OR status = 'active')",
+            [bulkCompanyId]
+          );
+          const currentActiveCount = parseInt(activeCountRes.rows[0].count);
+
+          // Count how many of the selected users are currently inactive (will become active)
+          const inactiveSelectedRes = await pool.query(
+            "SELECT COUNT(*) as count FROM users WHERE id = ANY($1) AND is_active = false",
+            [userIds]
+          );
+          const inactiveSelectedCount = parseInt(inactiveSelectedRes.rows[0].count);
+
+          // Get the allowed users limit
+          const companyRes = await pool.query(
+            "SELECT allowed_users, purchased_users FROM companies WHERE id = $1",
+            [bulkCompanyId]
+          );
+          
+          if (companyRes.rows.length > 0) {
+            const company = companyRes.rows[0];
+            const allowedUsers = company.allowed_users || company.purchased_users || 10;
+
+            // Check if activating these users would exceed the limit
+            if (currentActiveCount + inactiveSelectedCount > allowedUsers) {
+              return res.status(400).json({
+                error: `Cannot activate ${inactiveSelectedCount} user(s). Your plan allows ${allowedUsers} active users. Currently ${currentActiveCount} active. Please upgrade your subscription.`,
+                limit: allowedUsers,
+                active_users: currentActiveCount,
+                requested_activation: inactiveSelectedCount,
+                can_upgrade: true
+              });
+            }
+          }
+        }
+
         result = await pool.query(
           "UPDATE users SET is_active = true, status = 'Active', updated_at = NOW() WHERE id = ANY($1) RETURNING id, name",
           [userIds]
@@ -5409,8 +5701,21 @@ app.get("/api/reports/sales-wise", authenticateToken, checkPermission('reports')
 // ── CSV Export Endpoint ──
 app.get("/api/reports/export/csv", authenticateToken, async (req, res) => {
   try {
-    const leadsResult = await pool.query("SELECT name, company, email, phone, status, value, created_at FROM leads ORDER BY created_at DESC");
-    const dealsResult = await pool.query("SELECT title, company, stage, value, owner, created_at FROM deals ORDER BY created_at DESC");
+    const companyId = req.user.company_id;
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+
+    let leadsQuery = "SELECT name, company, email, phone, status, value, created_at FROM leads ORDER BY created_at DESC";
+    let dealsQuery = "SELECT title, company, stage, value, owner, created_at FROM deals ORDER BY created_at DESC";
+    let queryParams = [];
+
+    if (!isSuperAdmin) {
+      leadsQuery = "SELECT name, company, email, phone, status, value, created_at FROM leads WHERE company_id = $1 ORDER BY created_at DESC";
+      dealsQuery = "SELECT title, company, stage, value, owner, created_at FROM deals WHERE company_id = $1 ORDER BY created_at DESC";
+      queryParams = [companyId];
+    }
+
+    const leadsResult = await pool.query(leadsQuery, queryParams);
+    const dealsResult = await pool.query(dealsQuery, queryParams);
 
     const csvRows = [];
     csvRows.push("Section,Title/Name,Company,Status/Stage,Value (₹),Owner/Contact,Created Date");
@@ -5435,8 +5740,21 @@ app.get("/api/reports/export/csv", authenticateToken, async (req, res) => {
 // ── PDF Export Endpoint ──
 app.get("/api/reports/export/pdf", authenticateToken, async (req, res) => {
   try {
-    const leadsRes = await pool.query("SELECT COUNT(*) as total FROM leads");
-    const dealsRes = await pool.query("SELECT COUNT(*) as total, COALESCE(SUM(value) FILTER (WHERE LOWER(stage) = 'won'), 0) as revenue FROM deals");
+    const companyId = req.user.company_id;
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+
+    let leadsQuery = "SELECT COUNT(*) as total FROM leads";
+    let dealsQuery = "SELECT COUNT(*) as total, COALESCE(SUM(value) FILTER (WHERE LOWER(stage) = 'won'), 0) as revenue FROM deals";
+    let queryParams = [];
+
+    if (!isSuperAdmin) {
+      leadsQuery = "SELECT COUNT(*) as total FROM leads WHERE company_id = $1";
+      dealsQuery = "SELECT COUNT(*) as total, COALESCE(SUM(value) FILTER (WHERE LOWER(stage) = 'won'), 0) as revenue FROM deals WHERE company_id = $1";
+      queryParams = [companyId];
+    }
+
+    const leadsRes = await pool.query(leadsQuery, queryParams);
+    const dealsRes = await pool.query(dealsQuery, queryParams);
 
     const doc = new PDFDocument({ margin: 50 });
     const filename = `report_${new Date().toISOString().split("T")[0]}.pdf`;

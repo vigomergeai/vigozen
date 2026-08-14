@@ -1092,7 +1092,7 @@ app.post("/tickets", authenticateToken, async (req, res) => {
     await notificationService.notifySuperAdmins(
       'ticket_created',
       "🎫 New Support Ticket",
-      `New ticket "${ticket.title}" has been created`,
+      `New ticket "${ticket.title}" has been created by ${req.user?.name || 'a team member'}`,
       `/tickets/${ticket.id}`,
       'medium',
       { ticket_priority: ticket.priority, ticket_category: ticket.category }
@@ -1148,7 +1148,7 @@ app.put("/tickets/:id", authenticateToken, async (req, res) => {
       await notificationService.notifySuperAdmins(
         'ticket_closed',
         "Ticket Closed",
-        `Ticket "${ticket.title}" has been closed`,
+        `Ticket "${ticket.title}" has been closed by ${req.user?.name || 'a team member'}`,
         `/tickets/${ticket.id}`,
         'medium',
         { ticket_category: ticket.category, ticket_priority: ticket.priority }
@@ -2202,7 +2202,7 @@ app.post("/users", authenticateToken, async (req, res) => {
       await notificationService.notifySuperAdmins(
         'user_added',
         "👤 Team Member Joined",
-        `${name} has joined the team as ${targetRole}`,
+        `${name} has joined the team as ${targetRole} (added by ${req.user?.name || 'a team member'})`,
         `/users/${newUser.id}`,
         'medium',
         { user_role: targetRole, user_email: email }
@@ -2710,16 +2710,16 @@ app.post("/leads", authenticateToken, enforceStorageLimit(0.01), async (req, res
     if (scope === 'none') {
       return res.status(403).json({ error: "You are not permitted to create leads." });
     }
-    const { name, email, phone, company, value, status, source, industry, notes, probability, aiscore } = req.body;
+    const { name, email, phone, company, value, status, source, industry, notes, probability, aiscore, next_meeting_at } = req.body;
 
     // Get owner_id and company_id
     const ownerId = req.body.owner_id || req.user?.id || null;
     const companyId = req.user?.company_id || null;
     const result = await pool.query(
-      `INSERT INTO leads (id, name, email, phone, company, value, status, source, industry, notes, owner_id, company_id, probability, aiscore, created_at, updated_at)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
+      `INSERT INTO leads (id, name, email, phone, company, value, status, source, industry, notes, owner_id, company_id, probability, aiscore, next_meeting_at, created_at, updated_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW())
        RETURNING *`,
-      [name, email, phone, company, value, status, source, industry, notes, ownerId, companyId, probability || 50, aiscore || 50]
+      [name, email, phone, company, value, status, source, industry, notes, ownerId, companyId, probability || 50, aiscore || 50, next_meeting_at || null]
     );
 
     const lead = result.rows[0];
@@ -2757,7 +2757,7 @@ app.post("/leads", authenticateToken, enforceStorageLimit(0.01), async (req, res
       await notificationService.notifySuperAdmins(
         leadValue >= 50000 ? 'high_value_lead' : 'lead_created',
         leadValue >= 50000 ? "⭐ High Value Lead Created" : "🆕 New Lead Created",
-        `New lead "${lead.name}" ${leadValue > 0 ? `worth ₹${leadValue.toLocaleString()}` : ''} has been created`,
+        `New lead "${lead.name}" ${leadValue > 0 ? `worth ₹${leadValue.toLocaleString()}` : ''} has been created by ${req.user?.name || 'a team member'}`,
         `/leads/${lead.id}`,
         leadValue >= 50000 ? 'high' : 'medium',
         { lead_value: leadValue, lead_name: lead.name }
@@ -2783,7 +2783,7 @@ app.put("/leads/:id", authenticateToken, async (req, res) => {
       return res.status(403).json({ error: "You are not permitted to edit leads." });
     }
 
-    const { name, email, phone, company, value, status, source, industry, notes, converted_to_deal, deal_id } = req.body;
+    const { name, email, phone, company, value, status, source, industry, notes, converted_to_deal, deal_id, next_meeting_at } = req.body;
 
     // Fetch existing lead first to preserve missing fields
     const existingRes = await pool.query("SELECT * FROM leads WHERE id = $1", [req.params.id]);
@@ -2831,11 +2831,15 @@ app.put("/leads/:id", authenticateToken, async (req, res) => {
 
     const ownerId = req.body.owner_id !== undefined ? req.body.owner_id : (req.body.ownerId !== undefined ? req.body.ownerId : existing.owner_id);
 
+    const finalNextMeeting = next_meeting_at !== undefined ? next_meeting_at : existing.next_meeting_at;
+    const meetingChanged = next_meeting_at !== undefined && String(next_meeting_at) !== String(existing.next_meeting_at);
+    const finalMeetingNotified = meetingChanged ? false : (existing.meeting_notified || false);
+
     const result = await pool.query(
       `UPDATE leads 
-       SET name=$1, email=$2, phone=$3, company=$4, value=$5, status=$6, source=$7, industry=$8, notes=$9, converted_to_deal=$10, deal_id=$11, owner_id=$12, updated_at=NOW() 
-       WHERE id=$13 RETURNING *`,
-      [finalName, finalEmail, finalPhone, finalCompany, finalValue, finalStatus, finalSource, finalIndustry, finalNotes, finalConverted, finalDealId, ownerId, req.params.id]
+       SET name=$1, email=$2, phone=$3, company=$4, value=$5, status=$6, source=$7, industry=$8, notes=$9, converted_to_deal=$10, deal_id=$11, owner_id=$12, next_meeting_at=$13, meeting_notified=$14, updated_at=NOW() 
+       WHERE id=$15 RETURNING *`,
+      [finalName, finalEmail, finalPhone, finalCompany, finalValue, finalStatus, finalSource, finalIndustry, finalNotes, finalConverted, finalDealId, ownerId, finalNextMeeting, finalMeetingNotified, req.params.id]
     );
 
     // ── Notification: Lead status changed / converted ──
@@ -2848,7 +2852,7 @@ app.put("/leads/:id", authenticateToken, async (req, res) => {
         await notificationService.notifySuperAdmins(
           'lead_status_changed',
           "Lead Status Updated",
-          `Lead "${lead.name}" status changed from ${existing.status} to ${finalStatus}`,
+          `Lead "${lead.name}" status changed from ${existing.status} to ${finalStatus} by ${req.user?.name || 'a team member'}`,
           `/leads/${lead.id}`,
           'medium',
           { old_status: existing.status, new_status: finalStatus, lead_name: lead.name }
@@ -2860,7 +2864,7 @@ app.put("/leads/:id", authenticateToken, async (req, res) => {
         await notificationService.notifySuperAdmins(
           'lead_converted',
           "🎉 Lead Converted to Deal",
-          `Lead "${lead.name}" has been converted to a deal`,
+          `Lead "${lead.name}" has been converted to a deal by ${req.user?.name || 'a team member'}`,
           finalDealId ? `/deals/${finalDealId}` : `/leads/${lead.id}`,
           'high',
           { lead_name: lead.name, deal_id: finalDealId }
@@ -3032,7 +3036,7 @@ app.post("/deals", authenticateToken, async (req, res) => {
       await notificationService.notifySuperAdmins(
         'deal_won',
         "🎉 Deal Won!",
-        `Deal "${deal.title}" worth ₹${parseFloat(deal.value || 0).toLocaleString()} has been closed`,
+        `Deal "${deal.title}" worth ₹${parseFloat(deal.value || 0).toLocaleString()} has been closed by ${req.user?.name || 'a team member'}`,
         `/deals/${deal.id}`,
         'high',
         { deal_value: deal.value, deal_title: deal.title }
@@ -3041,7 +3045,7 @@ app.post("/deals", authenticateToken, async (req, res) => {
       await notificationService.notifySuperAdmins(
         'deal_created',
         "💼 New Deal Created",
-        `New deal "${deal.title}" for ${deal.company || 'client'} has been created`,
+        `New deal "${deal.title}" for ${deal.company || 'client'} has been created by ${req.user?.name || 'a team member'}`,
         `/deals/${deal.id}`,
         'medium',
         { deal_stage: deal.stage, deal_value: deal.value }
@@ -3490,7 +3494,7 @@ app.put("/deals/:id", authenticateToken, async (req, res) => {
         await notificationService.notifySuperAdmins(
           'deal_won',
           "🎉 Deal Won!",
-          `Deal "${deal.title}" worth ₹${parseFloat(deal.value || 0).toLocaleString()} has been won`,
+          `Deal "${deal.title}" worth ₹${parseFloat(deal.value || 0).toLocaleString()} has been won by ${req.user?.name || 'a team member'}`,
           `/deals/${deal.id}`,
           'high',
           { deal_value: deal.value, deal_title: deal.title }
@@ -3500,7 +3504,7 @@ app.put("/deals/:id", authenticateToken, async (req, res) => {
         await notificationService.notifySuperAdmins(
           'deal_lost',
           "Deal Lost",
-          `Deal "${deal.title}" has been marked as lost`,
+          `Deal "${deal.title}" has been marked as lost by ${req.user?.name || 'a team member'}`,
           `/deals/${deal.id}`,
           'high',
           { deal_value: deal.value, deal_title: deal.title }
@@ -3510,7 +3514,7 @@ app.put("/deals/:id", authenticateToken, async (req, res) => {
         await notificationService.notifySuperAdmins(
           'deal_status_changed',
           "Deal Stage Updated",
-          `Deal "${deal.title}" moved from ${existing.stage} to ${deal.stage}`,
+          `Deal "${deal.title}" moved from ${existing.stage} to ${deal.stage} by ${req.user?.name || 'a team member'}`,
           `/deals/${deal.id}`,
           'medium',
           { old_stage: existing.stage, new_stage: deal.stage, deal_title: deal.title }
@@ -3583,10 +3587,14 @@ app.delete("/deals/:id", authenticateToken, async (req, res) => {
 app.delete("/admin/reset-database", authenticateToken, requireRole(['admin', 'super_admin', 'org_admin']), async (req, res) => {
 
   try {
-    await pool.query("DELETE FROM leads");
-    await pool.query("DELETE FROM deals");
-    await pool.query("DELETE FROM tickets");
-    await pool.query("DELETE FROM activities");
+    const companyId = req.user.company_id;
+    if (!companyId) {
+      return res.status(400).json({ error: "No company context for this user" });
+    }
+    await pool.query("DELETE FROM leads WHERE company_id = $1", [companyId]);
+    await pool.query("DELETE FROM deals WHERE company_id = $1", [companyId]);
+    await pool.query("DELETE FROM tickets WHERE company_id = $1", [companyId]);
+    await pool.query("DELETE FROM activities WHERE company_id = $1", [companyId]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -7100,6 +7108,7 @@ app.listen(5000, "0.0.0.0", () => {
 
 // Start cron job for background sync
 require('./server/cronSync');
+require('./server/meetingReminder');
 console.log('⏰ Cron sync job started');
 
 // Nodemon trigger restart comment

@@ -14,7 +14,7 @@ async function getTeamStats() {
         const topResult = await pool.query(`
       SELECT u.id, u.name, u.email, COUNT(l.id) as lead_count
       FROM users u
-      LEFT JOIN leads l ON l.assigned_to = u.id
+      LEFT JOIN leads l ON l.owner_id = u.id
       GROUP BY u.id, u.name, u.email
       ORDER BY lead_count DESC
       LIMIT 5

@@ -1686,7 +1686,6 @@ export default function AdminPage() {
                   </>
                 ) : (
                   <>
-                    <Plus size={13} />
                     Create User
                   </>
                 )}

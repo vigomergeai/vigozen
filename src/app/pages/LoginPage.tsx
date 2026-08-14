@@ -321,6 +321,15 @@ const handleSignUp = async (e: React.FormEvent) => {
                   </div>
                 </div>
 
+                <div className="flex justify-end -mt-1">
+                  <button
+                    type="button"
+                    onClick={() => navigate("/forgot-password")}
+                    className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+                  >
+                    Forgot password?
+                  </button>
+                </div>
                 <button
                   type="submit"
                   disabled={loading}

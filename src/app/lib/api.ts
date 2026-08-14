@@ -133,6 +133,8 @@ export const api = {
     verify2FA: (otpCode: string, token: string) => request("POST", "/auth/2fa/verify", { token: otpCode }, token),
     validateInvite: (token: string) => request("GET", `/auth/invite/validate?token=${token}`),
     acceptInvite: (data: { token: string; password: string }) => request("POST", "/auth/invite/accept", data),
+    forgotPassword: (email: string) => request("POST", "/auth/forgot-password", { email }),
+    resetPassword: (data: { token: string; newPassword: string }) => request("POST", "/auth/reset-password", data),
   },
   users: {
     list: (token: string) => request("GET", "/users", undefined, token),

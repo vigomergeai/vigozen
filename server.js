@@ -17,6 +17,8 @@ const notificationQueue = require("./server/notificationQueue");
 const notificationService = require("./server/notificationService");
 const { startNotificationWorker } = require("./server/notificationWorker");
 const path = require("path");
+const { Resend } = require("resend");
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 require("dotenv").config();
 async function generateWithRetry(model, prompt, retries = 3, delay = 2000) {
@@ -4062,6 +4064,78 @@ app.post("/auth/login", async (req, res) => {
     });
   }
 });
+
+// Forgot password - send reset link
+app.post("/auth/forgot-password", async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: "Email is required" });
+    }
+
+    const result = await pool.query("SELECT id, name FROM users WHERE email=$1", [email]);
+
+    if (result.rows.length === 0) {
+      return res.json({ success: true, message: "If that email exists, a reset link has been sent." });
+    }
+
+    const user = result.rows[0];
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    const expiry = new Date(Date.now() + 60 * 60 * 1000);
+
+    await pool.query(
+      "UPDATE users SET reset_token=$1, reset_token_expiry=$2 WHERE id=$3",
+      [resetToken, expiry, user.id]
+    );
+
+    const resetLink = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;
+
+    await resend.emails.send({
+      from: "VigozenCRM <onboarding@resend.dev>",
+      to: email,
+      subject: "Reset your VigozenCRM password",
+      html: `<p>Hi ${user.name || "there"},</p><p>Click the link below to reset your password. This link expires in 1 hour.</p><p><a href="${resetLink}">${resetLink}</a></p><p>If you didn't request this, you can ignore this email.</p>`
+    });
+
+    res.json({ success: true, message: "If that email exists, a reset link has been sent." });
+  } catch (err) {
+    console.error("Forgot password error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Reset password using token
+app.post("/auth/reset-password", async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+    if (!token || !newPassword) {
+      return res.status(400).json({ error: "Token and new password are required" });
+    }
+
+    const check = await pool.query(
+      "SELECT id FROM users WHERE reset_token=$1 AND reset_token_expiry > NOW()",
+      [token]
+    );
+
+    if (check.rows.length === 0) {
+      return res.status(400).json({ error: "Invalid or expired reset link" });
+    }
+
+    const userId = check.rows[0].id;
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    await pool.query(
+      `UPDATE users SET password=$1, reset_token=NULL, reset_token_expiry=NULL, updated_at=NOW() WHERE id=$2`,
+      [hashedPassword, userId]
+    );
+
+    res.json({ success: true, message: "Password reset successful. You can now log in." });
+  } catch (err) {
+    console.error("Reset password error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get("/profile", authenticateToken, async (req, res) => {
   try {
     const result = await pool.query(

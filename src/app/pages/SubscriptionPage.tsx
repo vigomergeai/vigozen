@@ -96,12 +96,7 @@ export default function SubscriptionPage() {
 
     // ── Load Data ──
     useEffect(() => {
-        // Redirect if not admin or super_admin
-<<<<<<< HEAD
-        if ((role as string) !== "admin" && (role as string) !== "super_admin") {
-=======
         if ((role as any) !== "org_admin" && (role as any) !== "super_admin") {
->>>>>>> 1e230eada673425ab1b5c620e1077dff2b2f308f
             navigate("/");
             return;
         }

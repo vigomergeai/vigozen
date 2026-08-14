@@ -1168,6 +1168,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ownerId: newLead.ownerId || null,
         notes: newLead.notes || null,
         aiScore: newLead.aiScore || 50,
+        next_meeting_at: newLead.nextMeetingAt || null,
         //tags: newLead.tags || [],
       };
       console.log("FINAL INSERT PAYLOAD:", JSON.stringify({
@@ -1245,12 +1246,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    const dbPayload = {
+    const dbPayload: any = {
       ...sanitizedData,
       status: data.status ? (toDbStatus[data.status as keyof typeof toDbStatus] ?? "new") : "new",
       source: data.source ? (toDbSource[data.source as keyof typeof toDbSource] ?? "website") : "website",
       industry: data.industry ? (toDbIndustry[data.industry as keyof typeof toDbIndustry] ?? "technology") : "technology",
     };
+    if ((data as any).nextMeetingAt !== undefined) {
+      dbPayload.next_meeting_at = (data as any).nextMeetingAt || null;
+    }
+    delete dbPayload.nextMeetingAt;
     // console.log("Dataa got is ", data);
     setLeads(prev => prev.map(l => l.id === id ? { ...l, ...data } : l));
     const token = getToken();
@@ -1480,6 +1485,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         tags: l.tags || [],
         converted_to_deal: !!l.converted_to_deal,
         deal_id: l.deal_id || null,
+        nextMeetingAt: l.next_meeting_at || null,
       }));
 
       console.log("RAW API DATA:", data);

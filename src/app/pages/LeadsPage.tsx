@@ -42,17 +42,17 @@ interface LeadForm {
   name: string; company: string; email: string; phone: string;
   status: LeadStatus; source: LeadSource; industry: Industry;
   value: string; notes: string; tags: string;
-  owner: string; ownerId: string; probability: string;
+  owner: string; ownerId: string; probability: string; nextMeetingAt: string;
 }
 
 const emptyForm: LeadForm = {
   name: "", company: "", email: "", phone: "",
   status: "New", source: "Website", industry: "Technology",
-  value: "", notes: "", tags: "", owner: "", ownerId: "", probability: "50",
+  value: "", notes: "", tags: "", owner: "", ownerId: "", probability: "50", nextMeetingAt: "",
 };
 
 export default function LeadsPage() {
-  const columns = ["lead","source","status","aiScore","value","owner","created"];
+  const columns = ["lead","source","status","aiScore","value","owner","nextMeeting","created"];
   const [visibleColumns, setVisibleColumns] = useState(columns);
   const [showColumnDropdown, setShowColumnDropdown] = useState(false);
   const { role, currentUser, leads, loading, addLead, updateLead, deleteLead, bulkDeleteLeads, importLeads, refreshData, employees, convertLeadToDeal, leadComments, loadingComments, fetchLeadComments, addLeadComment,
@@ -197,6 +197,7 @@ export default function LeadsPage() {
       status: lead.status, source: lead.source, industry: lead.industry,
       value: String(lead.value), notes: lead.notes, tags: lead.tags.join(", "),
       owner: lead.owner, ownerId: lead.ownerId, probability: String(lead.probability),
+      nextMeetingAt: lead.nextMeetingAt ? lead.nextMeetingAt.slice(0, 16) : "",
     });
     setEditLead(lead);
     setShowAddModal(true);
@@ -233,6 +234,7 @@ export default function LeadsPage() {
   owner: form.owner || currentUser.name,
   ownerId: form.ownerId || currentUser.employeeId,
   probability: Number(form.probability) || 50,
+  nextMeetingAt: form.nextMeetingAt ? new Date(form.nextMeetingAt).toISOString() : null,
 
   createdAt: new Date().toISOString().split("T")[0], // ✅ ADD
 };
@@ -842,6 +844,11 @@ useEffect(() => {
                       Owner
                     </th>
                   )}
+                  {visibleColumns.includes("nextMeeting") && (
+                  <th className="text-left py-3 px-3 text-xs text-slate-500 font-medium">
+                    Next Meeting
+                  </th>
+                  )}
                   {visibleColumns.includes("created") && (
                   <th className="text-left py-3 px-3 text-xs text-slate-500 font-medium">
                     Created
@@ -970,6 +977,15 @@ useEffect(() => {
                             </span>
                           </div>
                         </td>
+                      )}
+                      {visibleColumns.includes("nextMeeting") && (
+                      <td className="py-3 px-3">
+                        <div className="text-xs text-slate-500">
+                          {lead.nextMeetingAt
+                            ? new Date(lead.nextMeetingAt).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })
+                            : "—"}
+                        </div>
+                      </td>
                       )}
                       {visibleColumns.includes("created") && (
                       <td className="py-3 px-3">
@@ -1587,6 +1603,23 @@ useEffect(() => {
                     setForm((f) => ({
                       ...f,
                       probability: e.target.value,
+                    }))
+                  }
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-slate-50"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs text-slate-500 mb-1.5">
+                  Next Meeting
+                </label>
+                <input
+                  type="datetime-local"
+                  value={form.nextMeetingAt}
+                  onChange={(e) =>
+                    setForm((f) => ({
+                      ...f,
+                      nextMeetingAt: e.target.value,
                     }))
                   }
                   className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-slate-50"

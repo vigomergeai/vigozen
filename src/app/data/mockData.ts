@@ -22,6 +22,7 @@ export interface Lead {
   ownerId: string;
   createdAt: string;
   lastContact: string;
+  nextMeetingAt?: string | null;
   notes: string;
   tags: string[];
   probability: number;

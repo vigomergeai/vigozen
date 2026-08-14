@@ -1,6 +1,6 @@
 // ── ERROR PAGE (React Router errorElement) ──
 import React, { useState, useEffect } from 'react';
-import { useRouteError, isRouteErrorResponse, useNavigate } from 'react-router-dom';
+import { useRouteError, isRouteErrorResponse, useNavigate } from 'react-router';
 import { clearStaleChunks } from '../utils/lazyRetry';
 
 export default function ErrorPage() {

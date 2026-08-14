@@ -218,6 +218,7 @@ interface AppContextType {
     employeeId?: string;
     manager_id?: string;
     department?: string;
+    company_name?: string;
   }) => Promise<UserProfile | null>;
   updateUser: (userId: string, data: Partial<UserProfile>) => Promise<boolean>;
   deleteUser: (userId: string) => Promise<boolean>;
@@ -998,6 +999,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     employeeId?: string;
     manager_id?: string;
     department?: string;
+    company_name?: string;
   }): Promise<UserProfile | null> => {
     const token = getToken();
     if (!token) {

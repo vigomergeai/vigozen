@@ -68,7 +68,17 @@ async function request<T = any>(
         }
       }
 
-      throw new Error(`API ${method} ${path} failed (${res.status}): ${errText}`);
+      let parsedError = "";
+      try {
+        const parsed = JSON.parse(errText);
+        if (parsed && typeof parsed === "object") {
+          parsedError = parsed.error || parsed.message || "";
+        }
+      } catch (e) {
+        // Not a JSON string
+      }
+
+      throw new Error(parsedError || `API ${method} ${path} failed (${res.status}): ${errText}`);
     }
 
     const ct = res.headers.get("content-type") || "";

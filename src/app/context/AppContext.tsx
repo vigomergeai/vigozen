@@ -241,6 +241,7 @@ interface AppContextType {
   updateLead: (id: string, data: Partial<Lead>) => Promise<boolean>;
   deleteLead: (id: string) => Promise<boolean>;
   bulkDeleteLeads: (ids: string[]) => Promise<boolean>;
+  deleteAllLeads: () => Promise<boolean>;
 
   importLeads: (newLeads?: Partial<Lead>[]) => Promise<{ imported: number }>;
 
@@ -1192,26 +1193,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
       //  FIRST DB INSERT
       const token = getToken();
+      const createPayload: Record<string, any> = {
+        name: dbPayload.name,
+        email: dbPayload.email,
+        phone: dbPayload.phone,
+        company: dbPayload.company,
+        source: dbPayload.source,
+        status: dbPayload.status,
+        industry: dbPayload.industry,
+        value: dbPayload.value,
+        notes: dbPayload.notes,
+        probability: dbPayload.probability,
+        aiscore: dbPayload.aiScore,
+      };
+      if (dbPayload.ownerId && validUUID(dbPayload.ownerId)) {
+        createPayload.owner_id = dbPayload.ownerId;
+      }
+
       const response = await fetch(`${import.meta.env.VITE_API_URL}/leads`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: token ? `Bearer ${token}` : ""
         },
-        body: JSON.stringify({
-          name: dbPayload.name,
-          email: dbPayload.email,
-          phone: dbPayload.phone,
-          company: dbPayload.company,
-          source: dbPayload.source,
-          status: dbPayload.status,
-          industry: dbPayload.industry,
-          value: dbPayload.value,
-          notes: dbPayload.notes,
-          probability: dbPayload.probability,
-          aiscore: dbPayload.aiScore,
-          owner_id: dbPayload.ownerId
-        })
+        body: JSON.stringify(createPayload)
       });
 
       if (!response.ok) {
@@ -1408,6 +1413,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return false;
     }
   };
+
+  const deleteAllLeads = async (): Promise<boolean> => {
+    const token = getToken();
+    if (!token) {
+      toast.error("Not logged in");
+      return false;
+    }
+    try {
+      const allIds = leads.map(l => l.id);
+      if (allIds.length === 0) {
+        toast.error("No leads to delete");
+        return false;
+      }
+      await bulkDeleteLeads(allIds);
+      setLeads([]);
+      toast.success("All leads deleted");
+      return true;
+    } catch (error: any) {
+      console.error("Delete all leads error:", error);
+      toast.error(error.message || "Failed to delete all leads");
+      return false;
+    }
+  };
+
   const importLeads = async (newLeads?: Partial<Lead>[]): Promise<{ imported: number }> => {
     try {
 
@@ -2199,7 +2228,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       activateUser,
       deactivateUser,
       // Lead
-      addLead, updateLead, deleteLead, bulkDeleteLeads, importLeads,
+      addLead, updateLead, deleteLead, bulkDeleteLeads, deleteAllLeads, importLeads,
       // Deal
       addDeal, updateDeal, deleteDeal, convertLeadToDeal, importDeals,
       // Employee

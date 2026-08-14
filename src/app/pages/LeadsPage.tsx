@@ -55,7 +55,7 @@ export default function LeadsPage() {
   const columns = ["lead","source","status","aiScore","value","owner","nextMeeting","created"];
   const [visibleColumns, setVisibleColumns] = useState(columns);
   const [showColumnDropdown, setShowColumnDropdown] = useState(false);
-  const { role, currentUser, leads, loading, addLead, updateLead, deleteLead, bulkDeleteLeads, importLeads, refreshData, employees, convertLeadToDeal, leadComments, loadingComments, fetchLeadComments, addLeadComment,
+  const { role, currentUser, leads, loading, addLead, updateLead, deleteLead, bulkDeleteLeads, deleteAllLeads, importLeads, refreshData, employees, convertLeadToDeal, leadComments, loadingComments, fetchLeadComments, addLeadComment,
   updateLeadComment, deleteLeadComment, userProfile, subscription, permissions } = useApp();
 
   const canSeeAllEmployees = hasModuleAccess(permissions, 'leads', ['full', 'dept', 'team']);
@@ -90,6 +90,7 @@ export default function LeadsPage() {
   const [page, setPage] = useState(1);
   const [saving, setSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [deleteAllConfirm, setDeleteAllConfirm] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<{ imported: number; errors: string[] } | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
@@ -617,6 +618,15 @@ useEffect(() => {
             <Plus size={15} />
             Add Lead
           </button>
+          {canDeleteLeadsSeq && leads.length > 0 && (
+            <button
+              onClick={() => setDeleteAllConfirm(true)}
+              className="px-4 py-2 text-sm font-medium text-red-600 border border-red-200 bg-red-50 hover:bg-red-100 rounded-xl flex items-center gap-2 transition-colors"
+            >
+              <Trash2 size={15} />
+              Delete All Leads
+            </button>
+          )}
         </div>
       </div>
 
@@ -1804,6 +1814,42 @@ useEffect(() => {
                 className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm hover:bg-red-700"
               >
                 Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete All Confirm */}
+      {deleteAllConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={() => setDeleteAllConfirm(false)}
+          />
+          <div className="relative bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm text-center">
+            <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <AlertTriangle size={22} className="text-red-500" />
+            </div>
+            <h3 className="text-slate-800 mb-2">Delete All Leads?</h3>
+            <p className="text-sm text-slate-500 mb-5">
+              This will permanently delete all {leads.length} leads. This action cannot be undone.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setDeleteAllConfirm(false)}
+                className="flex-1 py-2.5 border border-slate-200 text-slate-700 rounded-xl text-sm hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  setDeleteAllConfirm(false);
+                  await deleteAllLeads();
+                }}
+                className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm hover:bg-red-700"
+              >
+                Delete All
               </button>
             </div>
           </div>

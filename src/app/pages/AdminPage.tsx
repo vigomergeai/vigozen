@@ -190,8 +190,7 @@ const DEPT_OPTIONS = [
 const newPasswordSchema = z.object({
   password: z
     .string()
-    .min(6, "Password must be atleast 6 characters")
-    .max(12, "Password must be at most 12 characters"),
+    .min(1, "Password is Required"),
 });
 
 
@@ -215,12 +214,14 @@ interface UserForm {
   role: string;
   department: string;
   manager_id: string;
+  company_name?: string;
 }
 
 const emptyForm: UserForm = {
   name: "", email: "", password: "", confirmPassword: "",
   role: "Sales Executive", department: "Sales",
   manager_id: "",
+  company_name: "",
 };
 
 const ManagerCell = ({ managerId, userMap, managerCache }: {
@@ -589,6 +590,16 @@ export default function AdminPage() {
       return;
     }
 
+    // ── COMPANY NAME VALIDATION ──
+    const targetRoleLower = form.role.toLowerCase();
+    const isSuperAdmin = userProfile?.role === 'Super Admin' || userProfile?.role === 'super_admin';
+    if (isSuperAdmin && (targetRoleLower === 'org_admin' || targetRoleLower === 'admin' || targetRoleLower === 'org admin')) {
+      if (!form.company_name || !form.company_name.trim()) {
+        setFormError("Company Name is required for Org Admin");
+        return;
+      }
+    }
+
     // ── REPORTING MANAGER VALIDATION (RELAXED) ──
     // Manager is optional - backend will auto-assign if not provided
     const noManagerRoles = ['Org Admin', 'org_admin', 'Super Admin', 'super_admin'];
@@ -596,8 +607,6 @@ export default function AdminPage() {
       // ⚠️ Warning only - not blocking
       console.warn(`No manager selected for ${form.role}. Backend will auto-assign.`);
     }
-
-
 
     setSaving(true);
     setFormError("");
@@ -607,6 +616,7 @@ export default function AdminPage() {
       role: form.role,
       manager_id: form.manager_id || undefined,
       department: form.department,
+      company_name: form.company_name?.trim() || undefined,
     });
     setSaving(false);
 
@@ -1602,6 +1612,24 @@ export default function AdminPage() {
                 </div>
               </div>
 
+              {/* ── COMPANY NAME (Only shown when Super Admin creates Org Admin) ── */}
+              {(role === 'Super Admin' || role === 'super_admin' || userProfile?.role === 'Super Admin' || userProfile?.role === 'super_admin') && 
+               ['Org Admin', 'org_admin', 'admin'].includes(form.role) && (
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1.5">
+                    Company Name *
+                  </label>
+                  <input
+                    value={form.company_name || ''}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, company_name: e.target.value }))
+                    }
+                    placeholder="Enter company name (e.g. ABC Pvt Ltd)"
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                  />
+                </div>
+              )}
+
               {/* ── REPORTING MANAGER ── */}
               <div>
                 <label className="block text-xs text-slate-500 mb-1.5">
@@ -1868,7 +1896,7 @@ export default function AdminPage() {
                       type={showPass ? "text" : "password"}
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
-                      placeholder="Min 6 characters"
+                      placeholder="Enter new password"
                       className="w-full px-3 py-2 pr-9 text-sm border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                     />
                     <button

@@ -33,8 +33,7 @@ const signUpSchema = z.object({
     ),
   password: z
     .string()
-    .min(6, "Password must be atleast 6 characters")
-    .max(12, "Password must be at most 12 characters")
+    .min(1, "Password is Required")
 });
 
 const loginSchema = z.object({

@@ -1,0 +1,10 @@
+According to subscription how to like set the limit of setting the users is left 
+
+like if I buy 10 active users
+
+I should be able to make 10 user with different roles only 
+like 
+2 lead manger
+2 sales manger
+3 sales executive
+3 team leader

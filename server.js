@@ -18,7 +18,7 @@ const notificationService = require("./server/notificationService");
 const { startNotificationWorker } = require("./server/notificationWorker");
 const path = require("path");
 const { Resend } = require("resend");
-const resend = new Resend(process.env.RESEND_API_KEY);
+const resend = new Resend(process.env.RESEND_API_KEY || "re_dummy_key_12345");
 
 require("dotenv").config();
 async function generateWithRetry(model, prompt, retries = 3, delay = 2000) {
@@ -3838,7 +3838,7 @@ app.post("/auth/signup", async (req, res) => {
 
     if (existing.rows.length > 0) {
       return res.status(400).json({
-        error: "User already exists"
+        error: "User Is Already exist please try with deferent credentials"
       });
     }
 

@@ -13,13 +13,13 @@ async function getPriorityLeads(limit = 5, companyId = null) {
     FROM leads
     WHERE status NOT IN ('won', 'Won', 'lost', 'Lost', 'converted')
       AND converted_to_deal = false`;
-  
+
   const params = [];
   if (companyId) {
     query += ` AND company_id = $1`;
     params.push(companyId);
   }
-  
+
   query += ` ORDER BY priority_score DESC LIMIT $${params.length + 1}`;
   params.push(limit);
 
@@ -27,4 +27,40 @@ async function getPriorityLeads(limit = 5, companyId = null) {
   return rows;
 }
 
-module.exports = { getPriorityLeads };
+async function getHotLeads(companyId = null) {
+  let query = `SELECT id, name, company, status, value, probability, aiscore, source, created_at, updated_at
+    FROM leads
+    WHERE status NOT IN ('won', 'Won', 'lost', 'Lost', 'converted')
+      AND converted_to_deal = false
+      AND COALESCE(aiscore, 50) >= 80`;
+
+  const params = [];
+  if (companyId) {
+    query += ` AND company_id = $1`;
+    params.push(companyId);
+  }
+
+  query += ` ORDER BY aiscore DESC, value DESC NULLS LAST`;
+
+  const { rows } = await pool.query(query, params);
+  return rows;
+}
+
+async function getHotLeadsCount(companyId = null) {
+  let query = `SELECT COUNT(*) as hot_leads_count
+    FROM leads
+    WHERE status NOT IN ('won', 'Won', 'lost', 'Lost', 'converted')
+      AND converted_to_deal = false
+      AND COALESCE(aiscore, 50) >= 80`;
+
+  const params = [];
+  if (companyId) {
+    query += ` AND company_id = $1`;
+    params.push(companyId);
+  }
+
+  const { rows } = await pool.query(query, params);
+  return parseInt(rows[0]?.hot_leads_count) || 0;
+}
+
+module.exports = { getPriorityLeads, getHotLeads, getHotLeadsCount };

@@ -2,6 +2,7 @@ const cron = require("node-cron");
 const pool = require("./db");
 const { generateInsight } = require("./geminiInsight");
 const { getTeamStats } = require("./teamStats");
+const { getPriorityLeads } = require("./leadScoring");
 
 const startInsightCron = () => {
   console.log("⏰ Insight cron job initialized");
@@ -34,11 +35,12 @@ async function runInsightSync() {
     try {
       console.log(`Generating insights for company ${company.id}...`);
       const stats = await getTeamStats(company.id);
+      const priorityLeads = await getPriorityLeads(5, company.id);
       const insightText = await generateInsight(stats);
       await pool.query(
         `INSERT INTO ai_insights_cache (company_id, insight_text, priority_leads)
          VALUES ($1, $2, $3)`,
-        [company.id, insightText, JSON.stringify(stats.top_employees)]
+        [company.id, insightText, JSON.stringify(priorityLeads)]
       );
     } catch (err) {
       console.error(`Failed to generate/save insight cache for company ${company.id}:`, err);
@@ -49,11 +51,12 @@ async function runInsightSync() {
   try {
     console.log("Generating global insights...");
     const globalStats = await getTeamStats(null);
+    const globalPriorityLeads = await getPriorityLeads(5, null);
     const globalInsightText = await generateInsight(globalStats);
     await pool.query(
       `INSERT INTO ai_insights_cache (company_id, insight_text, priority_leads)
        VALUES (NULL, $1, $2)`,
-      [globalInsightText, JSON.stringify(globalStats.top_employees)]
+      [globalInsightText, JSON.stringify(globalPriorityLeads)]
     );
   } catch (err) {
     console.error("Failed to generate/save global insight cache:", err);

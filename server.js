@@ -9,7 +9,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const pool = require("./db");
-const { getPriorityLeads } = require("./leadScoring");
+const { getPriorityLeads, getHotLeads, getHotLeadsCount } = require("./leadScoring");
 const { generateInsight } = require("./geminiInsight");
 const { getTeamStats } = require("./teamStats");
 const { startInsightCron } = require("./insightCron");
@@ -29,7 +29,6 @@ const mailTransporter = nodemailer.createTransport({
 });
 
 // ── ZOHO SMTP CONFIGURATION ──
-const nodemailer = require('nodemailer');
 
 // Create transporter
 const transporter = nodemailer.createTransport({
@@ -5887,17 +5886,50 @@ app.get("/api/reports/summary", authenticateToken, checkPermission('reports'), a
         (SELECT COUNT(*) FROM deals WHERE LOWER(stage::text) = 'won' ${dateFilter} ${companyFilter} ${hierarchyFilter}) as won_deals,
         (SELECT COUNT(*) FROM deals WHERE stage::text IN ('New','Contacted','Qualified','Proposal','Negotiation') ${dateFilter} ${companyFilter} ${hierarchyFilter}) as active_deals,
         (SELECT COALESCE(SUM(value), 0) FROM deals WHERE LOWER(stage::text) = 'won' ${dateFilter} ${companyFilter} ${hierarchyFilter}) as total_revenue,
+        (SELECT COALESCE(SUM(value), 0) FROM deals WHERE 1=1 ${dateFilter} ${companyFilter} ${hierarchyFilter}) as pipeline_value,
+        (SELECT COALESCE(SUM(value), 0) FROM deals WHERE stage::text IN ('New','Contacted','Qualified','Proposal','Negotiation') ${dateFilter} ${companyFilter} ${hierarchyFilter}) as active_deals_value,
+        (SELECT COALESCE(SUM(value), 0) FROM deals WHERE LOWER(stage::text) = 'won' AND created_at >= DATE_TRUNC('month', NOW()) ${companyFilter} ${hierarchyFilter}) as revenue_mtd,
+        (SELECT COUNT(*) FROM leads WHERE converted_to_deal = true ${dateFilter} ${companyFilter} ${hierarchyFilter}) as converted_leads,
         CASE 
           WHEN (SELECT COUNT(*) FROM deals WHERE 1=1 ${dateFilter} ${companyFilter} ${hierarchyFilter}) > 0 
           THEN ROUND(((SELECT COUNT(*) FROM deals WHERE LOWER(stage::text) = 'won' ${dateFilter} ${companyFilter} ${hierarchyFilter})::numeric / 
                      (SELECT COUNT(*) FROM deals WHERE 1=1 ${dateFilter} ${companyFilter} ${hierarchyFilter})::numeric * 100), 1)
           ELSE 0 
-        END as win_rate
+        END as win_rate,
+        CASE 
+          WHEN (SELECT COUNT(*) FROM leads WHERE 1=1 ${dateFilter} ${companyFilter} ${hierarchyFilter}) > 0 
+          THEN ROUND(((SELECT COUNT(*) FROM leads WHERE converted_to_deal = true ${dateFilter} ${companyFilter} ${hierarchyFilter})::numeric / 
+                     (SELECT COUNT(*) FROM leads WHERE 1=1 ${dateFilter} ${companyFilter} ${hierarchyFilter})::numeric * 100), 1)
+          ELSE 0 
+        END as conversion_rate
     `;
     const result = await pool.query(query, params);
     res.json(result.rows[0]);
   } catch (err) {
     console.error("Reports Summary Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Hot Leads (AI Score 80+) ──
+app.get("/hot-leads", authenticateToken, async (req, res) => {
+  try {
+    const companyId = req.user.company_id;
+    const hotLeads = await getHotLeads(companyId);
+    res.json(hotLeads);
+  } catch (err) {
+    console.error("Hot Leads Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/hot-leads/count", authenticateToken, async (req, res) => {
+  try {
+    const companyId = req.user.company_id;
+    const count = await getHotLeadsCount(companyId);
+    res.json({ count });
+  } catch (err) {
+    console.error("Hot Leads Count Error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -6451,6 +6483,7 @@ app.get("/ai-insights", authenticateToken, async (req, res) => {
     const companyId = isSuperAdmin ? null : req.user.company_id;
 
     const priorityLeads = await getPriorityLeads(5, companyId);
+    const hotLeadsCount = await getHotLeadsCount(companyId);
     let cacheResult;
     if (companyId) {
       cacheResult = await pool.query(
@@ -6473,6 +6506,7 @@ app.get("/ai-insights", authenticateToken, async (req, res) => {
     res.json({
       insight_text: cacheResult.rows[0]?.insight_text ?? null,
       priority_leads: priorityLeads,
+      hot_leads_count: hotLeadsCount,
     });
   } catch (err) {
     console.error("AI insights error:", err);
@@ -6511,15 +6545,17 @@ app.post("/ai-insights/generate", authenticateToken, async (req, res) => {
     const companyId = isSuperAdmin ? null : req.user.company_id;
 
     const stats = await getTeamStats(companyId);
+    const priorityLeads = await getPriorityLeads(5, companyId);
+    const hotLeadsCount = await getHotLeadsCount(companyId);
     const insightText = await generateInsight(stats);
 
     await pool.query(
       `INSERT INTO ai_insights_cache (company_id, insight_text, priority_leads)
        VALUES ($1, $2, $3)`,
-      [companyId, insightText, JSON.stringify(stats.top_employees)]
+      [companyId, insightText, JSON.stringify(priorityLeads)]
     );
 
-    res.json({ insight_text: insightText, stats });
+    res.json({ insight_text: insightText, stats, hot_leads_count: hotLeadsCount });
   } catch (err) {
     console.error("Generate insight error:", err);
     res.status(500).json({ error: "Failed to generate insight" });

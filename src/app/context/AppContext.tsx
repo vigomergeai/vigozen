@@ -1010,7 +1010,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     // --- LOCK CHECK ───
     const activeUsers = users.filter(u => u.isActive).length;
-    const allowedUsers = (companySubscription as any)?.allowed_users || (companySubscription?.company as any)?.allowed_users || 10;
+    const allowedUsers = 1000000;
     if (activeUsers >= allowedUsers) {
       toast.error("User Limit Reached. Upgrade your subscription to add more users.");
       return null;

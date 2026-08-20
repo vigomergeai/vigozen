@@ -519,8 +519,8 @@ export default function AnalysisPage() {
                   </thead>
                   <tbody className="divide-y divide-slate-50">
                     {filteredEmpData.map((e: EmployeeSummary) => {
-                      const total = e.won + e.lost;
-                      const conv = total > 0 ? ((e.won / total) * 100).toFixed(0) : "0";
+                      const total = Number(e.new) + Number(e.contacted) + Number(e.qualified) + Number(e.proposal) + Number(e.negotiation) + Number(e.won) + Number(e.lost);
+                      const conv = total > 0 ? ((Number(e.won) / total) * 100).toFixed(0) : "0";
                       return (
                         <tr key={e.name} className="hover:bg-slate-50">
                           <td className="py-2.5">

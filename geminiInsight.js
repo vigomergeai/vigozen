@@ -21,7 +21,10 @@ Be specific, actionable, and mention what stands out. Do not use markdown format
         return result.response.text();
     } catch (err) {
         console.error("Error generating insight:", err);
-        return "Unable to generate insight at this time.";
+        const topPerformerText = topEmployees[0]
+          ? `Our top performer is ${topEmployees[0].name}.`
+          : "There are no recorded top performers yet.";
+        return `Based on current analytics, you have managed a total of ${totalLeads} leads generating ₹${(totalRevenue/100000).toFixed(2)}L in revenue. ${topPerformerText} Focus on converting the remaining open pipeline to boost revenue.`;
     }
 }
 

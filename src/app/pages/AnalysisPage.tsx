@@ -435,20 +435,36 @@ export default function AnalysisPage() {
         <div className="space-y-5">
           {/* Summary Cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            {[
-              { label: "Total Leads", value: reports.summary?.total_leads || 0, trend: "+18%", color: "indigo" },
-              { label: "Total Won", value: reports.summary?.won_deals || 0, trend: "+23%", color: "emerald" },
-              { label: "Total Lost", value: reports.summary?.total_deals - (reports.summary?.won_deals || 0) || 0, trend: "-5%", color: "red" },
-              { label: "Avg Conv. Rate", value: reports.summary?.win_rate ? `${reports.summary.win_rate}%` : "0%", trend: "+2.3%", color: "purple" },
-            ].map(stat => (
-              <div key={stat.label} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
-                <div className="text-2xl font-bold text-slate-900">{stat.value}</div>
-                <div className="text-xs text-slate-500 mt-0.5">{stat.label}</div>
-                <div className={`text-xs mt-1 flex items-center gap-1 ${stat.trend.startsWith("-") ? "text-red-500" : "text-emerald-600"}`}>
-                  {stat.trend.startsWith("-") ? <ArrowDown size={10} /> : <ArrowUp size={10} />}{stat.trend} vs last period
+            {(() => {
+              const totalLeads = empWiseData.reduce((sum, e) => 
+                sum + 
+                (Number(e.new) || 0) + 
+                (Number(e.contacted) || 0) + 
+                (Number(e.qualified) || 0) + 
+                (Number(e.proposal) || 0) + 
+                (Number(e.negotiation) || 0) + 
+                (Number(e.won) || 0) + 
+                (Number(e.lost) || 0), 
+                0
+              );
+              const totalWon = empWiseData.reduce((sum, e) => sum + (Number(e.won) || 0), 0);
+              const totalLost = empWiseData.reduce((sum, e) => sum + (Number(e.lost) || 0), 0);
+              const convRate = totalLeads > 0 ? ((totalWon / totalLeads) * 100).toFixed(1) : "0.0";
+              return [
+                { label: "Total Leads", value: totalLeads, trend: "+18%", color: "indigo" },
+                { label: "Total Won", value: totalWon, trend: "+23%", color: "emerald" },
+                { label: "Total Lost", value: totalLost, trend: "-5%", color: "red" },
+                { label: "Avg Conv. Rate", value: `${convRate}%`, trend: "+2.3%", color: "purple" },
+              ].map(stat => (
+                <div key={stat.label} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
+                  <div className="text-2xl font-bold text-slate-900">{stat.value}</div>
+                  <div className="text-xs text-slate-500 mt-0.5">{stat.label}</div>
+                  <div className={`text-xs mt-1 flex items-center gap-1 ${stat.trend.startsWith("-") ? "text-red-500" : "text-emerald-600"}`}>
+                    {stat.trend.startsWith("-") ? <ArrowDown size={10} /> : <ArrowUp size={10} />}{stat.trend} vs last period
+                  </div>
                 </div>
-              </div>
-            ))}
+              ));
+            })()}
           </div>
 
           {/* Stacked Bar Chart */}
@@ -695,7 +711,13 @@ export default function AnalysisPage() {
               },
               {
                 label: "Avg Deal Size",
-                value: reports.summary?.total_deals && reports.summary.won_deals ? `₹${((reports.summary.total_revenue || 0) / (reports.summary.won_deals || 1) / 1000).toFixed(1)}K` : "₹0",
+                value: (() => {
+                  if (!reports.summary?.won_deals) return "₹0";
+                  const avgVal = (reports.summary.total_revenue || 0) / reports.summary.won_deals;
+                  return avgVal >= 100000 
+                    ? `₹${(avgVal / 100000).toFixed(2)}L` 
+                    : `₹${(avgVal / 1000).toFixed(1)}K`;
+                })(),
                 trend: "+0%",
                 up: true
               },

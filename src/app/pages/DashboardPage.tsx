@@ -119,13 +119,19 @@ export default function DashboardPage() {
   const wonLeads = leads.filter(l => String(l.status).toLowerCase() === "won").length;
   const hotLeads = leads.filter(l => l.aiScore >= 80).length;
   const activeDealsValue = deals.filter(d => !["won", "lost"].includes(String(d.stage).toLowerCase())).reduce((s, d) => s + (Number(d.value) || 0), 0);
-  const wonDealsValue = deals.filter(d => String(d.stage).toLowerCase() === "won").reduce((s, d) => s + (Number(d.value) || 0), 0);
+  const now = new Date();
+  const wonDealsValue = deals
+    .filter(d => {
+      if (String(d.stage).toLowerCase() !== "won") return false;
+      const date = new Date(d.createdAt || (d as any).created_at);
+      return !isNaN(date.getTime()) && date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
+    })
+    .reduce((s, d) => s + (Number(d.value) || 0), 0);
   const wonDealsCount = deals.filter(d => String(d.stage).toLowerCase() === "won").length;
   const conversionRate = leads.length > 0 ? Number(((wonLeads / leads.length) * 100).toFixed(1)) : 0;
   const pipelineValue = formatCurrency(activeDealsValue);
 
 // Real period-over-period comparison (last 30 days vs previous 30 days)
-const now = new Date();
 const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
 

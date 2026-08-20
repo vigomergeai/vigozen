@@ -116,10 +116,11 @@ export default function DashboardPage() {
 
   const [revenueFilter, setRevenueFilter] = useState<"6m" | "3m" | "1m">("6m");
 
-  const wonLeads = leads.filter(l => l.status === "Won").length;
+  const wonLeads = leads.filter(l => String(l.status).toLowerCase() === "won").length;
   const hotLeads = leads.filter(l => l.aiScore >= 80).length;
-  const activeDealsValue = deals.filter(d => !["Won", "Lost"].includes(d.stage)).reduce((s, d) => s + (Number(d.value) || 0), 0);
-  const wonDealsValue = deals.filter(d => d.stage === "Won").reduce((s, d) => s + (Number(d.value) || 0), 0);
+  const activeDealsValue = deals.filter(d => !["won", "lost"].includes(String(d.stage).toLowerCase())).reduce((s, d) => s + (Number(d.value) || 0), 0);
+  const wonDealsValue = deals.filter(d => String(d.stage).toLowerCase() === "won").reduce((s, d) => s + (Number(d.value) || 0), 0);
+  const wonDealsCount = deals.filter(d => String(d.stage).toLowerCase() === "won").length;
   const conversionRate = leads.length > 0 ? Number(((wonLeads / leads.length) * 100).toFixed(1)) : 0;
   const pipelineValue = formatCurrency(activeDealsValue);
 
@@ -138,16 +139,16 @@ const leadsCurrent = leads.filter(l => l.createdAt && new Date(l.createdAt) >= t
 const leadsPrevious = leads.filter(l => l.createdAt && new Date(l.createdAt) >= sixtyDaysAgo && new Date(l.createdAt) < thirtyDaysAgo).length;
 const leadsChange = calcChange(leadsCurrent, leadsPrevious);
 
-const activeDealsCurrent = deals.filter(d => !["Won", "Lost"].includes(d.stage) && d.createdAt && new Date(d.createdAt) >= thirtyDaysAgo).reduce((s, d) => s + (Number(d.value) || 0), 0);
-const activeDealsPrevious = deals.filter(d => !["Won", "Lost"].includes(d.stage) && d.createdAt && new Date(d.createdAt) >= sixtyDaysAgo && new Date(d.createdAt) < thirtyDaysAgo).reduce((s, d) => s + (Number(d.value) || 0), 0);
+const activeDealsCurrent = deals.filter(d => !["won", "lost"].includes(String(d.stage).toLowerCase()) && d.createdAt && new Date(d.createdAt) >= thirtyDaysAgo).reduce((s, d) => s + (Number(d.value) || 0), 0);
+const activeDealsPrevious = deals.filter(d => !["won", "lost"].includes(String(d.stage).toLowerCase()) && d.createdAt && new Date(d.createdAt) >= sixtyDaysAgo && new Date(d.createdAt) < thirtyDaysAgo).reduce((s, d) => s + (Number(d.value) || 0), 0);
 const activeDealsChange = calcChange(activeDealsCurrent, activeDealsPrevious);
 
-const wonCurrent = deals.filter(d => d.stage === "Won" && new Date(d.expectedClose || d.createdAt || Date.now()) >= thirtyDaysAgo).reduce((s, d) => s + (Number(d.value) || 0), 0);
-const wonPrevious = deals.filter(d => d.stage === "Won" && new Date(d.expectedClose || d.createdAt || Date.now()) >= sixtyDaysAgo && new Date(d.expectedClose || d.createdAt || Date.now()) < thirtyDaysAgo).reduce((s, d) => s + (Number(d.value) || 0), 0);
+const wonCurrent = deals.filter(d => String(d.stage).toLowerCase() === "won" && new Date(d.expectedClose || d.createdAt || Date.now()) >= thirtyDaysAgo).reduce((s, d) => s + (Number(d.value) || 0), 0);
+const wonPrevious = deals.filter(d => String(d.stage).toLowerCase() === "won" && new Date(d.expectedClose || d.createdAt || Date.now()) >= sixtyDaysAgo && new Date(d.expectedClose || d.createdAt || Date.now()) < thirtyDaysAgo).reduce((s, d) => s + (Number(d.value) || 0), 0);
 const revenueChange = calcChange(wonCurrent, wonPrevious);
 
-const wonLeadsCurrent = leads.filter(l => l.status === "Won" && l.createdAt && new Date(l.createdAt) >= thirtyDaysAgo).length;
-const wonLeadsPrevious = leads.filter(l => l.status === "Won" && l.createdAt && new Date(l.createdAt) >= sixtyDaysAgo && new Date(l.createdAt) < thirtyDaysAgo).length;
+const wonLeadsCurrent = leads.filter(l => String(l.status).toLowerCase() === "won" && l.createdAt && new Date(l.createdAt) >= thirtyDaysAgo).length;
+const wonLeadsPrevious = leads.filter(l => String(l.status).toLowerCase() === "won" && l.createdAt && new Date(l.createdAt) >= sixtyDaysAgo && new Date(l.createdAt) < thirtyDaysAgo).length;
 const conversionCurrent = leadsCurrent > 0 ? (wonLeadsCurrent / leadsCurrent) * 100 : 0;
 const conversionPrevious = leadsPrevious > 0 ? (wonLeadsPrevious / leadsPrevious) * 100 : 0;
 const conversionChange = calcChange(conversionCurrent, conversionPrevious);
@@ -191,9 +192,9 @@ const conversionChange = calcChange(conversionCurrent, conversionPrevious);
 
   const aiInsights = React.useMemo(() => {
     const list = [];
-    const wonCount = leads.filter(l => l.status === "Won").length;
+    const wonCount = deals.filter(d => String(d.stage).toLowerCase() === "won").length;
     const hotCount = leads.filter(l => l.aiScore >= 80).length;
-    const pipelineVal = deals.filter(d => !["Won", "Lost"].includes(d.stage)).reduce((s, d) => s + (Number(d.value) || 0), 0);
+    const pipelineVal = deals.filter(d => !["won", "lost"].includes(String(d.stage).toLowerCase())).reduce((s, d) => s + (Number(d.value) || 0), 0);
 
     if (hotCount > 0) {
       list.push({
@@ -205,7 +206,7 @@ const conversionChange = calcChange(conversionCurrent, conversionPrevious);
       });
     }
     
-    const staleDeals = deals.filter(d => !["Won", "Lost"].includes(d.stage) && d.daysInStage > 7);
+    const staleDeals = deals.filter(d => !["won", "lost"].includes(String(d.stage).toLowerCase()) && d.daysInStage > 7);
     if (staleDeals.length > 0) {
       list.push({
         id: 2,
@@ -220,7 +221,7 @@ const conversionChange = calcChange(conversionCurrent, conversionPrevious);
       id: 3,
       type: "insight",
       title: "Pipeline Strength",
-      message: `Active pipeline value is ${formatCurrency(pipelineVal)} across ${formatNumber(deals.filter(d => !["Won", "Lost"].includes(d.stage)).length)} active deals.`,
+      message: `Active pipeline value is ${formatCurrency(pipelineVal)} across ${formatNumber(deals.filter(d => !["won", "lost"].includes(String(d.stage).toLowerCase())).length)} active deals.`,
       priority: "medium"
     });
 
@@ -414,7 +415,7 @@ useEffect(() => {
       <div className="grid grid-cols-3 gap-4">
         {[
           { label: "Hot Leads (AI)", value: formatNumber(hotLeads), sub: "Score 80+", color: "text-red-500" },
-          { label: "Deals Won", value: formatNumber(wonLeads), sub: "All time", color: "text-emerald-500" },
+          { label: "Deals Won", value: formatNumber(wonDealsCount), sub: "All time", color: "text-emerald-500" },
           { label: "Pipeline Value", value: pipelineValue, sub: "All stages", color: "text-indigo-500" },
         ].map(s => (
           <div key={s.label} className="bg-white rounded-xl p-3.5 border border-slate-100 shadow-sm text-center">

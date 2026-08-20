@@ -24,6 +24,7 @@ const PaymentFailure = lazy(lazyRetry(() => import("./pages/PaymentFailure")));
 const BillingPage = lazy(lazyRetry(() => import("./pages/BillingPage")));
 const ForgotPasswordPage = lazy(lazyRetry(() => import("./pages/ForgotPasswordPage")));
 const ResetPasswordPage = lazy(lazyRetry(() => import("./pages/ResetPasswordPage")));
+const AcceptInvitePage = lazy(lazyRetry(() => import("./pages/AcceptInvitePage")));
 
 
 function NotFound() {
@@ -200,6 +201,15 @@ export const router = createBrowserRouter([
     Component: () => (
       <AppProvider>
         <LazyRoute Component={ResetPasswordPage} />
+      </AppProvider>
+    ),
+    errorElement: <ErrorPage />,
+  },
+  {
+    path: "/accept-invite",
+    Component: () => (
+      <AppProvider>
+        <LazyRoute Component={AcceptInvitePage} />
       </AppProvider>
     ),
     errorElement: <ErrorPage />,

@@ -122,7 +122,7 @@ export default function SalesPage() {
 
   const dealsByStage = (stage: LeadStatus) => visibleDeals.filter(d => d.stage === stage);
   const stageValue = (stage: LeadStatus) => dealsByStage(stage).reduce((s, d) => s + (Number(d.value) || 0), 0);
-  const totalPipeline = visibleDeals.filter(d => d.stage !== "Lost").reduce((s, d) => s + (Number(d.value) || 0) * (d.probability / 100), 0);
+  const totalPipeline = visibleDeals.filter(d => !["Won", "Lost"].includes(d.stage)).reduce((s, d) => s + (Number(d.value) || 0), 0);
   const wonValue = visibleDeals.filter(d => d.stage === "Won").reduce((s, d) => s + (Number(d.value) || 0), 0);
   const activeDeals = visibleDeals.filter(d => !["Won", "Lost"].includes(d.stage)).length;
 
@@ -227,8 +227,8 @@ export default function SalesPage() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {[
           { label: "Won (MTD)", value: formatCurrency(wonValue || 5500), icon: Trophy, color: "text-emerald-600", bg: "bg-emerald-50", trend: "+23%" },
-          { label: "Pipeline Value", value: formatCurrency(totalPipeline || 10000000), icon: TrendingUp, color: "text-indigo-600", bg: "bg-indigo-50", trend: "+12%" },
-          { label: "Active Deals", value: activeDeals || 1, icon: BarChart2, color: "text-blue-600", bg: "bg-blue-50", trend: `${activeDeals > 0 ? "+" : ""}${activeDeals || 1}` },
+          { label: "Pipeline Value", value: formatCurrency(totalPipeline), icon: TrendingUp, color: "text-indigo-600", bg: "bg-indigo-50", trend: "+12%" },
+          { label: "Active Deals", value: activeDeals, icon: BarChart2, color: "text-blue-600", bg: "bg-blue-50", trend: `${activeDeals > 0 ? "+" : ""}${activeDeals}` },
           { label: "Avg Deal Size", value: visibleDeals.length > 0 ? formatCurrency(visibleDeals.reduce((s, d) => s + (Number(d.value) || 0), 0) / visibleDeals.length) : formatCurrency(0), icon: Target, color: "text-purple-600", bg: "bg-purple-50", trend: "+8%" },
         ].map(kpi => {
           const Icon = kpi.icon;

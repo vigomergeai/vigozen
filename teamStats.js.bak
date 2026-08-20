@@ -1,0 +1,38 @@
+const pool = require("./db");
+
+async function getTeamStats() {
+  const leadsRes = await pool.query(
+    `SELECT COUNT(*) as total_leads FROM leads WHERE created_at > now() - interval '7 days'`
+  );
+
+  const dealsRes = await pool.query(
+    `SELECT
+      COUNT(*) FILTER (WHERE LOWER(stage::text) = 'won') as won_deals,
+      COUNT(*) FILTER (WHERE LOWER(stage::text) = 'lost') as lost_deals,
+      COUNT(*) as total_deals
+    FROM deals
+    WHERE created_at > now() - interval '7 days'`
+  );
+
+  const employeeRes = await pool.query(
+    `SELECT
+      COALESCE(u.name, 'Unassigned') as employee_name,
+      COUNT(*) FILTER (WHERE LOWER(l.status::text) = 'won') as won_count
+    FROM leads l
+    LEFT JOIN users u ON l.owner_id = u.id
+    WHERE l.created_at > now() - interval '7 days'
+    GROUP BY COALESCE(u.name, 'Unassigned')
+    ORDER BY won_count DESC
+    LIMIT 3`
+  );
+
+  return {
+    total_leads: parseInt(leadsRes.rows[0].total_leads),
+    total_deals: parseInt(dealsRes.rows[0].total_deals),
+    won_deals: parseInt(dealsRes.rows[0].won_deals),
+    lost_deals: parseInt(dealsRes.rows[0].lost_deals),
+    top_employees: employeeRes.rows,
+  };
+}
+
+module.exports = { getTeamStats };

@@ -17,8 +17,16 @@ const notificationQueue = require("./server/notificationQueue");
 const notificationService = require("./server/notificationService");
 const { startNotificationWorker } = require("./server/notificationWorker");
 const path = require("path");
-const { Resend } = require("resend");
-const resend = new Resend(process.env.RESEND_API_KEY || "re_dummy_key_12345");
+const nodemailer = require("nodemailer");
+const mailTransporter = nodemailer.createTransport({
+  host: "smtp.zoho.in",
+  port: 465,
+  secure: true,
+  auth: {
+    user: process.env.ZOHO_EMAIL,
+    pass: process.env.ZOHO_APP_PASSWORD,
+  },
+});
 
 require("dotenv").config();
 async function generateWithRetry(model, prompt, retries = 3, delay = 2000) {
@@ -1997,10 +2005,18 @@ app.put("/users/:id", authenticateToken, async (req, res) => {
 });
 // Simulated Invitation Email helper
 const sendInviteEmail = async (email, inviteToken) => {
-  console.log("-----------------------------------------");
-  console.log(`✉ INVITATION EMAIL SENT TO: ${email}`);
-  console.log(`Invite URL: http://localhost:5173/accept-invite?token=${inviteToken}`);
-  console.log("-----------------------------------------");
+  try {
+    const inviteLink = `${process.env.FRONTEND_URL}/accept-invite?token=${inviteToken}`;
+    await mailTransporter.sendMail({
+      from: `"VigozenCRM" <${process.env.ZOHO_EMAIL}>`,
+      to: email,
+      subject: "You're invited to join VigozenCRM",
+      html: `<p>Hi,</p><p>You've been invited to join VigozenCRM. Click the link below to accept your invitation and set your password.</p><p><a href="${inviteLink}">${inviteLink}</a></p>`
+    });
+    console.log(`✅ Invitation email sent to: ${email}`);
+  } catch (err) {
+    console.error("Invite email send error:", err);
+  }
 };
 
 // Create new user (Hierarchical RBAC + Invitation based)
@@ -2162,29 +2178,15 @@ app.post("/users", authenticateToken, async (req, res) => {
       }
     }
 
-    // 5. Generate Invitation Token (Commented out for Testing Mode)
-    // const inviteToken = crypto.randomBytes(32).toString('hex');
-
-    // Hashed default password for testing mode ('password123')
-    const defaultPasswordHash = await bcrypt.hash('password123', 10);
-
-    // 6. Insert new user directly as active with default password (Testing Mode)
-    const result = await pool.query(
-      `INSERT INTO users (name, email, password, role, company_id, manager_id, team_id, is_active, status, employee_id, department, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, true, 'active', $8, $9, NOW())
-       RETURNING id, name, email, role, employee_id AS "employeeId", department, is_active AS "isActive", status, company_id AS "companyId", created_at AS "createdAt"`,
-      [name, email, defaultPasswordHash, targetRole, finalCompanyId, manager_id, newTeamId, employeeId || null, department || "Sales"]
-    );
-
-    /* Original code for invitation-based user creation (Commented out for testing):
+    // 5. Generate Invitation Token
     const inviteToken = crypto.randomBytes(32).toString('hex');
+    // 6. Insert new user as invited (they set their own password on accept)
     const result = await pool.query(
       `INSERT INTO users (name, email, role, company_id, manager_id, team_id, is_active, status, invite_token, employee_id, department, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, false, 'invited', $7, $8, $9, NOW())
        RETURNING id, name, email, role, employee_id AS "employeeId", department, is_active AS "isActive", status, company_id AS "companyId", created_at AS "createdAt"`,
       [name, email, targetRole, finalCompanyId, manager_id, newTeamId, inviteToken, employeeId || null, department || "Sales"]
     );
-    */
 
     const newUser = result.rows[0];
 
@@ -2197,7 +2199,7 @@ app.post("/users", authenticateToken, async (req, res) => {
     }
 
     // 7. Trigger simulated invitation email (Commented out for Testing Mode)
-    // await sendInviteEmail(email, inviteToken);
+    await sendInviteEmail(email, inviteToken);
 
     // Company-wide notification for new user
     if (companyId) {
@@ -2871,6 +2873,31 @@ app.put("/leads/:id", authenticateToken, async (req, res) => {
           'high',
           { lead_name: lead.name, deal_id: finalDealId }
         ).catch(err => console.error("Lead conversion notification error:", err));
+      }
+
+      // ── Auto-create a deal record when a lead becomes "won" and has no linked deal yet ──
+      if (String(finalStatus).toLowerCase() === 'won' && !lead.deal_id) {
+        try {
+          let ownerName = req.user?.name || null;
+          if (lead.owner_id && !ownerName) {
+            const ownerRes = await pool.query("SELECT name FROM users WHERE id = $1", [lead.owner_id]);
+            if (ownerRes.rows.length > 0) ownerName = ownerRes.rows[0].name;
+          }
+          // Safety fallback: prefer the acting user's company_id, but fall back to the lead's own company_id
+          // if that's somehow missing, so a deal is never created with a blank company_id.
+          const safeCompanyId = companyId || lead.company_id || null;
+          const dealResult = await pool.query(
+            `INSERT INTO deals (id, title, company, company_id, value, stage, owner, owner_id, probability, expectedclose, expected_close, daysinstage, lead_id)
+             VALUES (gen_random_uuid(), $1, $2, $3, $4, 'Won', $5, $6, 100, NOW(), NOW(), 0, $7)
+             RETURNING *`,
+            [lead.name, lead.company, safeCompanyId, lead.value, ownerName, lead.owner_id, lead.id]
+          );
+          const newDeal = dealResult.rows[0];
+          await pool.query("UPDATE leads SET deal_id = $1, converted_to_deal = true WHERE id = $2", [newDeal.id, lead.id]);
+          console.log(`✅ Auto-created deal ${newDeal.id} for won lead ${lead.id}`);
+        } catch (dealErr) {
+          console.error("Auto deal-creation error:", dealErr);
+        }
       }
     } catch (notifErr) {
       console.error("Status change notification error:", notifErr);
@@ -3688,9 +3715,10 @@ app.post("/leads/import-excel", authenticateToken, upload.single("file"), async 
           notes,
           owner_id,
           aiscore,
+          company_id,
           created_at
         )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, NOW())
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, NOW())
         `,
         [
           row.name || "",
@@ -3703,7 +3731,8 @@ app.post("/leads/import-excel", authenticateToken, upload.single("file"), async 
           row.value || 0,
           row.notes || "",
           row.owner_id || null,
-          row.aiscore || 50
+          row.aiscore || 50,
+          req.user?.company_id || null
         ]
       );
     }
@@ -3991,6 +4020,11 @@ app.post("/auth/login", async (req, res) => {
     }
 
     const user = result.rows[0];
+    if (!user.password) {
+      return res.status(400).json({
+        error: "Please accept your invitation email and set a password before logging in."
+      });
+    }
 
     const validPassword = await bcrypt.compare(
       password,
@@ -4090,8 +4124,8 @@ app.post("/auth/forgot-password", async (req, res) => {
 
     const resetLink = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;
 
-    await resend.emails.send({
-      from: "VigozenCRM <onboarding@resend.dev>",
+    await mailTransporter.sendMail({
+      from: `"VigozenCRM" <${process.env.ZOHO_EMAIL}>`,
       to: email,
       subject: "Reset your VigozenCRM password",
       html: `<p>Hi ${user.name || "there"},</p><p>Click the link below to reset your password. This link expires in 1 hour.</p><p><a href="${resetLink}">${resetLink}</a></p><p>If you didn't request this, you can ignore this email.</p>`

@@ -1,0 +1,29 @@
+const cron = require("node-cron");
+const pool = require("./db");
+const { getTeamStats } = require("./teamStats");
+const { generateInsight } = require("./geminiInsight");
+
+function startInsightCron() {
+  // Runs every 4 hours: at minute 0 of hours 0,4,8,12,16,20
+  cron.schedule("0 */4 * * *", async () => {
+    try {
+      console.log("Running scheduled AI insight generation...");
+      const stats = await getTeamStats();
+      const insightText = await generateInsight(stats);
+
+      await pool.query(
+        `INSERT INTO ai_insights_cache (insight_text, priority_leads)
+         VALUES ($1, $2)`,
+        [insightText, JSON.stringify(stats.top_employees)]
+      );
+
+      console.log("AI insight cached successfully.");
+    } catch (err) {
+      console.error("Scheduled insight generation failed:", err);
+    }
+  });
+
+  console.log("AI insight cron job scheduled (every 4 hours).");
+}
+
+module.exports = { startInsightCron };

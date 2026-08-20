@@ -28,6 +28,39 @@ const mailTransporter = nodemailer.createTransport({
   },
 });
 
+// ── ZOHO SMTP CONFIGURATION ──
+const nodemailer = require('nodemailer');
+
+// Create transporter
+const transporter = nodemailer.createTransport({
+  host: 'smtp.zoho.in',
+  port: 587,
+  secure: false, // true for 465, false for other ports
+  auth: {
+    user: process.env.ZOHO_EMAIL || 'vigomerge@zohomail.in',
+    pass: process.env.ZOHO_PASSWORD || '',
+  },
+});
+
+// ── EMAIL SENDING HELPER ──
+const sendEmail = async (to, subject, html) => {
+  try {
+    const mailOptions = {
+      from: `"Vigozen CRM" <${process.env.ZOHO_EMAIL || 'vigomerge@zohomail.in'}>`,
+      to,
+      subject,
+      html,
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`✅ Email sent to ${to}: ${info.messageId}`);
+    return { success: true, info };
+  } catch (error) {
+    console.error('❌ Email send failed:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 require("dotenv").config();
 async function generateWithRetry(model, prompt, retries = 3, delay = 2000) {
   for (let attempt = 1; attempt <= retries; attempt++) {
@@ -475,6 +508,25 @@ const upload = multer({
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `).catch(() => { });
+    // ── PASSWORD RESET TOKENS TABLE ──
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS password_reset_tokens (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        token VARCHAR(255) NOT NULL UNIQUE,
+        expires_at TIMESTAMP NOT NULL,
+        used BOOLEAN DEFAULT false,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `).catch(() => { });
+
+    // ── INDEXES ──
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_token ON password_reset_tokens(token);
+      CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user_id ON password_reset_tokens(user_id);
+      CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_expires_at ON password_reset_tokens(expires_at);
+    `).catch(() => { });
 
     console.log("✅ Auto-migration: DB tables ready");
   } catch (err) {
@@ -821,6 +873,26 @@ const getSubordinateUserIds = async (userId, teamId) => {
   }
 };
 
+const getDepartmentUserIds = async (companyId, department, userId) => {
+  if (!department) {
+    return [userId];
+  }
+  try {
+    const result = await pool.query(
+      "SELECT id FROM users WHERE company_id = $1 AND LOWER(department) = LOWER($2)",
+      [companyId, department]
+    );
+    const ids = result.rows.map(r => r.id);
+    if (!ids.includes(userId)) {
+      ids.push(userId);
+    }
+    return ids;
+  } catch (err) {
+    console.error("getDepartmentUserIds error:", err);
+    return [userId];
+  }
+};
+
 // Generate dynamic multi-tenant hierarchical query filters
 const getScopedQueryFilters = async (table, req) => {
   const { role, company_id, id: userId, team_id } = req.user;
@@ -846,6 +918,10 @@ const getScopedQueryFilters = async (table, req) => {
       const subIds = await getSubordinateUserIds(userId, team_id);
       clauses.push(`d.owner_id = ANY($2)`);
       params.push(subIds);
+    } else if (scope === 'dept') {
+      const deptIds = await getDepartmentUserIds(company_id, req.user.department, userId);
+      clauses.push(`d.owner_id = ANY($2)`);
+      params.push(deptIds);
     }
   }
 
@@ -859,6 +935,10 @@ const getScopedQueryFilters = async (table, req) => {
       const subIds = await getSubordinateUserIds(userId, team_id);
       clauses.push(`owner_id = ANY($2)`);
       params.push(subIds);
+    } else if (scope === 'dept') {
+      const deptIds = await getDepartmentUserIds(company_id, req.user.department, userId);
+      clauses.push(`owner_id = ANY($2)`);
+      params.push(deptIds);
     }
   }
 
@@ -872,6 +952,10 @@ const getScopedQueryFilters = async (table, req) => {
       const subIds = await getSubordinateUserIds(userId, team_id);
       clauses.push(`owner_id = ANY($2)`);
       params.push(subIds);
+    } else if (scope === 'dept') {
+      const deptIds = await getDepartmentUserIds(company_id, req.user.department, userId);
+      clauses.push(`owner_id = ANY($2)`);
+      params.push(deptIds);
     }
   }
 
@@ -885,6 +969,10 @@ const getScopedQueryFilters = async (table, req) => {
       const subIds = await getSubordinateUserIds(userId, team_id);
       clauses.push(`owner_id = ANY($2)`);
       params.push(subIds);
+    } else if (scope === 'dept') {
+      const deptIds = await getDepartmentUserIds(company_id, req.user.department, userId);
+      clauses.push(`owner_id = ANY($2)`);
+      params.push(deptIds);
     }
   }
 
@@ -898,6 +986,10 @@ const getScopedQueryFilters = async (table, req) => {
       const subIds = await getSubordinateUserIds(userId, team_id);
       clauses.push(`(owner_id = ANY($2) OR assigned_to = ANY($2))`);
       params.push(subIds);
+    } else if (scope === 'dept') {
+      const deptIds = await getDepartmentUserIds(company_id, req.user.department, userId);
+      clauses.push(`(owner_id = ANY($2) OR assigned_to = ANY($2))`);
+      params.push(deptIds);
     }
   }
 
@@ -911,6 +1003,10 @@ const getScopedQueryFilters = async (table, req) => {
       const subIds = await getSubordinateUserIds(userId, team_id);
       clauses.push(`id = ANY($2)`);
       params.push(subIds);
+    } else if (scope === 'dept') {
+      const deptIds = await getDepartmentUserIds(company_id, req.user.department, userId);
+      clauses.push(`id = ANY($2)`);
+      params.push(deptIds);
     }
   }
 
@@ -924,6 +1020,10 @@ const getScopedQueryFilters = async (table, req) => {
       const subIds = await getSubordinateUserIds(userId, team_id);
       clauses.push(`(assigned_to = ANY($2) OR assigned_by = ANY($2))`);
       params.push(subIds);
+    } else if (scope === 'dept') {
+      const deptIds = await getDepartmentUserIds(company_id, req.user.department, userId);
+      clauses.push(`(assigned_to = ANY($2) OR assigned_by = ANY($2))`);
+      params.push(deptIds);
     }
   }
 
@@ -937,6 +1037,10 @@ const getScopedQueryFilters = async (table, req) => {
       const subIds = await getSubordinateUserIds(userId, team_id);
       clauses.push(`created_by = ANY($2)`);
       params.push(subIds);
+    } else if (scope === 'dept') {
+      const deptIds = await getDepartmentUserIds(company_id, req.user.department, userId);
+      clauses.push(`created_by = ANY($2)`);
+      params.push(deptIds);
     }
   }
 
@@ -950,6 +1054,10 @@ const getScopedQueryFilters = async (table, req) => {
       const subIds = await getSubordinateUserIds(userId, team_id);
       clauses.push(`owner_id = ANY($2)`);
       params.push(subIds);
+    } else if (scope === 'dept') {
+      const deptIds = await getDepartmentUserIds(company_id, req.user.department, userId);
+      clauses.push(`owner_id = ANY($2)`);
+      params.push(deptIds);
     }
   }
 
@@ -963,6 +1071,10 @@ const getScopedQueryFilters = async (table, req) => {
       const subIds = await getSubordinateUserIds(userId, team_id);
       clauses.push(`owner_id = ANY($2)`);
       params.push(subIds);
+    } else if (scope === 'dept') {
+      const deptIds = await getDepartmentUserIds(company_id, req.user.department, userId);
+      clauses.push(`owner_id = ANY($2)`);
+      params.push(deptIds);
     }
   }
 
@@ -1583,7 +1695,8 @@ app.get("/users/visible", authenticateToken, async (req, res) => {
     const roleNorm = normalizeRole(role);
 
     const SELECT = `SELECT id, name, email, role, department, manager_id, team_id,
-                           is_active, status, created_at, employee_id, company_id
+                           is_active, status, created_at, employee_id, company_id,
+                           trial_start, trial_end, subscription_status, plan_type, payment_status
                     FROM users`;
 
     let query = "";
@@ -2151,7 +2264,7 @@ app.post("/users", authenticateToken, async (req, res) => {
 
     // ── USER LIMIT CHECK ──
     // Check if the company has reached its user limit before creating a new active user
-    if (finalCompanyId) {
+    if (false && finalCompanyId) {
       const activeCountRes = await pool.query(
         "SELECT COUNT(*) as count FROM users WHERE company_id = $1 AND is_active = true AND (status = 'Active' OR status = 'active')",
         [finalCompanyId]
@@ -2370,7 +2483,7 @@ app.put("/users/:id/toggle-access", authenticateToken, requireRole(['admin', 'su
 
     // ── USER LIMIT CHECK FOR ACTIVATION ──
     // Only check when activating (isActive = true)
-    if (isActive === true) {
+    if (false && isActive === true) {
       // Get the current user's status
       const userRes = await pool.query(
         "SELECT is_active, company_id FROM users WHERE id = $1",
@@ -2486,7 +2599,7 @@ app.put("/users/:id/activate", authenticateToken, requireRole(['admin', 'super_a
       "SELECT allowed_users, purchased_users FROM companies WHERE id = $1",
       [companyId]
     );
-    if (companyRes.rows.length > 0) {
+    if (false && companyRes.rows.length > 0) {
       const company = companyRes.rows[0];
       const allowedUsers = company.allowed_users || company.purchased_users || 10;
       if (activeUsersCount >= allowedUsers) {
@@ -2679,15 +2792,6 @@ app.get("/settings/:userId", authenticateToken, async (req, res) => {
 });
 // Leads POST
 const checkStorageLimit = async (companyId, addMb = 0) => {
-  const { rows } = await pool.query(
-    "SELECT storage_limit_mb, storage_used_mb FROM companies WHERE id = $1",
-    [companyId]
-  );
-  if (!rows.length) return { allowed: false, message: "Company not found." };
-  const { storage_limit_mb, storage_used_mb } = rows[0];
-  if (storage_used_mb + addMb > storage_limit_mb) {
-    return { allowed: false, message: "Storage limit reached. Please upgrade your plan." };
-  }
   return { allowed: true };
 };
 
@@ -4099,74 +4203,217 @@ app.post("/auth/login", async (req, res) => {
   }
 });
 
-// Forgot password - send reset link
+// ── FORGOT PASSWORD ──
 app.post("/auth/forgot-password", async (req, res) => {
   try {
     const { email } = req.body;
+
     if (!email) {
       return res.status(400).json({ error: "Email is required" });
     }
 
-    const result = await pool.query("SELECT id, name FROM users WHERE email=$1", [email]);
-
-    if (result.rows.length === 0) {
-      return res.json({ success: true, message: "If that email exists, a reset link has been sent." });
-    }
-
-    const user = result.rows[0];
-    const resetToken = crypto.randomBytes(32).toString("hex");
-    const expiry = new Date(Date.now() + 60 * 60 * 1000);
-
-    await pool.query(
-      "UPDATE users SET reset_token=$1, reset_token_expiry=$2 WHERE id=$3",
-      [resetToken, expiry, user.id]
+    // ── 1. Check if user exists ──
+    const userResult = await pool.query(
+      "SELECT id, email, name FROM users WHERE email = $1",
+      [email]
     );
 
-    const resetLink = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;
+    if (userResult.rows.length === 0) {
+      // For security, don't reveal if email exists or not
+      // Always return success to prevent email enumeration
+      console.log(`🔍 Forgot password requested for non-existent email: ${email}`);
+      return res.json({
+        success: true,
+        message: "If an account exists with this email, you will receive a password reset link."
+      });
+    }
 
-    await mailTransporter.sendMail({
-      from: `"VigozenCRM" <${process.env.ZOHO_EMAIL}>`,
-      to: email,
-      subject: "Reset your VigozenCRM password",
-      html: `<p>Hi ${user.name || "there"},</p><p>Click the link below to reset your password. This link expires in 1 hour.</p><p><a href="${resetLink}">${resetLink}</a></p><p>If you didn't request this, you can ignore this email.</p>`
+    const user = userResult.rows[0];
+
+    // ── 2. Generate secure reset token ──
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour from now
+
+    // ── 3. Store token in database ──
+    await pool.query(
+      `INSERT INTO password_reset_tokens (user_id, token, expires_at, created_at)
+       VALUES ($1, $2, $3, NOW())`,
+      [user.id, resetToken, expiresAt]
+    );
+
+    // ── 4. Build reset link ──
+    const frontendUrl = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:5173';
+    const resetLink = `${frontendUrl}/reset-password?token=${resetToken}`;
+
+    // ── 5. Send email via Zoho ──
+    const emailHtml = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <style>
+          body { font-family: Arial, sans-serif; background-color: #f4f4f4; margin: 0; padding: 0; }
+          .container { max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); overflow: hidden; }
+          .header { background: linear-gradient(135deg, #4F46E5, #7C3AED); padding: 30px 20px; text-align: center; }
+          .header h1 { color: #ffffff; margin: 0; font-size: 24px; font-weight: 600; }
+          .header p { color: #e0e7ff; margin: 8px 0 0; font-size: 14px; }
+          .content { padding: 30px 40px; }
+          .content h2 { color: #1e293b; font-size: 20px; margin: 0 0 12px; }
+          .content p { color: #475569; font-size: 15px; line-height: 1.6; margin: 0 0 16px; }
+          .button { display: inline-block; background: #4F46E5; color: #ffffff; padding: 12px 32px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 15px; margin: 8px 0 16px; }
+          .button:hover { background: #4338CA; }
+          .warning { background: #fef2f2; border-left: 4px solid #ef4444; padding: 12px 16px; border-radius: 6px; margin: 16px 0; }
+          .warning p { color: #991b1b; font-size: 13px; margin: 0; }
+          .footer { text-align: center; padding: 20px; border-top: 1px solid #e2e8f0; }
+          .footer p { color: #94a3b8; font-size: 12px; margin: 0; }
+          .footer a { color: #4F46E5; text-decoration: none; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>🔐 Vigozen CRM</h1>
+            <p>Password Reset Request</p>
+          </div>
+          <div class="content">
+            <h2>Hello ${user.name || 'User'},</h2>
+            <p>We received a request to reset your password for your Vigozen CRM account.</p>
+            <p>Click the button below to set a new password:</p>
+            <div style="text-align: center;">
+              <a href="${resetLink}" class="button">Reset Password</a>
+            </div>
+            <p style="font-size: 13px; color: #94a3b8; text-align: center; margin-top: 8px;">
+              This link will expire in 1 hour.
+            </p>
+            <div class="warning">
+              <p>⚠️ If you didn't request this, please ignore this email. Your password will not change.</p>
+            </div>
+            <p style="font-size: 13px; color: #64748b; margin-top: 16px;">
+              If the button doesn't work, copy and paste this link into your browser:
+            </p>
+            <p style="font-size: 12px; color: #4F46E5; word-break: break-all; background: #f1f5f9; padding: 8px 12px; border-radius: 4px;">
+              ${resetLink}
+            </p>
+          </div>
+          <div class="footer">
+            <p>© ${new Date().getFullYear()} Vigozen CRM. All rights reserved.</p>
+            <p>
+              <a href="${frontendUrl}">Visit our website</a> ·
+              <a href="${frontendUrl}/support">Contact Support</a>
+            </p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    const emailResult = await sendEmail(
+      user.email,
+      'Vigozen CRM - Password Reset',
+      emailHtml
+    );
+
+    if (!emailResult.success) {
+      console.error('Failed to send reset email:', emailResult.error);
+      // Still return success to user (don't reveal internal errors)
+    }
+
+    res.json({
+      success: true,
+      message: "If an account exists with this email, you will receive a password reset link."
     });
 
-    res.json({ success: true, message: "If that email exists, a reset link has been sent." });
-  } catch (err) {
-    console.error("Forgot password error:", err);
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({ error: "Something went wrong. Please try again." });
   }
 });
 
-// Reset password using token
+// ── RESET PASSWORD ──
 app.post("/auth/reset-password", async (req, res) => {
   try {
     const { token, newPassword } = req.body;
+
     if (!token || !newPassword) {
       return res.status(400).json({ error: "Token and new password are required" });
     }
 
-    const check = await pool.query(
-      "SELECT id FROM users WHERE reset_token=$1 AND reset_token_expiry > NOW()",
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: "Password must be at least 6 characters" });
+    }
+
+    // ── 1. Find valid token ──
+    const tokenResult = await pool.query(
+      `SELECT user_id, expires_at, used
+       FROM password_reset_tokens
+       WHERE token = $1
+       AND used = false
+       AND expires_at > NOW()`,
       [token]
     );
 
-    if (check.rows.length === 0) {
-      return res.status(400).json({ error: "Invalid or expired reset link" });
+    if (tokenResult.rows.length === 0) {
+      // Check if token exists but is expired or used
+      const checkResult = await pool.query(
+        `SELECT used, expires_at FROM password_reset_tokens WHERE token = $1`,
+        [token]
+      );
+
+      if (checkResult.rows.length > 0) {
+        const tokenData = checkResult.rows[0];
+        if (tokenData.used) {
+          return res.status(400).json({ error: "This reset link has already been used." });
+        }
+        if (new Date(tokenData.expires_at) < new Date()) {
+          return res.status(400).json({ error: "This reset link has expired. Please request a new one." });
+        }
+      }
+
+      return res.status(400).json({ error: "Invalid reset link." });
     }
 
-    const userId = check.rows[0].id;
+    const { user_id } = tokenResult.rows[0];
+
+    // ── 2. Hash new password ──
     const hashedPassword = await bcrypt.hash(newPassword, 10);
 
+    // ── 3. Update user password ──
     await pool.query(
-      `UPDATE users SET password=$1, reset_token=NULL, reset_token_expiry=NULL, updated_at=NOW() WHERE id=$2`,
-      [hashedPassword, userId]
+      `UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2`,
+      [hashedPassword, user_id]
     );
 
-    res.json({ success: true, message: "Password reset successful. You can now log in." });
-  } catch (err) {
-    console.error("Reset password error:", err);
-    res.status(500).json({ error: err.message });
+    // ── 4. Mark token as used ──
+    await pool.query(
+      `UPDATE password_reset_tokens SET used = true, updated_at = NOW() WHERE token = $1`,
+      [token]
+    );
+
+    // ── 5. Invalidate all other reset tokens for this user (optional) ──
+    await pool.query(
+      `UPDATE password_reset_tokens SET used = true WHERE user_id = $1 AND token != $2`,
+      [user_id, token]
+    );
+
+    // ── 6. Audit log ──
+    await logAudit(
+      user_id,
+      'User',
+      'PASSWORD_RESET',
+      'user',
+      user_id,
+      { method: 'forgot_password' },
+      req.ip
+    );
+
+    res.json({
+      success: true,
+      message: "Your password has been reset successfully. Please log in with your new password."
+    });
+
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({ error: "Something went wrong. Please try again." });
   }
 });
 
@@ -5513,7 +5760,7 @@ app.post("/users/bulk/action", authenticateToken, requireRole(['admin', 'super_a
             const allowedUsers = company.allowed_users || company.purchased_users || 10;
 
             // Check if activating these users would exceed the limit
-            if (currentActiveCount + inactiveSelectedCount > allowedUsers) {
+            if (false && currentActiveCount + inactiveSelectedCount > allowedUsers) {
               return res.status(400).json({
                 error: `Cannot activate ${inactiveSelectedCount} user(s). Your plan allows ${allowedUsers} active users. Currently ${currentActiveCount} active. Please upgrade your subscription.`,
                 limit: allowedUsers,
@@ -5620,9 +5867,16 @@ app.get("/api/reports/summary", authenticateToken, checkPermission('reports'), a
 
     let hierarchyFilter = '';
     if (permissionScope !== 'full') {
-      const subIds = await getSubordinateUserIds(userId, teamId);
+      let targetUserIds;
+      if (permissionScope === 'dept') {
+        targetUserIds = await getDepartmentUserIds(companyId, req.user.department, userId);
+      } else if (permissionScope === 'team') {
+        targetUserIds = await getSubordinateUserIds(userId, teamId);
+      } else {
+        targetUserIds = [userId];
+      }
       hierarchyFilter = ` AND owner_id = ANY($${paramIndex})`;
-      params.push(subIds);
+      params.push(targetUserIds);
       paramIndex++;
     }
 
@@ -5673,9 +5927,16 @@ app.get("/api/reports/employee-wise", authenticateToken, checkPermission('report
 
     let hierarchyFilter = '';
     if (permissionScope !== 'full') {
-      const subIds = await getSubordinateUserIds(userId, teamId);
+      let targetUserIds;
+      if (permissionScope === 'dept') {
+        targetUserIds = await getDepartmentUserIds(companyId, req.user.department, userId);
+      } else if (permissionScope === 'team') {
+        targetUserIds = await getSubordinateUserIds(userId, teamId);
+      } else {
+        targetUserIds = [userId];
+      }
       hierarchyFilter = ` l.owner_id = ANY($${paramIndex})`;
-      params.push(subIds);
+      params.push(targetUserIds);
       paramIndex++;
     }
 
@@ -5737,9 +5998,16 @@ app.get("/api/reports/status-wise", authenticateToken, checkPermission('reports'
 
     let hierarchyFilter = '';
     if (permissionScope !== 'full') {
-      const subIds = await getSubordinateUserIds(userId, teamId);
+      let targetUserIds;
+      if (permissionScope === 'dept') {
+        targetUserIds = await getDepartmentUserIds(companyId, req.user.department, userId);
+      } else if (permissionScope === 'team') {
+        targetUserIds = await getSubordinateUserIds(userId, teamId);
+      } else {
+        targetUserIds = [userId];
+      }
       hierarchyFilter = ` owner_id = ANY($${paramIndex})`;
-      params.push(subIds);
+      params.push(targetUserIds);
       paramIndex++;
     }
 
@@ -5790,9 +6058,16 @@ app.get("/api/reports/sales-wise", authenticateToken, checkPermission('reports')
 
     let hierarchyFilter = '';
     if (permissionScope !== 'full') {
-      const subIds = await getSubordinateUserIds(userId, teamId);
+      let targetUserIds;
+      if (permissionScope === 'dept') {
+        targetUserIds = await getDepartmentUserIds(companyId, req.user.department, userId);
+      } else if (permissionScope === 'team') {
+        targetUserIds = await getSubordinateUserIds(userId, teamId);
+      } else {
+        targetUserIds = [userId];
+      }
       hierarchyFilter = ` AND owner_id = ANY($${paramIndex})`;
-      params.push(subIds);
+      params.push(targetUserIds);
       paramIndex++;
     }
 
@@ -6172,10 +6447,29 @@ app.get("/subscription/trial/check", authenticateToken, async (req, res) => {
 });
 app.get("/ai-insights", authenticateToken, async (req, res) => {
   try {
-    const priorityLeads = await getPriorityLeads(5);
-    const cacheResult = await pool.query(
-      `SELECT insight_text, generated_at FROM ai_insights_cache ORDER BY generated_at DESC LIMIT 1`
-    );
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    const companyId = isSuperAdmin ? null : req.user.company_id;
+
+    const priorityLeads = await getPriorityLeads(5, companyId);
+    let cacheResult;
+    if (companyId) {
+      cacheResult = await pool.query(
+        `SELECT insight_text, generated_at FROM ai_insights_cache WHERE company_id = $1 ORDER BY generated_at DESC LIMIT 1`,
+        [companyId]
+      );
+    } else {
+      cacheResult = await pool.query(
+        `SELECT insight_text, generated_at FROM ai_insights_cache WHERE company_id IS NULL ORDER BY generated_at DESC LIMIT 1`
+      );
+    }
+
+    if (cacheResult.rows.length === 0) {
+      // Fallback: if no company-specific insight is cached, load the latest global one
+      cacheResult = await pool.query(
+        `SELECT insight_text, generated_at FROM ai_insights_cache ORDER BY generated_at DESC LIMIT 1`
+      );
+    }
+
     res.json({
       insight_text: cacheResult.rows[0]?.insight_text ?? null,
       priority_leads: priorityLeads,
@@ -6213,13 +6507,16 @@ User question: ${message}`;
 
 app.post("/ai-insights/generate", authenticateToken, async (req, res) => {
   try {
-    const stats = await getTeamStats();
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    const companyId = isSuperAdmin ? null : req.user.company_id;
+
+    const stats = await getTeamStats(companyId);
     const insightText = await generateInsight(stats);
 
     await pool.query(
       `INSERT INTO ai_insights_cache (company_id, insight_text, priority_leads)
        VALUES ($1, $2, $3)`,
-      [req.user.company_id || null, insightText, JSON.stringify(stats.top_employees)]
+      [companyId, insightText, JSON.stringify(stats.top_employees)]
     );
 
     res.json({ insight_text: insightText, stats });

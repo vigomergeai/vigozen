@@ -95,7 +95,6 @@ async function getConnectionsToSync() {
     FROM ad_connections ac
     INNER JOIN user_settings us ON ac.user_id = us.user_id
     WHERE ac.connected = true 
-      AND ac.status = 'active'
       AND us.ad_auto_sync = true
       AND (ac.last_sync IS NULL OR ac.last_sync < NOW() - INTERVAL '15 minutes')
     ORDER BY ac.last_sync ASC NULLS FIRST

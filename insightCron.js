@@ -28,21 +28,35 @@ const startInsightCron = () => {
 };
 
 async function runInsightSync() {
-  const stats = await getTeamStats();
-  const insightText = await generateInsight(stats);
-
   // Get all companies
   const compRes = await pool.query("SELECT id FROM companies");
   for (const company of compRes.rows) {
     try {
+      console.log(`Generating insights for company ${company.id}...`);
+      const stats = await getTeamStats(company.id);
+      const insightText = await generateInsight(stats);
       await pool.query(
         `INSERT INTO ai_insights_cache (company_id, insight_text, priority_leads)
          VALUES ($1, $2, $3)`,
         [company.id, insightText, JSON.stringify(stats.top_employees)]
       );
     } catch (err) {
-      console.error(`Failed to save insight cache for company ${company.id}:`, err);
+      console.error(`Failed to generate/save insight cache for company ${company.id}:`, err);
     }
+  }
+
+  // Also generate global insights cache (for Super Admin / NULL company_id)
+  try {
+    console.log("Generating global insights...");
+    const globalStats = await getTeamStats(null);
+    const globalInsightText = await generateInsight(globalStats);
+    await pool.query(
+      `INSERT INTO ai_insights_cache (company_id, insight_text, priority_leads)
+       VALUES (NULL, $1, $2)`,
+      [globalInsightText, JSON.stringify(globalStats.top_employees)]
+    );
+  } catch (err) {
+    console.error("Failed to generate/save global insight cache:", err);
   }
 }
 

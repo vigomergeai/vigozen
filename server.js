@@ -4279,7 +4279,7 @@ const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
             <p>We received a request to reset your password for your Vigozen CRM account.</p>
             <p>Click the button below to set a new password:</p>
             <div style="text-align: center;">
-              <a href="${resetLink}" class="button">Reset Password</a>
+<a href="${resetLink}" style="display:inline-block; background-color:#4F46E5; color:#ffffff !important; padding:12px 32px; border-radius:8px; text-decoration:none; font-weight:600; font-size:15px; margin:8px 0 16px;">Reset Password</a>
             </div>
             <p style="font-size: 13px; color: #94a3b8; text-align: center; margin-top: 8px;">
               This link will expire in 1 hour.

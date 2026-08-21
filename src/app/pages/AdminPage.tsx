@@ -190,7 +190,8 @@ const DEPT_OPTIONS = [
 const newPasswordSchema = z.object({
   password: z
     .string()
-    .min(1, "Password is Required"),
+    .min(8, "Password must be at least 8 characters.")
+    .regex(/[^a-zA-Z0-9]/, "Password must contain at least 1 symbol (e.g., !@#$%)."),
 });
 
 

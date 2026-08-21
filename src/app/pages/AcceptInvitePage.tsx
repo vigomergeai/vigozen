@@ -44,8 +44,12 @@ export default function AcceptInvitePage() {
     e.preventDefault();
     setError("");
 
-    if (!password || password.length < 6) {
-      setError("Password must be at least 6 characters.");
+    if (!password || password.length < 8) {
+      setError("Password must be at least 8 characters.");
+      return;
+    }
+    if (!/[^a-zA-Z0-9]/.test(password)) {
+      setError("Password must contain at least 1 symbol (e.g., !@#$%).");
       return;
     }
     if (password !== confirmPassword) {

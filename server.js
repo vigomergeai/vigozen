@@ -37,7 +37,7 @@ const transporter = nodemailer.createTransport({
   secure: false, // true for 465, false for other ports
   auth: {
     user: process.env.ZOHO_EMAIL || 'vigomerge@zohomail.in',
-    pass: process.env.ZOHO_PASSWORD || '',
+    pass: process.env.ZOHO_APP_PASSWORD || '',
   },
 });
 
@@ -4241,7 +4241,7 @@ app.post("/auth/forgot-password", async (req, res) => {
     );
 
     // ── 4. Build reset link ──
-    const frontendUrl = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:5173';
+const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const resetLink = `${frontendUrl}/reset-password?token=${resetToken}`;
 
     // ── 5. Send email via Zoho ──

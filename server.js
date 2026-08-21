@@ -68,7 +68,7 @@ async function generateWithRetry(model, prompt, retries = 3, delay = 2000) {
     } catch (err) {
       const isRetryable = err.status === 503 || err.status === 429;
       if (!isRetryable || attempt === retries) throw err;
-     let waitTime = delay;
+      let waitTime = delay;
       const retryInfo = err.errorDetails?.find(d => d['@type']?.includes('RetryInfo'));
       if (retryInfo?.retryDelay) {
         const parsed = parseInt(retryInfo.retryDelay);
@@ -234,6 +234,10 @@ const upload = multer({
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_status VARCHAR(50) DEFAULT 'trialing';`).catch(() => { });
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS plan_type VARCHAR(100) DEFAULT 'trial';`).catch(() => { });
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS payment_status VARCHAR(50) DEFAULT 'unpaid';`).catch(() => { });
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS activated_at TIMESTAMP;`).catch(() => { });
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS deactivated_at TIMESTAMP;`).catch(() => { });
+    await pool.query(`ALTER TABLE activities ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`).catch(() => { });
+    await pool.query(`ALTER TABLE calendar_events ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`).catch(() => { });
 
     // ── Company subscription columns ──
     await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS plan_type VARCHAR(100) DEFAULT 'professional';`).catch(() => { });
@@ -2274,7 +2278,7 @@ app.post("/users", authenticateToken, async (req, res) => {
         "SELECT allowed_users, purchased_users FROM companies WHERE id = $1",
         [finalCompanyId]
       );
-      
+
       if (companyRes.rows.length > 0) {
         const company = companyRes.rows[0];
         const allowedUsers = company.allowed_users || company.purchased_users || 10;
@@ -2488,7 +2492,7 @@ app.put("/users/:id/toggle-access", authenticateToken, requireRole(['admin', 'su
         "SELECT is_active, company_id FROM users WHERE id = $1",
         [userId]
       );
-      
+
       // Only check if the user is currently inactive (activation)
       if (userRes.rows.length > 0 && userRes.rows[0].is_active === false) {
         const targetCompanyId = userRes.rows[0].company_id || companyId;
@@ -2505,7 +2509,7 @@ app.put("/users/:id/toggle-access", authenticateToken, requireRole(['admin', 'su
             "SELECT allowed_users, purchased_users FROM companies WHERE id = $1",
             [targetCompanyId]
           );
-          
+
           if (companyRes.rows.length > 0) {
             const company = companyRes.rows[0];
             const allowedUsers = company.allowed_users || company.purchased_users || 10;
@@ -2693,7 +2697,7 @@ app.post("/users/transfer-data", authenticateToken, requireRole(['admin', 'super
     }
 
     // Perform the transfer
-    const { transferEmployeeData } = require("./employeeTransfer");
+    const { transferEmployeeData } = require("./server/employeeTransfer");
     const result = await transferEmployeeData(leaving_user_id, target_user_id, req.user.id);
 
     res.json(result);
@@ -2708,7 +2712,7 @@ app.post("/users/transfer-data", authenticateToken, requireRole(['admin', 'super
 // Get all subordinates of the current user
 app.get("/users/my-subordinates", authenticateToken, async (req, res) => {
   try {
-    const { getSubordinates } = require("./employeeTransfer");
+    const { getSubordinates } = require("./server/employeeTransfer");
     const subordinates = await getSubordinates(req.user.id, req.user.team_id);
     res.json(subordinates);
   } catch (err) {
@@ -2727,7 +2731,7 @@ app.get("/users/:managerId/subordinates", authenticateToken, async (req, res) =>
       return res.status(403).json({ error: "Only admins can view other managers' subordinates" });
     }
 
-    const { getSubordinates } = require("./employeeTransfer");
+    const { getSubordinates } = require("./server/employeeTransfer");
     const subordinates = await getSubordinates(managerId, req.user.team_id);
     res.json(subordinates);
   } catch (err) {
@@ -2739,7 +2743,7 @@ app.get("/users/:managerId/subordinates", authenticateToken, async (req, res) =>
 // Get team statistics for the current user
 app.get("/users/my-team-stats", authenticateToken, async (req, res) => {
   try {
-    const { getTeamStatistics } = require("./employeeTransfer");
+    const { getTeamStatistics } = require("./server/employeeTransfer");
     const stats = await getTeamStatistics(req.user.id);
     res.json(stats);
   } catch (err) {
@@ -2758,7 +2762,7 @@ app.get("/users/:managerId/team-stats", authenticateToken, async (req, res) => {
       return res.status(403).json({ error: "Only admins can view other managers' team statistics" });
     }
 
-    const { getTeamStatistics } = require("./employeeTransfer");
+    const { getTeamStatistics } = require("./server/employeeTransfer");
     const stats = await getTeamStatistics(managerId);
     res.json(stats);
   } catch (err) {
@@ -4241,7 +4245,7 @@ app.post("/auth/forgot-password", async (req, res) => {
     );
 
     // ── 4. Build reset link ──
-const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const resetLink = `${frontendUrl}/reset-password?token=${resetToken}`;
 
     // ── 5. Send email via Zoho ──
@@ -4278,8 +4282,9 @@ const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
             <h2>Hello ${user.name || 'User'},</h2>
             <p>We received a request to reset your password for your Vigozen CRM account.</p>
             <p>Click the button below to set a new password:</p>
+            
             <div style="text-align: center;">
-              <a href="${resetLink}" class="button">Reset Password</a>
+              <a href="${resetLink}" style="display: inline-block; background: #4F46E5; color: #ffffff; padding: 14px 36px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 16px; font-family: Arial, sans-serif;">Reset Password</a>
             </div>
             <p style="font-size: 13px; color: #94a3b8; text-align: center; margin-top: 8px;">
               This link will expire in 1 hour.
@@ -5644,7 +5649,33 @@ app.get("/api/audit-logs", authenticateToken, async (req, res) => {
       paramIndex++;
     }
 
-    // ... rest of filters and pagination
+    if (action) {
+      conditions.push(`action = $${paramIndex}`);
+      params.push(action);
+      paramIndex++;
+    }
+
+    if (entity_type) {
+      conditions.push(`entity_type = $${paramIndex}`);
+      params.push(entity_type);
+      paramIndex++;
+    }
+
+    if (user_id) {
+      conditions.push(`user_id = $${paramIndex}`);
+      params.push(user_id);
+      paramIndex++;
+    }
+
+    if (conditions.length > 0) {
+      query += ` WHERE ` + conditions.join(' AND ');
+    }
+
+    query += ` ORDER BY created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+    params.push(parseInt(limit), parseInt(offset));
+
+    const result = await pool.query(query, params);
+    res.json(result.rows);
   } catch (error) {
     console.error("Error fetching audit logs:", error);
     res.status(500).json({ error: error.message });
@@ -5753,7 +5784,7 @@ app.post("/users/bulk/action", authenticateToken, requireRole(['admin', 'super_a
             "SELECT allowed_users, purchased_users FROM companies WHERE id = $1",
             [bulkCompanyId]
           );
-          
+
           if (companyRes.rows.length > 0) {
             const company = companyRes.rows[0];
             const allowedUsers = company.allowed_users || company.purchased_users || 10;
@@ -7544,7 +7575,7 @@ app.listen(5000, "0.0.0.0", () => {
 
   console.log("Server running on port 5000");
   startNotificationWorker();
- startInsightCron();
+  startInsightCron();
 });
 
 // Start cron job for background sync

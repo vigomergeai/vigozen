@@ -108,7 +108,7 @@ export const fetchRevenueForecast = async (): Promise<RevenueForecast> => {
     );
     
     const nextMonthDeals = deals.filter((deal: any) => 
-      getDealDate(deal) >= nextMonthStart || getDealDate(deal) <= nextMonthEnd
+      getDealDate(deal) >= nextMonthStart && getDealDate(deal) <= nextMonthEnd
     );
     
     const quarterDeals = deals.filter((deal: any) => 

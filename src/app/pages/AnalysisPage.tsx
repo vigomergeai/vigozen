@@ -52,12 +52,35 @@ export default function AnalysisPage() {
     return `${y}-${m}-${day}`;
   };
 
+  const getPrevPeriodDates = (startStr: string, endStr: string) => {
+    const parseLocalDate = (str: string) => {
+      const parts = str.split("-");
+      return new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+    };
+
+    const start = parseLocalDate(startStr);
+    const end = parseLocalDate(endStr);
+    const diffTime = Math.abs(end.getTime() - start.getTime());
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+
+    const prevStart = new Date(start);
+    prevStart.setDate(prevStart.getDate() - diffDays);
+    const prevEnd = new Date(start);
+    prevEnd.setDate(prevEnd.getDate() - 1);
+
+    return {
+      prevStartStr: formatYYYYMMDD(prevStart),
+      prevEndStr: formatYYYYMMDD(prevEnd)
+    };
+  };
+
   // ── Reports State ──
   const [reports, setReports] = useState({
     summary: null as any,
     employeeWise: [] as any[],
     statusWise: [] as any[],
     salesWise: [] as any[],
+    prevEmployeeWise: [] as any[],
     loading: true
   });
 
@@ -98,17 +121,20 @@ export default function AnalysisPage() {
           queryEnd = endDate;
         }
 
-        const [summary, employeeWise, statusWise, salesWise] = await Promise.all([
+        const prevDates = getPrevPeriodDates(queryStart, queryEnd);
+        const [summary, employeeWise, statusWise, salesWise, prevEmployeeWise] = await Promise.all([
           api.reports.getSummary(token, queryStart, queryEnd),
           api.reports.getEmployeeWise(token, queryStart, queryEnd),
           api.reports.getStatusWise(token, queryStart, queryEnd),
           api.reports.getSalesWise(token, queryStart, queryEnd),
+          api.reports.getEmployeeWise(token, prevDates.prevStartStr, prevDates.prevEndStr),
         ]);
         setReports({
           summary,
           employeeWise: employeeWise || [],
           statusWise: statusWise || [],
           salesWise: salesWise || [],
+          prevEmployeeWise: prevEmployeeWise || [],
           loading: false
         });
       } catch (error) {
@@ -135,6 +161,19 @@ export default function AnalysisPage() {
       negotiation: item.negotiation_leads || 0,   // Backend sends negotiation_leads
       won: item.won_deals || 0,                   // Backend sends won_deals
       lost: item.lost_leads || 0,                 // Backend sends lost_leads
+    }))
+    : [];
+
+  const prevEmpWiseData: EmployeeSummary[] = reports.prevEmployeeWise.length > 0
+    ? reports.prevEmployeeWise.map((item: any) => ({
+      name: item.employee_name || 'Unassigned',
+      new: item.new_leads || 0,
+      contacted: item.contacted_leads || 0,
+      qualified: item.qualified_leads || 0,
+      proposal: item.proposal_leads || 0,
+      negotiation: item.negotiation_leads || 0,
+      won: item.won_deals || 0,
+      lost: item.lost_leads || 0,
     }))
     : [];
 
@@ -450,11 +489,38 @@ export default function AnalysisPage() {
               const totalWon = empWiseData.reduce((sum, e) => sum + (Number(e.won) || 0), 0);
               const totalLost = empWiseData.reduce((sum, e) => sum + (Number(e.lost) || 0), 0);
               const convRate = totalLeads > 0 ? ((totalWon / totalLeads) * 100).toFixed(1) : "0.0";
+
+              const prevTotalLeads = prevEmpWiseData.reduce((sum, e) => 
+                sum + 
+                (Number(e.new) || 0) + 
+                (Number(e.contacted) || 0) + 
+                (Number(e.qualified) || 0) + 
+                (Number(e.proposal) || 0) + 
+                (Number(e.negotiation) || 0) + 
+                (Number(e.won) || 0) + 
+                (Number(e.lost) || 0), 
+                0
+              );
+              const prevTotalWon = prevEmpWiseData.reduce((sum, e) => sum + (Number(e.won) || 0), 0);
+              const prevTotalLost = prevEmpWiseData.reduce((sum, e) => sum + (Number(e.lost) || 0), 0);
+              const prevConvRate = prevTotalLeads > 0 ? (prevTotalWon / prevTotalLeads) * 100 : 0;
+
+              const calcChange = (curr: number, prev: number) => {
+                if (prev === 0) return curr > 0 ? "+100%" : "0%";
+                const pct = ((curr - prev) / prev) * 100;
+                return `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`;
+              };
+
+              const leadsTrend = calcChange(totalLeads, prevTotalLeads);
+              const wonTrend = calcChange(totalWon, prevTotalWon);
+              const lostTrend = calcChange(totalLost, prevTotalLost);
+              const convRateTrend = calcChange(Number(convRate), prevConvRate);
+
               return [
-                { label: "Total Leads", value: totalLeads, trend: "+18%", color: "indigo" },
-                { label: "Total Won", value: totalWon, trend: "+23%", color: "emerald" },
-                { label: "Total Lost", value: totalLost, trend: "-5%", color: "red" },
-                { label: "Avg Conv. Rate", value: `${convRate}%`, trend: "+2.3%", color: "purple" },
+                { label: "Total Leads", value: totalLeads, trend: leadsTrend, color: "indigo" },
+                { label: "Total Won", value: totalWon, trend: wonTrend, color: "emerald" },
+                { label: "Total Lost", value: totalLost, trend: lostTrend, color: "red" },
+                { label: "Avg Conv. Rate", value: `${convRate}%`, trend: convRateTrend, color: "purple" },
               ].map(stat => (
                 <div key={stat.label} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
                   <div className="text-2xl font-bold text-slate-900">{stat.value}</div>
@@ -481,6 +547,7 @@ export default function AnalysisPage() {
                 <Bar key="bar-contacted" dataKey="contacted" stackId="a" fill="#8B5CF6" name="Contacted" />
                 <Bar key="bar-qualified" dataKey="qualified" stackId="a" fill="#F59E0B" name="Qualified" />
                 <Bar key="bar-proposal" dataKey="proposal" stackId="a" fill="#3B82F6" name="Proposal" />
+                <Bar key="bar-negotiation" dataKey="negotiation" stackId="a" fill="#EC4899" name="Negotiation" />
                 <Bar key="bar-won" dataKey="won" stackId="a" fill="#10B981" name="Won" />
                 <Bar key="bar-lost" dataKey="lost" stackId="a" fill="#EF4444" name="Lost" radius={[4, 4, 0, 0]} />
               </BarChart>
@@ -511,9 +578,13 @@ export default function AnalysisPage() {
                     <tr className="border-b border-slate-100">
                       <th className="text-left pb-2 text-slate-400 font-medium">Employee</th>
                       <th className="text-right pb-2 text-slate-400 font-medium">New</th>
+                      <th className="text-right pb-2 text-slate-400 font-medium">Contacted</th>
                       <th className="text-right pb-2 text-slate-400 font-medium">Qualified</th>
+                      <th className="text-right pb-2 text-slate-400 font-medium">Proposal</th>
+                      <th className="text-right pb-2 text-slate-400 font-medium">Negotiation</th>
                       <th className="text-right pb-2 text-slate-400 font-medium">Won</th>
                       <th className="text-right pb-2 text-slate-400 font-medium">Lost</th>
+                      <th className="text-right pb-2 text-slate-500 font-bold">Total</th>
                       <th className="text-right pb-2 text-slate-400 font-medium">Conv%</th>
                     </tr>
                   </thead>
@@ -532,9 +603,13 @@ export default function AnalysisPage() {
                             </div>
                           </td>
                           <td className="py-2.5 text-right text-slate-600">{e.new}</td>
+                          <td className="py-2.5 text-right text-slate-600">{e.contacted}</td>
                           <td className="py-2.5 text-right text-slate-600">{e.qualified}</td>
+                          <td className="py-2.5 text-right text-slate-600">{e.proposal}</td>
+                          <td className="py-2.5 text-right text-slate-600">{e.negotiation}</td>
                           <td className="py-2.5 text-right text-emerald-600 font-semibold">{e.won}</td>
                           <td className="py-2.5 text-right text-red-500">{e.lost}</td>
+                          <td className="py-2.5 text-right text-slate-800 font-bold">{total}</td>
                           <td className="py-2.5 text-right">
                             <span className={`px-1.5 py-0.5 rounded-full font-semibold ${Number(conv) >= 50 ? "text-emerald-700 bg-emerald-50" : Number(conv) >= 35 ? "text-amber-700 bg-amber-50" : "text-red-600 bg-red-50"}`}>
                               {conv}%
@@ -767,7 +842,6 @@ export default function AnalysisPage() {
                   <YAxis tick={{ fontSize: 10, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
                   <Tooltip contentStyle={{ borderRadius: 12, border: "1px solid #e2e8f0" }} />
                   <Line key="line-deals" type="monotone" dataKey="deals" stroke="#10B981" strokeWidth={2.5} dot={{ fill: "#10B981", r: 4 }} name="Deals Closed" />
-                  <Line key="line-avg" type="monotone" dataKey="avgDealSize" stroke="#F59E0B" strokeWidth={2} strokeDasharray="4 2" dot={false} name="Avg Deal Size" />
                 </LineChart>
               </ResponsiveContainer>
             </div>

@@ -236,7 +236,7 @@ const conversionChange = calcChange(conversionCurrent, conversionPrevious);
         id: 4,
         type: "trend",
         title: "Conversion Achievement",
-        message: `Total of ${wonCount} deals successfully closed won. Conversion rate is at ${leads.length > 0 ? ((wonCount / leads.length) * 100).toFixed(1) : 0}%.`,
+        message: `${wonLeads} leads successfully converted. Conversion rate is at ${conversionRate}%.`,
         priority: "low"
       });
     }
@@ -255,7 +255,7 @@ const conversionChange = calcChange(conversionCurrent, conversionPrevious);
   }, [leads, deals]);
 
   const revenueData = React.useMemo(() => {
-    const months = ["Oct", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"];
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     
     const last6Months: {
       monthIndex: number;

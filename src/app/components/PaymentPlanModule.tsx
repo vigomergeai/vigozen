@@ -286,9 +286,12 @@ export default function PaymentPlanModule({
             <div className="w-full bg-slate-100 rounded-full h-1.5 mt-2 overflow-hidden">
               <div
                 className="bg-emerald-500 h-1.5 rounded-full transition-all duration-300"
-                style={{ width: `${Math.min(100, (metrics.totalPaid / (metrics.agreementValue || 1)) * 100)}%` }}
+                style={{ width: `${Math.min(100, metrics.paidProgress)}%` }}
               />
             </div>
+            <p className="text-[11px] text-emerald-600 font-semibold mt-1">
+              {metrics.paidProgress}% Paid
+            </p>
           </div>
 
           {/* Card 3: Total Pending */}
@@ -303,7 +306,7 @@ export default function PaymentPlanModule({
               {formatCurrency(metrics.totalPending)}
             </div>
             <p className="text-xs text-slate-500 mt-1">
-              {milestones.filter(m => m.paymentStatus !== 'Paid').length} installments remaining
+              {metrics.remainingMilestonesCount} installments remaining
             </p>
           </div>
 
@@ -352,7 +355,7 @@ export default function PaymentPlanModule({
                     onClick={handleResetDefaults}
                     className="px-2 py-1 bg-red-600 text-white rounded text-xs font-medium hover:bg-red-700"
                   >
-                    Auto-Fix
+                    Reset to 100%
                   </button>
                 </div>
               )}
@@ -368,7 +371,7 @@ export default function PaymentPlanModule({
                         <th className="py-3 px-2 text-center w-20">% Slab</th>
                         <th className="py-3 px-3 text-right min-w-[120px]">Milestone Amount</th>
                         <th className="py-3 px-3 text-right min-w-[110px]">0.9% Installment</th>
-                        <th className="py-3 px-3 text-right min-w-[110px]">Cumulative EMI</th>
+                        <th className="py-3 px-3 text-right min-w-[125px]">Cumulative Installment</th>
                         <th className="py-3 px-2 text-center w-24">40:30:30</th>
                         <th className="py-3 px-3 min-w-[120px]">Milestone Status</th>
                         <th className="py-3 px-3 min-w-[125px]">Payment Status</th>
@@ -426,9 +429,9 @@ export default function PaymentPlanModule({
                               {formatCurrency(m.installment || 0)}
                             </td>
 
-                            {/* 6. Cumulative EMI */}
+                            {/* 6. Cumulative Installment */}
                             <td className="py-2.5 px-3 text-right font-bold text-slate-700">
-                              {formatCurrency(m.cumulativeEmi || 0)}
+                              {formatCurrency(m.cumulativeInstallment ?? m.cumulativeEmi ?? 0)}
                             </td>
 
                             {/* 7. 40:30:30 Structure Badge */}

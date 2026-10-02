@@ -10,7 +10,7 @@ interface ConvertLeadModalProps {
   loading: boolean;
 }
 
-const STAGES: LeadStatus[] = ["New", "Contacted", "Qualified", "Proposal", "Negotiation"];
+const STAGES: LeadStatus[] = ["New", "Attempted-1", "Attempted-2", "Attempted-3", "In-Process", "Site Visit Scheduled", "Site Visit Done", "Zoom Meeting", "Final Negotiation", "Token Done", "Booking Done"];
 
 export default function ConvertLeadModal({
   isOpen,
@@ -65,6 +65,11 @@ export default function ConvertLeadModal({
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          {(lead.status === "Lost" || lead.status === "Unqualified") && (
+            <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/40 rounded-xl text-xs text-amber-800 dark:text-amber-300">
+              ⚠️ This lead was previously marked as <strong>{lead.status}</strong>{lead.dead_reason ? ` (${lead.dead_reason})` : ''}. Converting will revive this lead and create an active deal.
+            </div>
+          )}
           <div>
             <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1.5 font-medium">
               Deal Title *

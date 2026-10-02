@@ -3,24 +3,41 @@ import {
   TrendingUp, Target, Plus, Bot, MoreHorizontal,
   Calendar, User, ChevronRight, ArrowUp, Trophy, BarChart2, Clock,
   Edit, Trash2, X, AlertTriangle, RefreshCw, DollarSign, CheckCircle, Lock,
-  Building2
+  Building2, Calculator
 } from "lucide-react";
 import { useNavigate } from "react-router";
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer
 } from "recharts";
-import { Deal, LeadStatus } from "../data/mockData";
+import { Deal, LeadStatus, DEAD_REASONS } from "../data/mockData";
+import DeadReasonModal from "../components/DeadReasonModal";
+import PaymentPlanModule from "../components/PaymentPlanModule";
 import { useApp } from "../context/AppContext";
 import { hasModuleAccess, canWrite, canEdit } from "../utils/permissions";
 import { RevenueForecast } from '../components/RevenueForecast';
 import { formatCurrency } from '../../utils/formatters';
 
 // Ensure all stages are properly defined
-const stages: LeadStatus[] = ["New", "Contacted", "Qualified", "Proposal", "Negotiation", "Won", "Lost"];
-
+const stages: LeadStatus[] = [
+  "New",
+  "Attempted-1",
+  "Attempted-2",
+  "Attempted-3",
+  "In-Process",
+  "Site Visit Scheduled",
+  "Site Visit Done",
+  "Zoom Meeting",
+  "Final Negotiation",
+  "Token Done",
+  "Booking Done",
+  "Lost",
+  "Unqualified",
+];
+const CLOSED_STAGES: string[] = ["Won", "Booking Done", "Lost", "Unqualified"];
 // Add stage configuration with proper colors
 const stageConfig: Record<LeadStatus, { color: string; bg: string; header: string; border: string }> = {
+  // ── Legacy stages (kept for old data) ──
   New: { color: "border-blue-400", bg: "bg-blue-50", header: "bg-blue-500", border: "border-blue-200" },
   Contacted: { color: "border-amber-400", bg: "bg-amber-50", header: "bg-amber-500", border: "border-amber-200" },
   Qualified: { color: "border-indigo-400", bg: "bg-indigo-50", header: "bg-indigo-500", border: "border-indigo-200" },
@@ -28,6 +45,19 @@ const stageConfig: Record<LeadStatus, { color: string; bg: string; header: strin
   Negotiation: { color: "border-orange-400", bg: "bg-orange-50", header: "bg-orange-500", border: "border-orange-200" },
   Won: { color: "border-emerald-400", bg: "bg-emerald-50", header: "bg-emerald-500", border: "border-emerald-200" },
   Lost: { color: "border-red-400", bg: "bg-red-50", header: "bg-red-500", border: "border-red-200" },
+
+  // ── Phase 2 real-estate stages ──
+  "Attempted-1": { color: "border-sky-400", bg: "bg-sky-50", header: "bg-sky-500", border: "border-sky-200" },
+  "Attempted-2": { color: "border-cyan-400", bg: "bg-cyan-50", header: "bg-cyan-500", border: "border-cyan-200" },
+  "Attempted-3": { color: "border-teal-400", bg: "bg-teal-50", header: "bg-teal-500", border: "border-teal-200" },
+  "In-Process": { color: "border-violet-400", bg: "bg-violet-50", header: "bg-violet-500", border: "border-violet-200" },
+  "Site Visit Scheduled": { color: "border-fuchsia-400", bg: "bg-fuchsia-50", header: "bg-fuchsia-500", border: "border-fuchsia-200" },
+  "Site Visit Done": { color: "border-pink-400", bg: "bg-pink-50", header: "bg-pink-500", border: "border-pink-200" },
+  "Zoom Meeting": { color: "border-rose-400", bg: "bg-rose-50", header: "bg-rose-500", border: "border-rose-200" },
+  "Final Negotiation": { color: "border-amber-400", bg: "bg-amber-50", header: "bg-amber-600", border: "border-amber-200" },
+  "Token Done": { color: "border-lime-400", bg: "bg-lime-50", header: "bg-lime-600", border: "border-lime-200" },
+  "Booking Done": { color: "border-emerald-400", bg: "bg-emerald-50", header: "bg-emerald-600", border: "border-emerald-200" },
+  Unqualified: { color: "border-slate-400", bg: "bg-slate-50", header: "bg-slate-500", border: "border-slate-200" },
 };
 const probColor = (p: number) => p === 100 ? "text-emerald-600" : p === 0 ? "text-red-500" : p >= 70 ? "text-emerald-500" : p >= 50 ? "text-amber-500" : "text-orange-500";
 
@@ -51,6 +81,9 @@ export default function SalesPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<Deal | null>(null);
   const [saving, setSaving] = useState(false);
   const [dragOverStage, setDragOverStage] = useState<string | null>(null);
+  const [showDeadReasonModal, setShowDeadReasonModal] = useState(false);
+  const [deadReasonDeal, setDeadReasonDeal] = useState<{ id: string; title: string; stage: LeadStatus; initialReason?: string } | null>(null);
+  const [selectedScheduleDeal, setSelectedScheduleDeal] = useState<Deal | null>(null);
 
   // ── Check if trial expired ──
   const isLocked = subscription &&
@@ -105,7 +138,8 @@ export default function SalesPage() {
         };
       }
 
-      if (deal.stage?.toLowerCase() === "won") {
+      const st = deal.stage?.toLowerCase();
+      if (st === "won" || st === "booking done") {
         const value = Number(deal.value || 0);
         acc[week].achieved += value;
         acc[week].deals += 1;
@@ -122,19 +156,22 @@ export default function SalesPage() {
 
   const dealsByStage = (stage: LeadStatus) => visibleDeals.filter(d => d.stage === stage);
   const stageValue = (stage: LeadStatus) => dealsByStage(stage).reduce((s, d) => s + (Number(d.value) || 0), 0);
-  const totalPipeline = visibleDeals.filter(d => !["Won", "Lost"].includes(d.stage)).reduce((s, d) => s + (Number(d.value) || 0), 0);
+  const totalPipeline = visibleDeals
+    .filter(d => !CLOSED_STAGES.includes(d.stage))
+    .reduce((s, d) => s + (Number(d.value) || 0), 0);
   const now = new Date();
+
+
   const wonValue = visibleDeals
     .filter(d => {
-      if (d.stage !== "Won") return false;
+      if (d.stage !== "Won" && d.stage !== "Booking Done") return false;
       const date = new Date(d.createdAt || (d as any).created_at);
       return !isNaN(date.getTime()) && date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
     })
     .reduce((s, d) => s + (Number(d.value) || 0), 0);
-  const activeDeals = visibleDeals.filter(d => !["Won", "Lost"].includes(d.stage)).length;
-  
+  const activeDeals = visibleDeals.filter(d => !CLOSED_STAGES.includes(d.stage)).length;
   // Avg Deal Size of won deals to match Reports definition
-  const wonDealsList = visibleDeals.filter(d => d.stage === "Won");
+  const wonDealsList = visibleDeals.filter(d => d.stage === "Won" || d.stage === "Booking Done");
   const avgDealSize = wonDealsList.length > 0
     ? wonDealsList.reduce((s, d) => s + (Number(d.value) || 0), 0) / wonDealsList.length
     : 0;
@@ -150,12 +187,14 @@ export default function SalesPage() {
     setDraggedDeal(null);
   };
 
-  const forecastData = stages.filter(s => s !== "Lost").map(s => ({
-    stage: s,
-    value: stageValue(s),
-    weighted: dealsByStage(s).reduce((sum, d) => sum + (Number(d.value) || 0) * (d.probability / 100), 0),
-    count: dealsByStage(s).length,
-  }));
+  const forecastData = stages
+    .filter(s => !["Lost", "Unqualified", "Booking Done", "Won"].includes(s))
+    .map(s => ({
+      stage: s,
+      value: stageValue(s),
+      weighted: dealsByStage(s).reduce((sum, d) => sum + (Number(d.value) || 0) * (d.probability / 100), 0),
+      count: dealsByStage(s).length,
+    }));
 
   const openAdd = (stage: LeadStatus = "New") => {
     setDealForm({ ...emptyDealForm, stage, owner: currentUser.name });
@@ -278,7 +317,7 @@ export default function SalesPage() {
               return (
                 <div
                   key={stage}
-                  className="w-64 flex-shrink-0 flex flex-col"
+                  className="w-56 flex-shrink-0 flex flex-col"
                   onDragOver={e => { e.preventDefault(); setDragOverStage(stage); }}
                   onDragLeave={() => setDragOverStage(null)}
                   onDrop={() => handleDrop(stage)}
@@ -311,12 +350,29 @@ export default function SalesPage() {
                             <div className="text-xs font-semibold text-slate-800 leading-tight truncate">
                               {deal.title || "Untitled"}
                             </div>
+                            {(deal.stage === "Lost" || deal.stage === "Unqualified") && (deal as any).dead_reason && (
+                              <div className="mt-1">
+                                <span className="inline-block px-1.5 py-0.5 text-[9px] font-medium rounded bg-rose-50 text-rose-700 border border-rose-200 truncate max-w-full">
+                                  {(deal as any).dead_reason}
+                                </span>
+                              </div>
+                            )}
                             <div className="text-[10px] font-medium text-slate-500 mt-0.5 flex items-center gap-1">
                               <Building2 size={10} className="text-slate-400" />
                               {deal.company || "—"}
                             </div>
                           </div>
                           <div className="opacity-0 group-hover:opacity-100 flex items-center gap-1 transition-all">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedScheduleDeal(deal);
+                              }}
+                              className="p-1 hover:bg-indigo-50 rounded-lg transition-colors text-slate-400 hover:text-indigo-600"
+                              title="Construction Payment Schedule"
+                            >
+                              <Calculator size={11} />
+                            </button>
                             {canEditDeals && (
                               <button onClick={() => openEdit(deal)} className="p-1 hover:bg-indigo-50 rounded-lg transition-colors">
                                 <Edit size={11} className="text-slate-400 hover:text-indigo-600" />
@@ -360,6 +416,20 @@ export default function SalesPage() {
                               <span>{deal.daysInStage ?? 0}d</span>
                             </div>
                           )}
+                        </div>
+
+                        {/* Payment Schedule Button */}
+                        <div className="mt-2 pt-2 border-t border-slate-100">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedScheduleDeal(deal);
+                            }}
+                            className="w-full py-1 text-[11px] font-semibold text-indigo-600 hover:text-indigo-700 bg-indigo-50/80 hover:bg-indigo-100/80 rounded-lg border border-indigo-100 flex items-center justify-center gap-1.5 transition shadow-2xs"
+                          >
+                            <Calculator size={12} className="text-indigo-500" />
+                            Payment Schedule
+                          </button>
                         </div>
                       </div>
                     ))}
@@ -440,7 +510,18 @@ export default function SalesPage() {
                       <td className="py-3 px-4 text-xs text-slate-600">{deal.company}</td>
                       <td className="py-3 px-4 text-xs font-bold text-slate-900">₹{(deal.value / 1000).toFixed(0)}K</td>
                       <td className="py-3 px-4">
-                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${deal.stage === "Won" ? "bg-emerald-50 text-emerald-700" : deal.stage === "Lost" ? "bg-red-50 text-red-700" : deal.stage === "Negotiation" ? "bg-orange-50 text-orange-700" : "bg-indigo-50 text-indigo-700"}`}>{deal.stage}</span>
+                        <span
+                          className={`text-xs px-2 py-0.5 rounded-full font-medium ${deal.stage === "Won" || deal.stage === "Booking Done"
+                            ? "bg-emerald-50 text-emerald-700"
+                            : deal.stage === "Lost" || deal.stage === "Unqualified"
+                              ? "bg-red-50 text-red-700"
+                              : deal.stage === "Final Negotiation" || deal.stage === "Token Done"
+                                ? "bg-orange-50 text-orange-700"
+                                : "bg-indigo-50 text-indigo-700"
+                            }`}
+                        >
+                          {deal.stage}
+                        </span>
                       </td>
                       <td className="py-3 px-4 text-xs text-slate-600">{deal.owner}</td>
                       <td className="py-3 px-4">
@@ -454,11 +535,18 @@ export default function SalesPage() {
                       <td className="py-3 px-4 text-xs text-slate-500">{deal.expectedClose || "—"}</td>
                       <td className="py-3 px-4">
                         <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => setSelectedScheduleDeal(deal)}
+                            className="p-1.5 hover:bg-indigo-50 rounded-lg text-slate-400 hover:text-indigo-600"
+                            title="Payment Schedule"
+                          >
+                            <Calculator size={13} />
+                          </button>
                           {canEditDeals && (
-                            <button onClick={() => openEdit(deal)} className="p-1.5 hover:bg-indigo-50 rounded-lg text-slate-400 hover:text-indigo-600"><Edit size={12} /></button>
+                            <button onClick={() => openEdit(deal)} className="p-1.5 hover:bg-indigo-50 rounded-lg text-slate-400 hover:text-indigo-600" title="Edit Deal"><Edit size={12} /></button>
                           )}
                           {canDeleteDeals && (
-                            <button onClick={() => setDeleteConfirm(deal)} className="p-1.5 hover:bg-red-50 rounded-lg text-slate-400 hover:text-red-500"><Trash2 size={12} /></button>
+                            <button onClick={() => setDeleteConfirm(deal)} className="p-1.5 hover:bg-red-50 rounded-lg text-slate-400 hover:text-red-500" title="Delete Deal"><Trash2 size={12} /></button>
                           )}
                         </div>
                       </td>
@@ -534,7 +622,19 @@ export default function SalesPage() {
                 </select>
               </div>
             </div>
-            <div className="flex gap-3 px-6 py-4 border-t border-slate-200">
+            <div className="flex flex-wrap gap-2 px-6 py-4 border-t border-slate-200">
+              {editDeal && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedScheduleDeal(editDeal);
+                  }}
+                  className="py-2.5 px-4 text-xs font-semibold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl transition flex items-center justify-center gap-1.5"
+                >
+                  <Calculator size={14} />
+                  Payment Schedule
+                </button>
+              )}
               <button onClick={() => { setShowAddModal(false); setEditDeal(null); }} className="flex-1 py-2.5 text-sm border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50">Cancel</button>
               <button onClick={handleSave} disabled={saving || !dealForm.title.trim() || !dealForm.company.trim()} className="flex-1 py-2.5 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2">
                 {saving ? <><RefreshCw size={13} className="animate-spin" />Saving...</> : editDeal ? "Save Changes" : "Create Deal"}
@@ -558,6 +658,44 @@ export default function SalesPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Payment Plan Module Modal */}
+      {selectedScheduleDeal && (
+        <PaymentPlanModule
+          dealId={selectedScheduleDeal.id}
+          dealTitle={selectedScheduleDeal.title}
+          dealCompany={selectedScheduleDeal.company}
+          initialValue={Number(selectedScheduleDeal.value) || 1000000}
+          onClose={() => setSelectedScheduleDeal(null)}
+          onSaved={(newAgreementVal) => {
+            if (newAgreementVal !== Number(selectedScheduleDeal.value)) {
+              updateDeal(selectedScheduleDeal.id, { value: newAgreementVal });
+            }
+          }}
+        />
+      )}
+
+      {/* Dead Reason Modal */}
+      {showDeadReasonModal && deadReasonDeal && (
+        <DeadReasonModal
+          isOpen={showDeadReasonModal}
+          status={deadReasonDeal.stage}
+          leadName={deadReasonDeal.title}
+          initialReason={deadReasonDeal.initialReason}
+          onConfirm={async (reason) => {
+            await updateDeal(deadReasonDeal.id, {
+              stage: deadReasonDeal.stage,
+              dead_reason: reason,
+            } as any);
+            setShowDeadReasonModal(false);
+            setDeadReasonDeal(null);
+          }}
+          onClose={() => {
+            setShowDeadReasonModal(false);
+            setDeadReasonDeal(null);
+          }}
+        />
       )}
     </div>
   );

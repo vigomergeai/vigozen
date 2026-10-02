@@ -444,6 +444,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     Negotiation: "negotiation",
     Won: "won",
     Lost: "lost",
+    "Attempted-1": "attempted-1",
+    "Attempted-2": "attempted-2",
+    "Attempted-3": "attempted-3",
+    "In-Process": "in-process",
+    "Site Visit Scheduled": "site_visit_scheduled",
+    "Site Visit Done": "site_visit_done",
+    "Zoom Meeting": "zoom_meeting",
+    "Final Negotiation": "final_negotiation",
+    "Token Done": "token_done",
+    "Booking Done": "booking_done",
+    Unqualified: "unqualified",
   };
 
   const toDbSource: Record<LeadSource, string> = {
@@ -1164,6 +1175,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         company: newLead.company || "Unknown", // FIX
         source: toDbSource[newLead.source] || "website",
         status: toDbStatus[newLead.status] || "new",
+        lead_category: newLead.lead_category || "Warm",
+        reason_to_buy: newLead.reason_to_buy || null,
+        dead_reason: newLead.dead_reason || null,
         industry: toDbIndustry[newLead.industry] || "technology",
         value: newLead.value || 0,
         probability: newLead.probability || 0,
@@ -1205,6 +1219,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         notes: dbPayload.notes,
         probability: dbPayload.probability,
         aiscore: dbPayload.aiScore,
+        lead_category: dbPayload.lead_category,
+        reason_to_buy: dbPayload.reason_to_buy,
+        dead_reason: dbPayload.dead_reason,
       };
       if (dbPayload.ownerId && validUUID(dbPayload.ownerId)) {
         createPayload.owner_id = dbPayload.ownerId;
@@ -1457,6 +1474,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           owner_id: validUUID(lead.ownerId) ? lead.ownerId : null,
           notes: lead.notes || null,
           aiscore: lead.aiScore || 50,
+          lead_category: lead.lead_category || "Warm",
+          reason_to_buy: lead.reason_to_buy || null,
+          dead_reason: lead.dead_reason || null,
         }));
 
         const token = getToken();
@@ -1517,6 +1537,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         converted_to_deal: !!l.converted_to_deal,
         deal_id: l.deal_id || null,
         nextMeetingAt: l.next_meeting_at || null,
+        lead_category: l.lead_category || "Warm",
+        reason_to_buy: l.reason_to_buy || null,
+        dead_reason: l.dead_reason || null,
       }));
 
       console.log("RAW API DATA:", data);
@@ -1736,11 +1759,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         company: lead.company || 'Unknown',
         converted_to_deal: true,
         deal_id: newDeal.id,
-        status: 'won'
+        status: 'won',
+        dead_reason: null
       }, token);
 
       // Update local state immediately
-      setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, converted_to_deal: true, deal_id: newDeal.id, status: 'Won' } : l));
+      setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, converted_to_deal: true, deal_id: newDeal.id, status: 'Won', dead_reason: null } : l));
 
       // Refresh data
       await refreshData();

@@ -48,6 +48,16 @@ const formatCurrency = (val: any) => {
 
 const formatNumber = (val: number) => (val || 0).toLocaleString("en-IN");
 
+function isWonStatus(status?: string): boolean {
+  const s = String(status || "").toLowerCase();
+  return s === "won" || s === "booking done" || s === "token done";
+}
+
+function isClosedStage(stage?: string): boolean {
+  const s = String(stage || "").toLowerCase();
+  return s === "won" || s === "booking done" || s === "token done" || s === "lost" || s === "unqualified";
+}
+
 export default function DashboardPage() {
   const { role, leads, deals, activities, loading, refreshData, subscription } = useApp();
   const navigate = useNavigate();  
@@ -116,18 +126,18 @@ export default function DashboardPage() {
 
   const [revenueFilter, setRevenueFilter] = useState<"6m" | "3m" | "1m">("6m");
 
-  const wonLeads = leads.filter(l => String(l.status).toLowerCase() === "won").length;
+  const wonLeads = leads.filter(l => isWonStatus(l.status)).length;
   const hotLeads = leads.filter(l => l.aiScore >= 80).length;
-  const activeDealsValue = deals.filter(d => !["won", "lost"].includes(String(d.stage).toLowerCase())).reduce((s, d) => s + (Number(d.value) || 0), 0);
+  const activeDealsValue = deals.filter(d => !isClosedStage(d.stage)).reduce((s, d) => s + (Number(d.value) || 0), 0);
   const now = new Date();
   const wonDealsValue = deals
     .filter(d => {
-      if (String(d.stage).toLowerCase() !== "won") return false;
+      if (!isWonStatus(d.stage)) return false;
       const date = new Date(d.createdAt || (d as any).created_at);
       return !isNaN(date.getTime()) && date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
     })
     .reduce((s, d) => s + (Number(d.value) || 0), 0);
-  const wonDealsCount = deals.filter(d => String(d.stage).toLowerCase() === "won").length;
+  const wonDealsCount = deals.filter(d => isWonStatus(d.stage)).length;
   const conversionRate = leads.length > 0 ? Number(((wonLeads / leads.length) * 100).toFixed(1)) : 0;
   const pipelineValue = formatCurrency(activeDealsValue);
 
@@ -145,16 +155,16 @@ const leadsCurrent = leads.filter(l => l.createdAt && new Date(l.createdAt) >= t
 const leadsPrevious = leads.filter(l => l.createdAt && new Date(l.createdAt) >= sixtyDaysAgo && new Date(l.createdAt) < thirtyDaysAgo).length;
 const leadsChange = calcChange(leadsCurrent, leadsPrevious);
 
-const activeDealsCurrent = deals.filter(d => !["won", "lost"].includes(String(d.stage).toLowerCase()) && d.createdAt && new Date(d.createdAt) >= thirtyDaysAgo).reduce((s, d) => s + (Number(d.value) || 0), 0);
-const activeDealsPrevious = deals.filter(d => !["won", "lost"].includes(String(d.stage).toLowerCase()) && d.createdAt && new Date(d.createdAt) >= sixtyDaysAgo && new Date(d.createdAt) < thirtyDaysAgo).reduce((s, d) => s + (Number(d.value) || 0), 0);
+const activeDealsCurrent = deals.filter(d => !isClosedStage(d.stage) && d.createdAt && new Date(d.createdAt) >= thirtyDaysAgo).reduce((s, d) => s + (Number(d.value) || 0), 0);
+const activeDealsPrevious = deals.filter(d => !isClosedStage(d.stage) && d.createdAt && new Date(d.createdAt) >= sixtyDaysAgo && new Date(d.createdAt) < thirtyDaysAgo).reduce((s, d) => s + (Number(d.value) || 0), 0);
 const activeDealsChange = calcChange(activeDealsCurrent, activeDealsPrevious);
 
-const wonCurrent = deals.filter(d => String(d.stage).toLowerCase() === "won" && new Date(d.expectedClose || d.createdAt || Date.now()) >= thirtyDaysAgo).reduce((s, d) => s + (Number(d.value) || 0), 0);
-const wonPrevious = deals.filter(d => String(d.stage).toLowerCase() === "won" && new Date(d.expectedClose || d.createdAt || Date.now()) >= sixtyDaysAgo && new Date(d.expectedClose || d.createdAt || Date.now()) < thirtyDaysAgo).reduce((s, d) => s + (Number(d.value) || 0), 0);
+const wonCurrent = deals.filter(d => isWonStatus(d.stage) && new Date(d.expectedClose || d.createdAt || Date.now()) >= thirtyDaysAgo).reduce((s, d) => s + (Number(d.value) || 0), 0);
+const wonPrevious = deals.filter(d => isWonStatus(d.stage) && new Date(d.expectedClose || d.createdAt || Date.now()) >= sixtyDaysAgo && new Date(d.expectedClose || d.createdAt || Date.now()) < thirtyDaysAgo).reduce((s, d) => s + (Number(d.value) || 0), 0);
 const revenueChange = calcChange(wonCurrent, wonPrevious);
 
-const wonLeadsCurrent = leads.filter(l => String(l.status).toLowerCase() === "won" && l.createdAt && new Date(l.createdAt) >= thirtyDaysAgo).length;
-const wonLeadsPrevious = leads.filter(l => String(l.status).toLowerCase() === "won" && l.createdAt && new Date(l.createdAt) >= sixtyDaysAgo && new Date(l.createdAt) < thirtyDaysAgo).length;
+const wonLeadsCurrent = leads.filter(l => isWonStatus(l.status) && l.createdAt && new Date(l.createdAt) >= thirtyDaysAgo).length;
+const wonLeadsPrevious = leads.filter(l => isWonStatus(l.status) && l.createdAt && new Date(l.createdAt) >= sixtyDaysAgo && new Date(l.createdAt) < thirtyDaysAgo).length;
 const conversionCurrent = leadsCurrent > 0 ? (wonLeadsCurrent / leadsCurrent) * 100 : 0;
 const conversionPrevious = leadsPrevious > 0 ? (wonLeadsPrevious / leadsPrevious) * 100 : 0;
 const conversionChange = calcChange(conversionCurrent, conversionPrevious);
@@ -189,7 +199,7 @@ const conversionChange = calcChange(conversionCurrent, conversionPrevious);
         const status = lead.status?.toLowerCase();
         if (status === "new") targetDay.new++;
         else if (status === "contacted") targetDay.contacted++;
-        else if (status === "won") targetDay.won++;
+        else if (isWonStatus(status)) targetDay.won++;
       }
     });
     
@@ -198,9 +208,9 @@ const conversionChange = calcChange(conversionCurrent, conversionPrevious);
 
   const aiInsights = React.useMemo(() => {
     const list = [];
-    const wonCount = deals.filter(d => String(d.stage).toLowerCase() === "won").length;
+    const wonCount = deals.filter(d => isWonStatus(d.stage)).length;
     const hotCount = leads.filter(l => l.aiScore >= 80).length;
-    const pipelineVal = deals.filter(d => !["won", "lost"].includes(String(d.stage).toLowerCase())).reduce((s, d) => s + (Number(d.value) || 0), 0);
+    const pipelineVal = deals.filter(d => !isClosedStage(d.stage)).reduce((s, d) => s + (Number(d.value) || 0), 0);
 
     if (hotCount > 0) {
       list.push({
@@ -212,7 +222,7 @@ const conversionChange = calcChange(conversionCurrent, conversionPrevious);
       });
     }
     
-    const staleDeals = deals.filter(d => !["won", "lost"].includes(String(d.stage).toLowerCase()) && d.daysInStage > 7);
+    const staleDeals = deals.filter(d => !isClosedStage(d.stage) && d.daysInStage > 7);
     if (staleDeals.length > 0) {
       list.push({
         id: 2,
@@ -227,7 +237,7 @@ const conversionChange = calcChange(conversionCurrent, conversionPrevious);
       id: 3,
       type: "insight",
       title: "Pipeline Strength",
-      message: `Active pipeline value is ${formatCurrency(pipelineVal)} across ${formatNumber(deals.filter(d => !["won", "lost"].includes(String(d.stage).toLowerCase())).length)} active deals.`,
+      message: `Active pipeline value is ${formatCurrency(pipelineVal)} across ${formatNumber(deals.filter(d => !isClosedStage(d.stage)).length)} active deals.`,
       priority: "medium"
     });
 
@@ -239,6 +249,27 @@ const conversionChange = calcChange(conversionCurrent, conversionPrevious);
         message: `${wonLeads} leads successfully converted. Conversion rate is at ${conversionRate}%.`,
         priority: "low"
       });
+    }
+
+    const lostLeads = leads.filter(l => l.status === "Lost" || l.status === "Unqualified" || l.status?.toLowerCase() === "lost" || l.status?.toLowerCase() === "unqualified");
+    if (lostLeads.length > 0) {
+      const reasonCounts: Record<string, number> = {};
+      lostLeads.forEach(l => {
+        if (l.dead_reason) {
+          reasonCounts[l.dead_reason] = (reasonCounts[l.dead_reason] || 0) + 1;
+        }
+      });
+      const topReasonEntry = Object.entries(reasonCounts).sort((a, b) => b[1] - a[1])[0];
+      if (topReasonEntry) {
+        const pct = Math.round((topReasonEntry[1] / lostLeads.length) * 100);
+        list.push({
+          id: 5,
+          type: "alert",
+          title: "Top Disqualification Driver",
+          message: `Top lost reason is "${topReasonEntry[0]}" (${topReasonEntry[1]} leads, ~${pct}% of lost leads). Review lead quality and pricing.`,
+          priority: "medium"
+        });
+      }
     }
     
     if (list.length === 0) {
@@ -279,7 +310,7 @@ const conversionChange = calcChange(conversionCurrent, conversionPrevious);
     }
 
     deals.forEach(deal => {
-      if (deal.stage !== "Won") return;
+      if (!isWonStatus(deal.stage)) return;
       const dateStr = deal.expectedClose || deal.createdAt;
       const date = new Date(dateStr || Date.now());
       const targetMonth = last6Months.find(m => m.monthIndex === date.getMonth() && m.year === date.getFullYear());
@@ -344,7 +375,7 @@ const conversionChange = calcChange(conversionCurrent, conversionPrevious);
 
       acc[owner].leads += 1;
 
-      if (lead.status === "Won") {
+      if (isWonStatus(lead.status)) {
         acc[owner].won += 1;
         // O(1) lookup instead of O(D) array filtering inside loop
         acc[owner].revenue += (dealsByLeadId[lead.id] || 0);

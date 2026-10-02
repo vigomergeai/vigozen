@@ -1,7 +1,63 @@
 // Mock Data for LeadOps360 CRM
 
 export type Role = "user" | "Sales Executive" | "Sales Manager" | "Team Leader" | "Lead Manager" | "Org Admin" | "Super Admin" | string;
-export type LeadStatus = "New" | "Contacted" | "Qualified" | "Proposal" | "Negotiation" | "Won" | "Lost";
+export type LeadStatus =
+  | "New"
+  | "Contacted"
+  | "Qualified"
+  | "Proposal"
+  | "Negotiation"
+  | "Won"
+  | "Lost"
+  | "Attempted-1"
+  | "Attempted-2"
+  | "Attempted-3"
+  | "In-Process"
+  | "Site Visit Scheduled"
+  | "Site Visit Done"
+  | "Zoom Meeting"
+  | "Final Negotiation"
+  | "Token Done"
+  | "Booking Done"
+  | "Unqualified";
+
+export type DeadReason =
+  | "Budget Mismatch"
+  | "Location Mismatch"
+  | "Fake Lead"
+  | "Wrong Number"
+  | "Channel Partner"
+  | "Looking for Ready Possession"
+  | "Already Booked"
+  | "Finance Issue"
+  | "Plan Dropped"
+  | "Not Responding"
+  | "Possession Issue"
+  | "Low Budget"
+  | "Looking for Other Location"
+  | "Inventory Not Available"
+  | "Did Not Enquire";
+
+export const DEAD_REASONS: DeadReason[] = [
+  "Budget Mismatch",
+  "Location Mismatch",
+  "Fake Lead",
+  "Wrong Number",
+  "Channel Partner",
+  "Looking for Ready Possession",
+  "Already Booked",
+  "Finance Issue",
+  "Plan Dropped",
+  "Not Responding",
+  "Possession Issue",
+  "Low Budget",
+  "Looking for Other Location",
+  "Inventory Not Available",
+  "Did Not Enquire",
+];
+
+export type LeadCategory = "Hot" | "Warm" | "Cold";
+export type ReasonToBuy = "End User" | "Investment" | "Second Home";
 export type LeadSource = "Facebook" | "Website" | "CRM Import" | "LinkedIn" | "Referral" | "Cold Call" | "Email Campaign";
 export type Industry = "Technology" | "Healthcare" | "Finance" | "Retail" | "Manufacturing" | "Real Estate" | "Education" | "Others";
 
@@ -28,6 +84,9 @@ export interface Lead {
   probability: number;
   converted_to_deal?: boolean;
   deal_id?: string | null;
+  lead_category?: LeadCategory;
+  reason_to_buy?: ReasonToBuy | "" | null;
+  dead_reason?: DeadReason | string | null;
 }
 
 export interface Employee {

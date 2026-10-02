@@ -222,6 +222,11 @@ const upload = multer({
     await pool.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMP;`).catch(() => { });
     await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS converted_to_deal BOOLEAN DEFAULT false;`).catch(() => { });
     await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS deal_id UUID;`).catch(() => { });
+    await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS lead_category VARCHAR(50) DEFAULT 'Warm';`).catch(() => { });
+    await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS reason_to_buy VARCHAR(100);`).catch(() => { });
+        await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS dead_reason VARCHAR(255);`).catch(() => { });
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_leads_dead_reason ON leads(dead_reason);`).catch(() => { });
+    await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS next_followup TIMESTAMP;`).catch(() => { });
     await pool.query(`UPDATE leads SET converted_to_deal = false WHERE converted_to_deal IS NULL;`).catch(() => { });
     await pool.query(`ALTER TABLE deals DROP CONSTRAINT IF EXISTS deals_stage_check;`).catch(() => { });
     await pool.query(`ALTER TABLE lead_comments ADD COLUMN IF NOT EXISTS user_name VARCHAR(255);`).catch(() => { });
@@ -2821,16 +2826,16 @@ app.post("/leads", authenticateToken, enforceStorageLimit(0.01), async (req, res
     if (scope === 'none') {
       return res.status(403).json({ error: "You are not permitted to create leads." });
     }
-    const { name, email, phone, company, value, status, source, industry, notes, probability, aiscore, next_meeting_at } = req.body;
+    const { name, email, phone, company, value, status, source, industry, notes, probability, aiscore, next_meeting_at, lead_category, reason_to_buy, dead_reason } = req.body;
 
     // Get owner_id and company_id
     const ownerId = req.body.owner_id || req.user?.id || null;
     const companyId = req.user?.company_id || null;
     const result = await pool.query(
-      `INSERT INTO leads (id, name, email, phone, company, value, status, source, industry, notes, owner_id, company_id, probability, aiscore, next_meeting_at, created_at, updated_at)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW())
+      `INSERT INTO leads (id, name, email, phone, company, value, status, source, industry, notes, owner_id, company_id, probability, aiscore, next_meeting_at, lead_category, reason_to_buy, dead_reason, created_at, updated_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW(), NOW())
        RETURNING *`,
-      [name, email, phone, company, value, status, source, industry, notes, ownerId, companyId, probability || 50, aiscore || 50, next_meeting_at || null]
+      [name, email, phone, company, value, status, source, industry, notes, ownerId, companyId, probability || 50, aiscore || 50, next_meeting_at || null, lead_category || 'Warm', reason_to_buy || null, dead_reason || null]
     );
 
     const lead = result.rows[0];
@@ -2894,7 +2899,7 @@ app.put("/leads/:id", authenticateToken, async (req, res) => {
       return res.status(403).json({ error: "You are not permitted to edit leads." });
     }
 
-    const { name, email, phone, company, value, status, source, industry, notes, converted_to_deal, deal_id, next_meeting_at } = req.body;
+    const { name, email, phone, company, value, status, source, industry, notes, converted_to_deal, deal_id, next_meeting_at, lead_category, reason_to_buy, dead_reason } = req.body;
 
     // Fetch existing lead first to preserve missing fields
     const existingRes = await pool.query("SELECT * FROM leads WHERE id = $1", [req.params.id]);
@@ -2936,6 +2941,15 @@ app.put("/leads/:id", authenticateToken, async (req, res) => {
     const finalSource = source !== undefined ? source : existing.source;
     const finalIndustry = industry !== undefined ? industry : existing.industry;
     const finalNotes = notes !== undefined ? notes : existing.notes;
+    const finalLeadCategory = lead_category !== undefined ? lead_category : (existing.lead_category || 'Warm');
+    const finalReasonToBuy = reason_to_buy !== undefined ? reason_to_buy : (existing.reason_to_buy || null);
+    const isDeadStatus = String(finalStatus).toLowerCase() === 'lost' || String(finalStatus).toLowerCase() === 'unqualified';
+    let finalDeadReason = existing.dead_reason;
+    if (dead_reason !== undefined) {
+      finalDeadReason = dead_reason;
+    } else if (!isDeadStatus) {
+      finalDeadReason = null;
+    }
 
     const finalConverted = converted_to_deal !== undefined ? converted_to_deal : (existing.converted_to_deal || false);
     const finalDealId = deal_id !== undefined ? deal_id : (existing.deal_id || null);
@@ -2948,9 +2962,9 @@ app.put("/leads/:id", authenticateToken, async (req, res) => {
 
     const result = await pool.query(
       `UPDATE leads 
-       SET name=$1, email=$2, phone=$3, company=$4, value=$5, status=$6, source=$7, industry=$8, notes=$9, converted_to_deal=$10, deal_id=$11, owner_id=$12, next_meeting_at=$13, meeting_notified=$14, updated_at=NOW() 
-       WHERE id=$15 RETURNING *`,
-      [finalName, finalEmail, finalPhone, finalCompany, finalValue, finalStatus, finalSource, finalIndustry, finalNotes, finalConverted, finalDealId, ownerId, finalNextMeeting, finalMeetingNotified, req.params.id]
+       SET name=$1, email=$2, phone=$3, company=$4, value=$5, status=$6, source=$7, industry=$8, notes=$9, converted_to_deal=$10, deal_id=$11, owner_id=$12, next_meeting_at=$13, meeting_notified=$14, lead_category=$15, reason_to_buy=$16, dead_reason=$17, updated_at=NOW() 
+       WHERE id=$18 RETURNING *`,
+      [finalName, finalEmail, finalPhone, finalCompany, finalValue, finalStatus, finalSource, finalIndustry, finalNotes, finalConverted, finalDealId, ownerId, finalNextMeeting, finalMeetingNotified, finalLeadCategory, finalReasonToBuy, finalDeadReason, req.params.id]
     );
 
     // ── Notification: Lead status changed / converted ──
@@ -3525,6 +3539,188 @@ app.delete("/notifications/:id", authenticateToken, async (req, res) => {
   }
 });
 
+// ── 24 Master Predefined Construction Stages (Sum = 100%) ──
+function defaultMilestones() {
+  return [
+    { order: 1,  stageName: "Booking Amount",                 percentage: 10.0, slabRatio: "40%", milestoneStatus: "Completed", paymentStatus: "Paid" },
+    { order: 2,  stageName: "Agreement Execution",            percentage: 10.0, slabRatio: "40%", milestoneStatus: "Completed", paymentStatus: "Paid" },
+    { order: 3,  stageName: "Plinth Completion",              percentage: 15.0, slabRatio: "40%", milestoneStatus: "In-Progress", paymentStatus: "Pending" },
+    { order: 4,  stageName: "2nd Parking Slab",               percentage: 2.5,  slabRatio: "40%", milestoneStatus: "Upcoming",    paymentStatus: "Pending" },
+    { order: 5,  stageName: "3rd Parking Slab",               percentage: 2.5,  slabRatio: "40%", milestoneStatus: "Upcoming",    paymentStatus: "Pending" },
+    { order: 6,  stageName: "1st Floor Slab",                 percentage: 3.5,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending" },
+    { order: 7,  stageName: "2nd Floor Slab",                 percentage: 3.5,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending" },
+    { order: 8,  stageName: "3rd Floor Slab",                 percentage: 3.5,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending" },
+    { order: 9,  stageName: "4th Floor Slab",                 percentage: 3.5,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending" },
+    { order: 10, stageName: "5th Floor Slab",                 percentage: 3.5,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending" },
+    { order: 11, stageName: "6th Floor Slab",                 percentage: 3.5,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending" },
+    { order: 12, stageName: "7th Floor Slab",                 percentage: 3.5,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending" },
+    { order: 13, stageName: "8th Floor Slab",                 percentage: 3.5,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending" },
+    { order: 14, stageName: "9th Floor Slab",                 percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending" },
+    { order: 15, stageName: "Brickwork / Masonry",            percentage: 4.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending" },
+    { order: 16, stageName: "Internal Plaster",               percentage: 4.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending" },
+    { order: 17, stageName: "External Plaster",               percentage: 4.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending" },
+    { order: 18, stageName: "Flooring & Tiling",              percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending" },
+    { order: 19, stageName: "Sanitary & Plumbing Fittings",    percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending" },
+    { order: 20, stageName: "Electrical Wiring & Switches",   percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending" },
+    { order: 21, stageName: "Doors & Windows Fixing",         percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending" },
+    { order: 22, stageName: "External Painting & Elevation",  percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending" },
+    { order: 23, stageName: "Lifts & Water Pumps",            percentage: 2.5,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending" },
+    { order: 24, stageName: "Possession & Handover",          percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending" },
+  ];
+}
+
+// ── Dynamic Milestone Recalculation Engine ──
+function recalculateSchedule(agreementValue, milestones) {
+  let cumulativeEmi = 0;
+  const av = Number(agreementValue) || 1000000;
+
+  return milestones.map((m, idx) => {
+    const percentage = Number(m.percentage) || 0;
+    const amount = Number(((av * percentage) / 100).toFixed(2));
+    const installment = Number((amount * 0.009).toFixed(2));
+    cumulativeEmi = Number((cumulativeEmi + installment).toFixed(2));
+
+    return {
+      order: m.order ?? idx + 1,
+      stageName: m.stageName || `Milestone ${idx + 1}`,
+      percentage: percentage,
+      slabRatio: m.slabRatio || "30%",
+      amount: amount,
+      installment: installment,
+      cumulativeEmi: cumulativeEmi,
+      milestoneStatus: m.milestoneStatus || "Upcoming",
+      paymentStatus: m.paymentStatus || "Pending",
+      dueDate: m.dueDate || null,
+      completionDate: m.completionDate || null,
+      remarks: m.remarks || ""
+    };
+  });
+}
+
+// ── GET /deals/:id/payment-schedule (Fetch or auto-generate) ──
+app.get("/deals/:id/payment-schedule", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const dealRes = await pool.query(
+      "SELECT id, title, value, company_id FROM deals WHERE id = $1",
+      [id]
+    );
+    if (dealRes.rows.length === 0) {
+      return res.status(404).json({ error: "Deal not found" });
+    }
+    const deal = dealRes.rows[0];
+
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    if (!isSuperAdmin && deal.company_id && deal.company_id !== req.user.company_id) {
+      return res.status(403).json({ error: "Access Denied: Deal belongs to another company" });
+    }
+
+    const scheduleRes = await pool.query(
+      "SELECT * FROM deal_payment_schedules WHERE deal_id = $1",
+      [id]
+    );
+
+    if (scheduleRes.rows.length > 0) {
+      return res.json(scheduleRes.rows[0]);
+    }
+
+    // Auto-generate using deal value (fallback to 1,000,000)
+    const agreementValue = Number(deal.value) > 0 ? Number(deal.value) : 1000000;
+    const generatedMilestones = recalculateSchedule(agreementValue, defaultMilestones());
+
+    return res.json({
+      deal_id: id,
+      agreement_value: agreementValue,
+      milestones: generatedMilestones,
+      notes: null,
+      created_at: null,
+      updated_at: null,
+      is_generated: true
+    });
+  } catch (err) {
+    console.error("GET payment-schedule error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── PUT /deals/:id/payment-schedule (Upsert schedule) ──
+app.put("/deals/:id/payment-schedule", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { agreement_value, milestones, notes } = req.body;
+
+    const scope = getPermissionScope(req.user.role, 'deals');
+    if (scope === 'view' || scope === 'none') {
+      return res.status(403).json({ error: "You are not permitted to edit deal payment schedules." });
+    }
+
+    const dealRes = await pool.query(
+      "SELECT id, company_id, owner_id FROM deals WHERE id = $1",
+      [id]
+    );
+    if (dealRes.rows.length === 0) {
+      return res.status(404).json({ error: "Deal not found" });
+    }
+    const deal = dealRes.rows[0];
+
+    const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
+    if (!isSuperAdmin && deal.company_id && deal.company_id !== req.user.company_id) {
+      return res.status(403).json({ error: "Access Denied: Deal belongs to another company" });
+    }
+
+    const av = Number(agreement_value);
+    if (!av || av <= 0) {
+      return res.status(400).json({ error: "agreement_value must be greater than 0" });
+    }
+
+    if (!Array.isArray(milestones) || milestones.length === 0) {
+      return res.status(400).json({ error: "milestones must be a non-empty array" });
+    }
+
+    const totalPercentage = milestones.reduce((sum, m) => sum + (Number(m.percentage) || 0), 0);
+    if (Math.abs(totalPercentage - 100) > 0.01) {
+      return res.status(400).json({
+        error: `Milestone percentages must total 100%. Received: ${totalPercentage.toFixed(2)}%`
+      });
+    }
+
+    const recalculatedMilestones = recalculateSchedule(av, milestones);
+
+    const upsertQuery = `
+      INSERT INTO deal_payment_schedules (deal_id, agreement_value, milestones, notes, created_at, updated_at)
+      VALUES ($1, $2, $3::jsonb, $4, NOW(), NOW())
+      ON CONFLICT (deal_id) DO UPDATE
+        SET agreement_value = EXCLUDED.agreement_value,
+            milestones = EXCLUDED.milestones,
+            notes = EXCLUDED.notes,
+            updated_at = NOW()
+      RETURNING *
+    `;
+
+    const result = await pool.query(upsertQuery, [
+      id,
+      av,
+      JSON.stringify(recalculatedMilestones),
+      notes || null
+    ]);
+
+    await logAudit(
+      req.user?.id || null,
+      req.user?.name || 'System',
+      'UPDATE',
+      'deal_payment_schedule',
+      id,
+      { agreement_value: av, milestone_count: recalculatedMilestones.length },
+      req.ip
+    );
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("PUT payment-schedule error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 app.put("/deals/:id", authenticateToken, async (req, res) => {
   try {
@@ -3746,9 +3942,9 @@ app.post("/leads/bulk", authenticateToken, async (req, res) => {
       await pool.query(
         `INSERT INTO leads
         (id, name, email, phone, company, source, status, industry,
-         value, probability,  owner_id, notes, aiscore)
+         value, probability, owner_id, notes, aiscore, company_id, lead_category, reason_to_buy, dead_reason)
         VALUES
-        (gen_random_uuid(), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        (gen_random_uuid(), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
         [
           lead.name,
           lead.email,
@@ -3759,10 +3955,13 @@ app.post("/leads/bulk", authenticateToken, async (req, res) => {
           lead.industry,
           lead.value,
           lead.probability,
-
           lead.owner_id,
           lead.notes,
           lead.aiscore,
+          req.user?.company_id || null,
+          lead.lead_category || 'Warm',
+          lead.reason_to_buy || null,
+          lead.dead_reason || null,
         ]
       );
     }
@@ -3823,9 +4022,12 @@ app.post("/leads/import-excel", authenticateToken, upload.single("file"), async 
           owner_id,
           aiscore,
           company_id,
+          lead_category,
+          reason_to_buy,
+          dead_reason,
           created_at
         )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, NOW())
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, NOW())
         `,
         [
           row.name || "",
@@ -3839,7 +4041,10 @@ app.post("/leads/import-excel", authenticateToken, upload.single("file"), async 
           row.notes || "",
           row.owner_id || null,
           row.aiscore || 50,
-          req.user?.company_id || null
+          req.user?.company_id || null,
+          row.lead_category || row['Lead Category'] || 'Warm',
+          row.reason_to_buy || row['Reason to Buy'] || null,
+          row.dead_reason || row['Dead Reason'] || null
         ]
       );
     }
@@ -7161,6 +7366,119 @@ app.get("/api/company/subscription/quote-status", authenticateToken, requireRole
   }
 });
 
+
+// ── DEAL PAYMENT SCHEDULE (CONSTRUCTION PAYMENT CALCULATOR) ──
+
+// In-memory fallback cache in case Postgres deal_payment_schedules is spinning up or offline
+const dealPaymentScheduleMemoryCache = new Map();
+
+const getDealPaymentScheduleHandler = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({ error: "Deal ID is required" });
+    }
+
+    // Check database first
+    try {
+      const dbResult = await pool.query(
+        `SELECT id, deal_id, agreement_value, milestones, notes, created_at, updated_at
+         FROM deal_payment_schedules WHERE deal_id = $1`,
+        [id]
+      );
+      if (dbResult.rows.length > 0) {
+        return res.json(dbResult.rows[0]);
+      }
+    } catch (dbErr) {
+      console.warn("DB fetch deal payment schedule warning (using fallback):", dbErr.message);
+    }
+
+    // Check memory cache fallback
+    if (dealPaymentScheduleMemoryCache.has(id)) {
+      return res.json(dealPaymentScheduleMemoryCache.get(id));
+    }
+
+    // Return default response
+    return res.json({
+      deal_id: id,
+      agreement_value: 1000000,
+      milestones: [],
+      notes: ""
+    });
+  } catch (error) {
+    console.error("Error getting deal payment schedule:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+const saveDealPaymentScheduleHandler = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { agreement_value, milestones, notes } = req.body;
+
+    if (!id) {
+      return res.status(400).json({ error: "Deal ID is required" });
+    }
+
+    const numericAgreementValue = Number(agreement_value) || 1000000;
+    const safeMilestones = Array.isArray(milestones) ? milestones : [];
+    const safeNotes = notes || null;
+
+    let savedRecord = {
+      id: "local-" + Date.now(),
+      deal_id: id,
+      agreement_value: numericAgreementValue,
+      milestones: safeMilestones,
+      notes: safeNotes,
+      updated_at: new Date().toISOString()
+    };
+
+    // Update memory cache
+    dealPaymentScheduleMemoryCache.set(id, savedRecord);
+
+    // Try persisting to PostgreSQL
+    try {
+      const upsertResult = await pool.query(
+        `INSERT INTO deal_payment_schedules (deal_id, agreement_value, milestones, notes, updated_at)
+         VALUES ($1, $2, $3, $4, NOW())
+         ON CONFLICT (deal_id)
+         DO UPDATE SET
+           agreement_value = EXCLUDED.agreement_value,
+           milestones = EXCLUDED.milestones,
+           notes = EXCLUDED.notes,
+           updated_at = NOW()
+         RETURNING id, deal_id, agreement_value, milestones, notes, created_at, updated_at`,
+        [id, numericAgreementValue, JSON.stringify(safeMilestones), safeNotes]
+      );
+
+      if (upsertResult.rows.length > 0) {
+        savedRecord = upsertResult.rows[0];
+        dealPaymentScheduleMemoryCache.set(id, savedRecord);
+      }
+
+      // Also sync value in deals table if deal exists
+      await pool.query(
+        `UPDATE deals SET value = $1, updated_at = NOW() WHERE id = $2`,
+        [numericAgreementValue, id]
+      ).catch(() => {});
+
+    } catch (dbErr) {
+      console.warn("DB upsert deal payment schedule warning (cached in memory):", dbErr.message);
+    }
+
+    return res.json(savedRecord);
+  } catch (error) {
+    console.error("Error saving deal payment schedule:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+app.get("/deals/:id/payment-schedule", getDealPaymentScheduleHandler);
+app.get("/api/deals/:id/payment-schedule", getDealPaymentScheduleHandler);
+app.put("/deals/:id/payment-schedule", saveDealPaymentScheduleHandler);
+app.put("/api/deals/:id/payment-schedule", saveDealPaymentScheduleHandler);
+app.post("/deals/:id/payment-schedule", saveDealPaymentScheduleHandler);
+app.post("/api/deals/:id/payment-schedule", saveDealPaymentScheduleHandler);
 
 // ── PAYMENT METHODS API ──
 

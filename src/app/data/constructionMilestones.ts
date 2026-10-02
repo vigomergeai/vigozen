@@ -32,35 +32,35 @@ export interface DealPaymentScheduleData {
   is_generated?: boolean;
 }
 
-// 24 Master Predefined Construction Milestones with exact % totaling exactly 100%
+// 24 Master Predefined Construction Milestones with exact % totaling exactly 100% and progressive schedule dates
 export const MASTER_24_CONSTRUCTION_STAGES: Omit<
   ConstructionMilestone,
   'amount' | 'installment' | 'cumulativeInstallment' | 'cumulativeEmi' | 'remainingAmount'
 >[] = [
-  { order: 1,  stageName: "Booking amount Before agreement",                  percentage: 10.0, slabRatio: "40%", milestoneStatus: "Completed", paymentStatus: "Paid", paidAmount: undefined },
-  { order: 2,  stageName: "After Agreement with in 15 days",                  percentage: 10.0, slabRatio: "40%", milestoneStatus: "Completed", paymentStatus: "Paid", paidAmount: undefined },
-  { order: 3,  stageName: "On Completion Of Plinth",                          percentage: 15.0, slabRatio: "40%", milestoneStatus: "In-Progress", paymentStatus: "Pending", paidAmount: 0 },
-  { order: 4,  stageName: "On Completion Of 2nd Parking slab",                percentage: 3.0,  slabRatio: "40%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 5,  stageName: "On Completion Of 3rd Parking slab",                percentage: 3.0,  slabRatio: "40%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 6,  stageName: "On Completion of 1st floor slab",                  percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 7,  stageName: "On Completion of 3rd Floor Slab",                  percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 8,  stageName: "On Completion of 5th floor slab",                  percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 9,  stageName: "On Completion of 8th floor slab",                  percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 10, stageName: "On Completion of 11th floor slab",                 percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 11, stageName: "On Completion of 14th Floor Slab",                 percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 12, stageName: "On Completion of 17th floor slab",                 percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 13, stageName: "On Completion of 20th Floor Slab",                 percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 14, stageName: "On Completion of 23rd floor slab",                 percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 15, stageName: "On Completion of 26th floor slab",                 percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 16, stageName: "On Completion of 29th floor slab",                 percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 17, stageName: "On Completion of 32nd floor slab",                 percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 18, stageName: "Upon Completion of Internal Brick / Wall work",     percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 19, stageName: "Upon Completion of Internal Plaster/Gypsum",       percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 20, stageName: "Upon Completion of Waterproofing",                 percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 21, stageName: "Upon Completion of Flooring",                      percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 22, stageName: "Upon Completion of Door Frames and Windows",       percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 23, stageName: "Architect and Civil Completion of Apartment",      percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 24, stageName: "At the time of possession of Unit",                percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 1,  stageName: "Booking Amount",                               percentage: 10.0, slabRatio: "40%", milestoneStatus: "Completed", paymentStatus: "Paid", paidAmount: undefined, dueDate: "2026-10-01", completionDate: "2026-10-01" },
+  { order: 2,  stageName: "After Agreement (within 15 days)",             percentage: 10.0, slabRatio: "40%", milestoneStatus: "Completed", paymentStatus: "Paid", paidAmount: undefined, dueDate: "2026-10-15", completionDate: "2026-10-15" },
+  { order: 3,  stageName: "On Completion Of Plinth",                      percentage: 15.0, slabRatio: "40%", milestoneStatus: "In-Progress", paymentStatus: "Pending", paidAmount: 0, dueDate: "2026-11-30", completionDate: null },
+  { order: 4,  stageName: "On Completion Of 2nd Parking slab",            percentage: 3.0,  slabRatio: "40%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0, dueDate: "2026-12-15", completionDate: null },
+  { order: 5,  stageName: "On Completion Of 3rd Parking slab",            percentage: 3.0,  slabRatio: "40%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0, dueDate: "2027-01-15", completionDate: null },
+  { order: 6,  stageName: "On Completion of 1st floor slab",              percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0, dueDate: "2027-02-15", completionDate: null },
+  { order: 7,  stageName: "On Completion of 3rd Floor Slab",              percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0, dueDate: "2027-03-15", completionDate: null },
+  { order: 8,  stageName: "On Completion of 5th floor slab",              percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0, dueDate: "2027-04-15", completionDate: null },
+  { order: 9,  stageName: "On Completion of 8th floor slab",              percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0, dueDate: "2027-05-15", completionDate: null },
+  { order: 10, stageName: "On Completion of 11th floor slab",             percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0, dueDate: "2027-06-15", completionDate: null },
+  { order: 11, stageName: "On Completion of 14th Floor Slab",             percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0, dueDate: "2027-07-15", completionDate: null },
+  { order: 12, stageName: "On Completion of 17th floor slab",             percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0, dueDate: "2027-08-15", completionDate: null },
+  { order: 13, stageName: "On Completion of 20th Floor Slab",             percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0, dueDate: "2027-09-15", completionDate: null },
+  { order: 14, stageName: "On Completion of 23rd floor slab",             percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0, dueDate: "2027-10-15", completionDate: null },
+  { order: 15, stageName: "On Completion of 26th floor slab",             percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0, dueDate: "2027-11-15", completionDate: null },
+  { order: 16, stageName: "On Completion of 29th floor slab",             percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0, dueDate: "2027-12-15", completionDate: null },
+  { order: 17, stageName: "On Completion of 32nd floor slab",             percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0, dueDate: "2028-01-15", completionDate: null },
+  { order: 18, stageName: "Upon Completion of Internal Brick / Wall work", percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0, dueDate: "2028-02-15", completionDate: null },
+  { order: 19, stageName: "Upon Completion of Internal Plaster/Gypsum",   percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0, dueDate: "2028-03-15", completionDate: null },
+  { order: 20, stageName: "Upon Completion of Waterproofing",             percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0, dueDate: "2028-04-15", completionDate: null },
+  { order: 21, stageName: "Upon Completion of Flooring",                  percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0, dueDate: "2028-05-15", completionDate: null },
+  { order: 22, stageName: "Upon Completion of Door Frames and Windows",   percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0, dueDate: "2028-06-15", completionDate: null },
+  { order: 23, stageName: "Architect and Civil Completion of Apartment",  percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0, dueDate: "2028-07-15", completionDate: null },
+  { order: 24, stageName: "At the time of possession of Unit",            percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0, dueDate: "2028-09-15", completionDate: null },
 ];
 
 /**

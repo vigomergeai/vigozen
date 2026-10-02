@@ -11,6 +11,7 @@ import {
   ResponsiveContainer
 } from "recharts";
 import { Deal, LeadStatus, DEAD_REASONS } from "../data/mockData";
+import { toast } from "sonner";
 import DeadReasonModal from "../components/DeadReasonModal";
 import PaymentPlanModule from "../components/PaymentPlanModule";
 import { useApp } from "../context/AppContext";
@@ -165,26 +166,82 @@ export default function SalesPage() {
   const wonValue = visibleDeals
     .filter(d => {
       if (d.stage !== "Won" && d.stage !== "Booking Done") return false;
-      const date = new Date(d.createdAt || (d as any).created_at);
-      return !isNaN(date.getTime()) && date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
+      const dateStr = d.createdAt || (d as any).created_at || (d as any).updatedAt || (d as any).updated_at;
+      if (!dateStr) return true;
+      const date = new Date(dateStr);
+      return isNaN(date.getTime()) || (date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear());
     })
     .reduce((s, d) => s + (Number(d.value) || 0), 0);
   const activeDeals = visibleDeals.filter(d => !CLOSED_STAGES.includes(d.stage)).length;
-  // Avg Deal Size of won deals to match Reports definition
+  // Avg Deal Size of won deals, or active pipeline deals if no won deals exist yet
   const wonDealsList = visibleDeals.filter(d => d.stage === "Won" || d.stage === "Booking Done");
+  const activeDealsList = visibleDeals.filter(d => !CLOSED_STAGES.includes(d.stage));
   const avgDealSize = wonDealsList.length > 0
     ? wonDealsList.reduce((s, d) => s + (Number(d.value) || 0), 0) / wonDealsList.length
-    : 0;
+    : activeDealsList.length > 0
+      ? activeDealsList.reduce((s, d) => s + (Number(d.value) || 0), 0) / activeDealsList.length
+      : 0;
+
+  const stageDefaultProbabilities: Record<string, number> = {
+    "New": 20,
+    "Attempted-1": 25,
+    "Attempted-2": 30,
+    "Attempted-3": 35,
+    "In-Process": 40,
+    "Contacted": 30,
+    "Qualified": 50,
+    "Site Visit Scheduled": 55,
+    "Site Visit Done": 65,
+    "Zoom Meeting": 60,
+    "Proposal": 65,
+    "Final Negotiation": 80,
+    "Negotiation": 75,
+    "Token Done": 90,
+    "Booking Done": 100,
+    "Won": 100,
+    "Lost": 0,
+    "Unqualified": 0,
+  };
 
   const handleDragStart = (dealId: string) => {
     if (!canEditDeals) return;
     setDraggedDeal(dealId);
   };
+
   const handleDrop = async (stage: LeadStatus) => {
     if (!canEditDeals || !draggedDeal) return;
+    const dealId = draggedDeal;
+    const dealObj = visibleDeals.find(d => d.id === dealId);
     setDragOverStage(null);
-    await updateDeal(draggedDeal, { stage });
     setDraggedDeal(null);
+
+    if (!dealObj) return;
+    if (dealObj.stage === stage) return;
+
+    // If dropping into Lost or Unqualified, prompt for dead reason modal
+    if (stage === "Lost" || stage === "Unqualified") {
+      setDeadReasonDeal({ id: dealObj.id, title: dealObj.title, stage });
+      setShowDeadReasonModal(true);
+      return;
+    }
+
+    const targetProbability = stageDefaultProbabilities[stage] ?? 50;
+
+    const success = await updateDeal(dealId, {
+      stage,
+      probability: targetProbability,
+      daysInStage: 0,
+    });
+
+    if (success) {
+      if (stage === "Booking Done" || stage === "Won") {
+        toast.success(`🎉 Won! Deal "${dealObj.title}" converted to Booking Done (100%)`);
+      } else if (stage === "Token Done") {
+        toast.success(`💰 Deal "${dealObj.title}" advanced to Token Done (90%)`);
+      } else {
+        toast.success(`Deal moved to ${stage} (${targetProbability}%)`);
+      }
+    }
   };
 
   const forecastData = stages

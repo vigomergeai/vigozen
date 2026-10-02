@@ -10,7 +10,7 @@ import {
   leads as mockLeads, deals as mockDeals, employees as mockEmployees,
   integrations as mockIntegrations, tickets as mockTickets, recentActivities as mockActivities,
 } from "../data/mockData";
-import { fetchRevenueForecast, type RevenueForecast } from "../../services/revenueForecast";
+import { fetchRevenueForecast, calculateForecastFromDeals, type RevenueForecast } from "../../services/revenueForecast";
 
 // A lightweight Session-like type so we don't need @supabase/supabase-js
 interface Session {
@@ -910,12 +910,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       loadSettings();
     }
   }, [session, userProfile?.id]); // Add userProfile.id dependency
-  // Auto-refresh revenue forecast only after session is established
+  // Auto-refresh revenue forecast whenever deals change or session is established
   useEffect(() => {
-    if (session) {
+    if (deals && deals.length > 0) {
+      setRevenueForecast(calculateForecastFromDeals(deals));
+    } else if (session) {
       refreshRevenueForecast();
     }
-  }, [session]);
+  }, [deals, session]);
 
   // ── Sync helpers ───────────────────────────────────────────────────────────
   async function trySyncCreate<T>(apiFn: () => Promise<T>): Promise<T | null> {
@@ -1585,13 +1587,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // ── Deal CRUD ──────────────────────────────────────────────────────────────
   // ── Deal Helper Maps ────────────────────────────────────────────────────────
   const toDbDealStage: Record<string, string> = {
-    New: "New",
-    Contacted: "Contacted",
-    Qualified: "Qualified",
-    Proposal: "Proposal",
-    Negotiation: "Negotiation",
-    Won: "Won",
-    Lost: "Lost",
+    "New": "New",
+    "Attempted-1": "Attempted-1",
+    "Attempted-2": "Attempted-2",
+    "Attempted-3": "Attempted-3",
+    "In-Process": "In-Process",
+    "Contacted": "Contacted",
+    "Qualified": "Qualified",
+    "Site Visit Scheduled": "Site Visit Scheduled",
+    "Site Visit Done": "Site Visit Done",
+    "Zoom Meeting": "Zoom Meeting",
+    "Proposal": "Proposal",
+    "Final Negotiation": "Final Negotiation",
+    "Negotiation": "Negotiation",
+    "Token Done": "Token Done",
+    "Booking Done": "Booking Done",
+    "Won": "Won",
+    "Lost": "Lost",
+    "Unqualified": "Unqualified",
   };
 
   const fromDbDealStage = Object.fromEntries(
@@ -1664,19 +1677,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
   const updateDeal = async (id: string, data: Partial<Deal>): Promise<boolean> => {
     try {
+      // Optimistic state update for instant UI feedback during drag-and-drop
+      setDeals(prev => prev.map(d => d.id === id ? { ...d, ...data } : d));
+
       const payload: any = {};
 
       if (data.title !== undefined) payload.title = data.title;
       if (data.company !== undefined) payload.company = data.company;
-      if (data.value !== undefined) payload.value = data.value;
-      if (data.stage !== undefined) payload.stage = toDbDealStage[data.stage];
+      if (data.value !== undefined) payload.value = Number(data.value) || 0;
+      if (data.stage !== undefined) payload.stage = toDbDealStage[data.stage] || data.stage;
       if (data.owner !== undefined) payload.owner = data.owner;
       if (data.ownerId !== undefined) {
         payload.owner_id = validUUID(data.ownerId) ? data.ownerId : null;
       }
-      if (data.probability !== undefined) payload.probability = data.probability;
+      if (data.probability !== undefined) payload.probability = Number(data.probability);
       if (data.expectedClose !== undefined) payload.expectedclose = data.expectedClose;
       if (data.daysInStage !== undefined) payload.daysinstage = data.daysInStage;
+      if ((data as any).dead_reason !== undefined) payload.dead_reason = (data as any).dead_reason;
 
       const token = getToken();
       const response = await fetch(`${import.meta.env.VITE_API_URL}/deals/${id}`, {
@@ -1690,17 +1707,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
       if (!response.ok) {
         const errorText = await response.text();
-        toast.error(`Update failed: ${errorText}`);
+        console.error(`Update failed: ${errorText}`);
+        await importDeals(); // revert optimistic change on error
         return false;
       }
 
-      // ✅ Fresh data from backend
+      // Fresh data sync from backend
       await importDeals();
-      toast.success("Deal updated successfully!");
       return true;
     } catch (error) {
       console.error("Update error:", error);
-      toast.error("Cannot Update Deal");
+      await importDeals();
       return false;
     }
   };
@@ -1929,14 +1946,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Revenue Forecast Functions
   const refreshRevenueForecast = useCallback(async () => {
     try {
-      console.log("Fetching revenue forecast...");
-      const forecast = await fetchRevenueForecast();
-      setRevenueForecast(forecast);
-      console.log("Revenue forecast updated:", forecast);
+      if (deals && deals.length > 0) {
+        setRevenueForecast(calculateForecastFromDeals(deals));
+      } else {
+        const forecast = await fetchRevenueForecast();
+        setRevenueForecast(forecast);
+      }
     } catch (error) {
       console.error("Failed to fetch revenue forecast:", error);
     }
-  }, []);
+  }, [deals]);
   // ── Employee CRUD ──────────────────────────────────────────────────────────
   const addEmployee = async (data: Partial<Employee>): Promise<Employee | null> => {
     const newEmp: Employee = {

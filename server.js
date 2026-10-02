@@ -7369,7 +7369,113 @@ app.get("/api/company/subscription/quote-status", authenticateToken, requireRole
 
 // ── DEAL PAYMENT SCHEDULE (CONSTRUCTION PAYMENT CALCULATOR) ──
 
-// In-memory fallback cache in case Postgres deal_payment_schedules is spinning up or offline
+const MASTER_24_STAGES_SERVER = [
+  { order: 1,  stageName: "Booking Amount",                 percentage: 10.0, slabRatio: "40%", milestoneStatus: "Completed", paymentStatus: "Paid", paidAmount: undefined },
+  { order: 2,  stageName: "Agreement Execution",            percentage: 10.0, slabRatio: "40%", milestoneStatus: "Completed", paymentStatus: "Paid", paidAmount: undefined },
+  { order: 3,  stageName: "Plinth Completion",              percentage: 15.0, slabRatio: "40%", milestoneStatus: "In-Progress", paymentStatus: "Pending", paidAmount: 0 },
+  { order: 4,  stageName: "2nd Parking Slab",               percentage: 3.0,  slabRatio: "40%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 5,  stageName: "3rd Parking Slab",               percentage: 3.0,  slabRatio: "40%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 6,  stageName: "1st Floor Slab",                 percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 7,  stageName: "3rd Floor Slab",                 percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 8,  stageName: "5th Floor Slab",                 percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 9,  stageName: "8th Floor Slab",                 percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 10, stageName: "11th Floor Slab",                percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 11, stageName: "14th Floor Slab",                percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 12, stageName: "17th Floor Slab",                percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 13, stageName: "20th Floor Slab",                percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 14, stageName: "23rd Floor Slab",                percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 15, stageName: "26th Floor Slab",                percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 16, stageName: "29th Floor Slab",                percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 17, stageName: "32nd Floor Slab",                percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 18, stageName: "Brick/Wall Work",                percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 19, stageName: "Plaster/Gypsum",                 percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 20, stageName: "Waterproofing",                  percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 21, stageName: "Flooring",                       percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 22, stageName: "Doors/Windows",                  percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 23, stageName: "Architect/Civil",                percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 24, stageName: "Possession",                     percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+];
+
+function calculateServerSchedule(agreementValue, rawMilestones = MASTER_24_STAGES_SERVER) {
+  const av = Math.max(0, Number(agreementValue) || 1000000);
+  const ratio = av / 1000000;
+  let cumulative = 0;
+
+  const milestones = (rawMilestones && rawMilestones.length > 0 ? rawMilestones : MASTER_24_STAGES_SERVER).map((m, idx) => {
+    const percentage = Number(m.percentage) || 0;
+    const amount = Number(((av * percentage) / 100).toFixed(2));
+    const installment = Number((amount * 0.009).toFixed(2));
+    cumulative = Number((cumulative + installment).toFixed(2));
+
+    const isExplicitlyPaid = m.paymentStatus === 'Paid';
+    const paidAmount = isExplicitlyPaid ? amount : (Number(m.paidAmount) || 0);
+    const remainingAmount = Math.max(0, Number((amount - paidAmount).toFixed(2)));
+
+    let paymentStatus = m.paymentStatus || 'Pending';
+    if (isExplicitlyPaid || (paidAmount >= amount && amount > 0)) {
+      paymentStatus = 'Paid';
+    } else if (paidAmount > 0 && paidAmount < amount) {
+      paymentStatus = 'Partially Paid';
+    } else if (m.dueDate) {
+      const due = new Date(m.dueDate);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (!isNaN(due.getTime()) && due < today && paidAmount < amount) {
+        paymentStatus = 'Overdue';
+      }
+    }
+
+    return {
+      order: m.order ?? idx + 1,
+      stageName: m.stageName,
+      percentage,
+      slabRatio: m.slabRatio || "30%",
+      amount,
+      installment,
+      cumulativeInstallment: cumulative,
+      cumulativeEmi: cumulative,
+      milestoneStatus: m.milestoneStatus || 'Upcoming',
+      paymentStatus,
+      paidAmount,
+      remainingAmount,
+      dueDate: m.dueDate || null,
+      completionDate: m.completionDate || null,
+      remarks: m.remarks || null
+    };
+  });
+
+  const totalPaid = milestones
+    .filter(m => m.paymentStatus === 'Paid')
+    .reduce((sum, m) => sum + (m.amount || 0), 0);
+
+  const totalPending = Math.max(0, Number((av - totalPaid).toFixed(2)));
+  const totalPercentage = Number(milestones.reduce((s, m) => s + (Number(m.percentage) || 0), 0).toFixed(2));
+  const paidProgress = av > 0 ? Number(((totalPaid / av) * 100).toFixed(1)) : 0;
+  const remainingMilestonesCount = milestones.filter(m => m.paymentStatus !== 'Paid').length;
+
+  const rtmiCost = Number((323901 * ratio).toFixed(2));
+  const ucCost = Number((131810 * ratio).toFixed(2));
+  const buyerSavings = Number((rtmiCost - ucCost).toFixed(2));
+
+  return {
+    agreement_value: av,
+    milestones,
+    summary: {
+      agreementValue: av,
+      totalPaid,
+      totalPending,
+      paidProgress,
+      remainingMilestonesCount,
+      totalPercentage,
+      isPercentageValid: Math.abs(totalPercentage - 100) < 0.01,
+      rtmiCost,
+      ucCost,
+      buyerSavings
+    }
+  };
+}
+
+// In-memory fallback cache
 const dealPaymentScheduleMemoryCache = new Map();
 
 const getDealPaymentScheduleHandler = async (req, res) => {
@@ -7379,7 +7485,20 @@ const getDealPaymentScheduleHandler = async (req, res) => {
       return res.status(400).json({ error: "Deal ID is required" });
     }
 
-    // Check database first
+    let agreementValue = 1000000;
+    let existingMilestones = [];
+    let existingNotes = "";
+    let scheduleId = null;
+
+    // Check deal in deals table for initial agreement value
+    try {
+      const dealRes = await pool.query("SELECT id, value, title FROM deals WHERE id = $1", [id]);
+      if (dealRes.rows.length > 0 && Number(dealRes.rows[0].value) > 0) {
+        agreementValue = Number(dealRes.rows[0].value);
+      }
+    } catch (_) {}
+
+    // Check database for existing schedule
     try {
       const dbResult = await pool.query(
         `SELECT id, deal_id, agreement_value, milestones, notes, created_at, updated_at
@@ -7387,23 +7506,34 @@ const getDealPaymentScheduleHandler = async (req, res) => {
         [id]
       );
       if (dbResult.rows.length > 0) {
-        return res.json(dbResult.rows[0]);
+        const row = dbResult.rows[0];
+        scheduleId = row.id;
+        agreementValue = Number(row.agreement_value) || agreementValue;
+        existingMilestones = Array.isArray(row.milestones) ? row.milestones : [];
+        existingNotes = row.notes || "";
       }
     } catch (dbErr) {
       console.warn("DB fetch deal payment schedule warning (using fallback):", dbErr.message);
     }
 
-    // Check memory cache fallback
-    if (dealPaymentScheduleMemoryCache.has(id)) {
-      return res.json(dealPaymentScheduleMemoryCache.get(id));
+    // Check memory cache fallback if no db record found
+    if (!scheduleId && dealPaymentScheduleMemoryCache.has(id)) {
+      const cached = dealPaymentScheduleMemoryCache.get(id);
+      scheduleId = cached.id;
+      agreementValue = Number(cached.agreement_value) || agreementValue;
+      existingMilestones = cached.milestones || [];
+      existingNotes = cached.notes || "";
     }
 
-    // Return default response
+    const calculated = calculateServerSchedule(agreementValue, existingMilestones);
+
     return res.json({
+      id: scheduleId,
       deal_id: id,
-      agreement_value: 1000000,
-      milestones: [],
-      notes: ""
+      agreement_value: calculated.agreement_value,
+      milestones: calculated.milestones,
+      summary: calculated.summary,
+      notes: existingNotes
     });
   } catch (error) {
     console.error("Error getting deal payment schedule:", error);
@@ -7420,23 +7550,21 @@ const saveDealPaymentScheduleHandler = async (req, res) => {
       return res.status(400).json({ error: "Deal ID is required" });
     }
 
-    const numericAgreementValue = Number(agreement_value) || 1000000;
-    const safeMilestones = Array.isArray(milestones) ? milestones : [];
+    const calculated = calculateServerSchedule(agreement_value, milestones);
     const safeNotes = notes || null;
 
     let savedRecord = {
       id: "local-" + Date.now(),
       deal_id: id,
-      agreement_value: numericAgreementValue,
-      milestones: safeMilestones,
+      agreement_value: calculated.agreement_value,
+      milestones: calculated.milestones,
+      summary: calculated.summary,
       notes: safeNotes,
       updated_at: new Date().toISOString()
     };
 
-    // Update memory cache
     dealPaymentScheduleMemoryCache.set(id, savedRecord);
 
-    // Try persisting to PostgreSQL
     try {
       const upsertResult = await pool.query(
         `INSERT INTO deal_payment_schedules (deal_id, agreement_value, milestones, notes, updated_at)
@@ -7448,20 +7576,20 @@ const saveDealPaymentScheduleHandler = async (req, res) => {
            notes = EXCLUDED.notes,
            updated_at = NOW()
          RETURNING id, deal_id, agreement_value, milestones, notes, created_at, updated_at`,
-        [id, numericAgreementValue, JSON.stringify(safeMilestones), safeNotes]
+        [id, calculated.agreement_value, JSON.stringify(calculated.milestones), safeNotes]
       );
 
       if (upsertResult.rows.length > 0) {
-        savedRecord = upsertResult.rows[0];
+        savedRecord.id = upsertResult.rows[0].id;
+        savedRecord.created_at = upsertResult.rows[0].created_at;
+        savedRecord.updated_at = upsertResult.rows[0].updated_at;
         dealPaymentScheduleMemoryCache.set(id, savedRecord);
       }
 
-      // Also sync value in deals table if deal exists
       await pool.query(
         `UPDATE deals SET value = $1, updated_at = NOW() WHERE id = $2`,
-        [numericAgreementValue, id]
+        [calculated.agreement_value, id]
       ).catch(() => {});
-
     } catch (dbErr) {
       console.warn("DB upsert deal payment schedule warning (cached in memory):", dbErr.message);
     }

@@ -37,30 +37,30 @@ export const MASTER_24_CONSTRUCTION_STAGES: Omit<
   ConstructionMilestone,
   'amount' | 'installment' | 'cumulativeInstallment' | 'cumulativeEmi' | 'remainingAmount'
 >[] = [
-  { order: 1,  stageName: "Booking Amount",                 percentage: 10.0, slabRatio: "40%", milestoneStatus: "Completed", paymentStatus: "Paid", paidAmount: undefined },
-  { order: 2,  stageName: "Agreement Execution",            percentage: 10.0, slabRatio: "40%", milestoneStatus: "Completed", paymentStatus: "Paid", paidAmount: undefined },
-  { order: 3,  stageName: "Plinth Completion",              percentage: 15.0, slabRatio: "40%", milestoneStatus: "In-Progress", paymentStatus: "Pending", paidAmount: 0 },
-  { order: 4,  stageName: "2nd Parking Slab",               percentage: 3.0,  slabRatio: "40%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 5,  stageName: "3rd Parking Slab",               percentage: 3.0,  slabRatio: "40%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 6,  stageName: "1st Floor Slab",                 percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 7,  stageName: "3rd Floor Slab",                 percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 8,  stageName: "5th Floor Slab",                 percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 9,  stageName: "8th Floor Slab",                 percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 10, stageName: "11th Floor Slab",                percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 11, stageName: "14th Floor Slab",                percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 12, stageName: "17th Floor Slab",                percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 13, stageName: "20th Floor Slab",                percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 14, stageName: "23rd Floor Slab",                percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 15, stageName: "26th Floor Slab",                percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 16, stageName: "29th Floor Slab",                percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 17, stageName: "32nd Floor Slab",                percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 18, stageName: "Brick/Wall Work",                percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 19, stageName: "Plaster/Gypsum",                 percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 20, stageName: "Waterproofing",                  percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 21, stageName: "Flooring",                       percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 22, stageName: "Doors/Windows",                  percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 23, stageName: "Architect/Civil",                percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
-  { order: 24, stageName: "Possession",                     percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 1,  stageName: "Booking amount Before agreement",                  percentage: 10.0, slabRatio: "40%", milestoneStatus: "Completed", paymentStatus: "Paid", paidAmount: undefined },
+  { order: 2,  stageName: "After Agreement with in 15 days",                  percentage: 10.0, slabRatio: "40%", milestoneStatus: "Completed", paymentStatus: "Paid", paidAmount: undefined },
+  { order: 3,  stageName: "On Completion Of Plinth",                          percentage: 15.0, slabRatio: "40%", milestoneStatus: "In-Progress", paymentStatus: "Pending", paidAmount: 0 },
+  { order: 4,  stageName: "On Completion Of 2nd Parking slab",                percentage: 3.0,  slabRatio: "40%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 5,  stageName: "On Completion Of 3rd Parking slab",                percentage: 3.0,  slabRatio: "40%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 6,  stageName: "On Completion of 1st floor slab",                  percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 7,  stageName: "On Completion of 3rd Floor Slab",                  percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 8,  stageName: "On Completion of 5th floor slab",                  percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 9,  stageName: "On Completion of 8th floor slab",                  percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 10, stageName: "On Completion of 11th floor slab",                 percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 11, stageName: "On Completion of 14th Floor Slab",                 percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 12, stageName: "On Completion of 17th floor slab",                 percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 13, stageName: "On Completion of 20th Floor Slab",                 percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 14, stageName: "On Completion of 23rd floor slab",                 percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 15, stageName: "On Completion of 26th floor slab",                 percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 16, stageName: "On Completion of 29th floor slab",                 percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 17, stageName: "On Completion of 32nd floor slab",                 percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 18, stageName: "Upon Completion of Internal Brick / Wall work",     percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 19, stageName: "Upon Completion of Internal Plaster/Gypsum",       percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 20, stageName: "Upon Completion of Waterproofing",                 percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 21, stageName: "Upon Completion of Flooring",                      percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 22, stageName: "Upon Completion of Door Frames and Windows",       percentage: 5.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 23, stageName: "Architect and Civil Completion of Apartment",      percentage: 3.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
+  { order: 24, stageName: "At the time of possession of Unit",                percentage: 2.0,  slabRatio: "30%", milestoneStatus: "Upcoming",    paymentStatus: "Pending", paidAmount: 0 },
 ];
 
 /**
@@ -168,5 +168,121 @@ export function calculateSavingsMetrics(agreementValue: number, milestones: Cons
     totalPercentage,
     paidProgress,
     remainingMilestonesCount,
+  };
+}
+
+export interface MonthlyAmortizationRow {
+  month: number;
+  principal: number;
+  interest: number;
+  totalPayment: number;
+  outstandingBalance: number;
+  cumulativeInterest: number;
+  cumulativePrincipal: number;
+}
+
+export interface YearlyAmortizationRow {
+  year: number;
+  principal: number;
+  interest: number;
+  totalPayment: number;
+  outstandingBalance: number;
+  cumulativeInterest: number;
+  cumulativePrincipal: number;
+}
+
+export interface EmiCalculationResult {
+  principal: number;
+  annualRate: number;
+  tenureYears: number;
+  monthlyEmi: number;
+  totalInterest: number;
+  totalPayment: number;
+  yearlySchedule: YearlyAmortizationRow[];
+  monthlySchedule: MonthlyAmortizationRow[];
+}
+
+/**
+ * Calculates Full Home Loan EMI Amortization Schedule (Yearly & Monthly)
+ */
+export function calculateEmiAmortization(
+  principalAmount: number = 1000000,
+  annualInterestRate: number = 9.0,
+  tenureInYears: number = 20
+): EmiCalculationResult {
+  const P = Math.max(1000, Number(principalAmount) || 1000000);
+  const R = Math.max(0.1, Number(annualInterestRate) || 9.0);
+  const Y = Math.max(1, Math.min(30, Number(tenureInYears) || 20));
+
+  const monthlyRate = R / (12 * 100);
+  const totalMonths = Y * 12;
+
+  // EMI formula: P * r * (1+r)^n / ((1+r)^n - 1)
+  const factor = Math.pow(1 + monthlyRate, totalMonths);
+  const rawEmi = (P * monthlyRate * factor) / (factor - 1);
+  const monthlyEmi = Math.round(rawEmi);
+
+  let currentBalance = P;
+  let cumInterest = 0;
+  let cumPrincipal = 0;
+
+  const monthlySchedule: MonthlyAmortizationRow[] = [];
+  const yearlySchedule: YearlyAmortizationRow[] = [];
+
+  for (let m = 1; m <= totalMonths; m++) {
+    const interestPayment = currentBalance * monthlyRate;
+    let principalPayment = rawEmi - interestPayment;
+
+    if (m === totalMonths || principalPayment > currentBalance) {
+      principalPayment = currentBalance;
+    }
+
+    currentBalance = Math.max(0, currentBalance - principalPayment);
+    cumInterest += interestPayment;
+    cumPrincipal += principalPayment;
+
+    monthlySchedule.push({
+      month: m,
+      principal: Math.round(principalPayment),
+      interest: Math.round(interestPayment),
+      totalPayment: Math.round(principalPayment + interestPayment),
+      outstandingBalance: Math.round(currentBalance),
+      cumulativeInterest: Math.round(cumInterest),
+      cumulativePrincipal: Math.round(cumPrincipal),
+    });
+
+    // Roll up into yearly row at month 12, 24, 36... or final month
+    if (m % 12 === 0 || m === totalMonths) {
+      const yearIndex = Math.ceil(m / 12);
+      const startMonthIndex = (yearIndex - 1) * 12;
+      const yearMonths = monthlySchedule.slice(startMonthIndex, m);
+
+      const yrPrincipal = yearMonths.reduce((s, row) => s + row.principal, 0);
+      const yrInterest = yearMonths.reduce((s, row) => s + row.interest, 0);
+
+      yearlySchedule.push({
+        year: yearIndex,
+        principal: yrPrincipal,
+        interest: yrInterest,
+        totalPayment: yrPrincipal + yrInterest,
+        outstandingBalance: Math.round(currentBalance),
+        cumulativeInterest: Math.round(cumInterest),
+        cumulativePrincipal: Math.round(cumPrincipal),
+      });
+    }
+  }
+
+  const totalPayment = Math.round(cumPrincipal + cumInterest);
+  const totalInterest = Math.round(cumInterest);
+
+  return {
+    principal: Math.round(P),
+    annualRate: R,
+    tenureYears: Y,
+    monthlyEmi,
+    totalInterest,
+    totalPayment,
+    yearlySchedule,
+    monthlySchedule,
   };
 }

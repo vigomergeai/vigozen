@@ -68,7 +68,7 @@ export default function PaymentPlanModule({
           setNotes(data.notes || "");
 
           if (data.milestones && data.milestones.length > 0) {
-            setMilestones(recalculateMilestones(av, data.milestones));
+            setMilestones(data.milestones);
           } else {
             setMilestones(recalculateMilestones(av, MASTER_24_CONSTRUCTION_STAGES as ConstructionMilestone[]));
           }
@@ -156,6 +156,9 @@ export default function PaymentPlanModule({
 
       const savedData = await res.json();
       setScheduleId(savedData.id);
+      if (savedData.milestones && savedData.milestones.length > 0) {
+        setMilestones(savedData.milestones);
+      }
       toast.success("Payment schedule saved successfully!");
       if (onSaved) onSaved(agreementValue);
     } catch (err: any) {

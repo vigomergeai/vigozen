@@ -8077,6 +8077,11 @@ app.post("/admin/users/:userId/transfer-data", authenticateToken, async (req, re
     });
 
   } catch (error) {
+    console.error("Employee data transfer error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ── Ad Connections API ──
 app.get("/ad-connections", authenticateToken, async (req, res) => {
   try {

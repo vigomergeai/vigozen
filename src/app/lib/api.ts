@@ -264,6 +264,12 @@ export const api = {
     getStats: (token: string) =>
       request("GET", `/ad-connections/stats`, undefined, token),
   },
+  userSettings: {
+    save: (data: any, token: string) =>
+      request("POST", "/api/user-settings", data, token),
+    get: (token: string) =>
+      request("GET", "/api/user-settings", undefined, token),
+  },
   sessions: {
     list: (userId: string, token: string) => request("GET", `/user-sessions/${userId}`, undefined, token),
     create: (data: any, token: string) => request("POST", "/user-sessions", data, token),
@@ -472,10 +478,10 @@ export const api = {
   // ── Ad Connections OAuth ──
   oauth: {
     authorize: (platform: string, token: string) =>
-      request("GET", `/api/ad-connections/oauth/${platform}/authorize`, undefined, token),
+      request("GET", `/oauth/${platform}/authorize`, undefined, token),
 
     callback: (platform: string, code: string) =>
-      request("GET", `/api/ad-connections/oauth/${platform}/callback?code=${code}`, undefined, undefined),
+      request("GET", `/oauth/${platform}/callback?code=${code}`, undefined, undefined),
 
     refresh: (connectionId: string, token: string) =>
       request("POST", `/oauth/refresh`, { connectionId }, token),

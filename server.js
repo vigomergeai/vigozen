@@ -1126,6 +1126,22 @@ app.get("/leads", authenticateToken, checkPermission('leads'), async (req, res) 
   }
 });
 
+// Overdue Follow-ups (ordered most overdue first)
+app.get("/leads/overdue-followups", authenticateToken, checkPermission('leads'), async (req, res) => {
+  try {
+    const { whereClause, params } = await getScopedQueryFilters('leads', req);
+    const overdueCond = `next_followup IS NOT NULL AND next_followup < NOW() AND LOWER(status::text) NOT IN ('won', 'booking done', 'token done', 'lost', 'unqualified')`;
+    const finalWhere = whereClause ? `${whereClause} AND ${overdueCond}` : `WHERE ${overdueCond}`;
+    const result = await pool.query(
+      `SELECT *, (SELECT name FROM users WHERE id = owner_id) as owner FROM leads ${finalWhere} ORDER BY next_followup ASC`,
+      params
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Deals
 app.get("/deals", authenticateToken, checkPermission('deals'), async (req, res) => {
   try {
@@ -2826,16 +2842,19 @@ app.post("/leads", authenticateToken, enforceStorageLimit(0.01), async (req, res
     if (scope === 'none') {
       return res.status(403).json({ error: "You are not permitted to create leads." });
     }
-    const { name, email, phone, company, value, status, source, industry, notes, probability, aiscore, next_meeting_at, lead_category, reason_to_buy, dead_reason } = req.body;
+    const { name, email, phone, company, value, status, source, industry, notes, probability, aiscore, next_meeting_at, lead_category, reason_to_buy, dead_reason, next_followup, nextFollowup, last_activity_date, lastActivityDate } = req.body;
 
     // Get owner_id and company_id
     const ownerId = req.body.owner_id || req.user?.id || null;
     const companyId = req.user?.company_id || null;
+    const finalNextFollowup = next_followup !== undefined ? next_followup : (nextFollowup || null);
+    const finalLastActivity = last_activity_date || lastActivityDate || new Date();
+
     const result = await pool.query(
-      `INSERT INTO leads (id, name, email, phone, company, value, status, source, industry, notes, owner_id, company_id, probability, aiscore, next_meeting_at, lead_category, reason_to_buy, dead_reason, created_at, updated_at)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW(), NOW())
+      `INSERT INTO leads (id, name, email, phone, company, value, status, source, industry, notes, owner_id, company_id, probability, aiscore, next_meeting_at, lead_category, reason_to_buy, dead_reason, next_followup, last_activity_date, followup_notified, created_at, updated_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, false, NOW(), NOW())
        RETURNING *`,
-      [name, email, phone, company, value, status, source, industry, notes, ownerId, companyId, probability || 50, aiscore || 50, next_meeting_at || null, lead_category || 'Warm', reason_to_buy || null, dead_reason || null]
+      [name, email, phone, company, value, status, source, industry, notes, ownerId, companyId, probability || 50, aiscore || 50, next_meeting_at || null, lead_category || 'Warm', reason_to_buy || null, dead_reason || null, finalNextFollowup, finalLastActivity]
     );
 
     const lead = result.rows[0];
@@ -2899,7 +2918,7 @@ app.put("/leads/:id", authenticateToken, async (req, res) => {
       return res.status(403).json({ error: "You are not permitted to edit leads." });
     }
 
-    const { name, email, phone, company, value, status, source, industry, notes, converted_to_deal, deal_id, next_meeting_at, lead_category, reason_to_buy, dead_reason } = req.body;
+    const { name, email, phone, company, value, status, source, industry, notes, converted_to_deal, deal_id, next_meeting_at, lead_category, reason_to_buy, dead_reason, next_followup, nextFollowup, last_activity_date, lastActivityDate } = req.body;
 
     // Fetch existing lead first to preserve missing fields
     const existingRes = await pool.query("SELECT * FROM leads WHERE id = $1", [req.params.id]);
@@ -2960,11 +2979,17 @@ app.put("/leads/:id", authenticateToken, async (req, res) => {
     const meetingChanged = next_meeting_at !== undefined && String(next_meeting_at) !== String(existing.next_meeting_at);
     const finalMeetingNotified = meetingChanged ? false : (existing.meeting_notified || false);
 
+    // Follow-up scheduling handling & automatic last_activity_date update
+    const finalNextFollowup = next_followup !== undefined ? next_followup : (nextFollowup !== undefined ? nextFollowup : existing.next_followup);
+    const followupChanged = (next_followup !== undefined || nextFollowup !== undefined) && String(finalNextFollowup) !== String(existing.next_followup);
+    const finalFollowupNotified = followupChanged ? false : (existing.followup_notified || false);
+    const finalLastActivity = (last_activity_date || lastActivityDate) ? (last_activity_date || lastActivityDate) : new Date();
+
     const result = await pool.query(
       `UPDATE leads 
-       SET name=$1, email=$2, phone=$3, company=$4, value=$5, status=$6, source=$7, industry=$8, notes=$9, converted_to_deal=$10, deal_id=$11, owner_id=$12, next_meeting_at=$13, meeting_notified=$14, lead_category=$15, reason_to_buy=$16, dead_reason=$17, updated_at=NOW() 
-       WHERE id=$18 RETURNING *`,
-      [finalName, finalEmail, finalPhone, finalCompany, finalValue, finalStatus, finalSource, finalIndustry, finalNotes, finalConverted, finalDealId, ownerId, finalNextMeeting, finalMeetingNotified, finalLeadCategory, finalReasonToBuy, finalDeadReason, req.params.id]
+       SET name=$1, email=$2, phone=$3, company=$4, value=$5, status=$6, source=$7, industry=$8, notes=$9, converted_to_deal=$10, deal_id=$11, owner_id=$12, next_meeting_at=$13, meeting_notified=$14, lead_category=$15, reason_to_buy=$16, dead_reason=$17, next_followup=$18, followup_notified=$19, last_activity_date=$20, updated_at=NOW() 
+       WHERE id=$21 RETURNING *`,
+      [finalName, finalEmail, finalPhone, finalCompany, finalValue, finalStatus, finalSource, finalIndustry, finalNotes, finalConverted, finalDealId, ownerId, finalNextMeeting, finalMeetingNotified, finalLeadCategory, finalReasonToBuy, finalDeadReason, finalNextFollowup, finalFollowupNotified, finalLastActivity, req.params.id]
     );
 
     // ── Notification: Lead status changed / converted ──
@@ -8027,7 +8052,8 @@ app.listen(5000, "0.0.0.0", () => {
 // Start cron job for background sync
 require('./server/cronSync');
 require('./server/meetingReminder');
-console.log('⏰ Cron sync job started');
+require('./server/followupReminder');
+console.log('⏰ Cron sync & reminders started');
 
 // Nodemon trigger restart comment
 

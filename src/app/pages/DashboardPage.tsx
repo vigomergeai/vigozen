@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import {
   Users, TrendingUp, IndianRupee, Target, ArrowUp, ArrowDown, Bot, AlertTriangle,
-  Lightbulb, Activity, Star, Trophy, ChevronRight, RefreshCw, Flame
+  Lightbulb, Activity, Star, Trophy, ChevronRight, RefreshCw, Flame, Clock
 } from "lucide-react";
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -285,6 +285,37 @@ const conversionChange = calcChange(conversionCurrent, conversionPrevious);
     return list.slice(0, 4);
   }, [leads, deals]);
 
+  // ── Overdue Follow-ups Calculation (Phase 4) ──
+  const overdueLeads = React.useMemo(() => {
+    const now = new Date();
+    return leads.filter(l => {
+      const followDateStr = l.next_followup || l.nextFollowup || l.nextMeetingAt;
+      if (!followDateStr) return false;
+      const isClosed = ["won", "booking done", "token done", "lost", "unqualified"].includes(String(l.status).toLowerCase());
+      if (isClosed) return false;
+      return new Date(followDateStr) < now;
+    }).sort((a, b) => {
+      const da = new Date(a.next_followup || a.nextFollowup || a.nextMeetingAt!).getTime();
+      const db = new Date(b.next_followup || b.nextFollowup || b.nextMeetingAt!).getTime();
+      return da - db; // Oldest/most overdue first
+    });
+  }, [leads]);
+
+  const formatOverdueDuration = (dateStr: string): string => {
+    const diffMs = Date.now() - new Date(dateStr).getTime();
+    if (diffMs <= 0) return "Just now";
+    const hours = Math.floor(diffMs / (1000 * 60 * 60));
+    const days = Math.floor(hours / 24);
+    if (days >= 1) {
+      return `Follow-up missed by ${days} ${days === 1 ? "day" : "days"}`;
+    }
+    if (hours >= 1) {
+      return `Follow-up missed by ${hours} ${hours === 1 ? "hour" : "hours"}`;
+    }
+    const mins = Math.max(1, Math.floor(diffMs / (1000 * 60)));
+    return `Follow-up missed by ${mins} ${mins === 1 ? "minute" : "minutes"}`;
+  };
+
   const revenueData = React.useMemo(() => {
     const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     
@@ -566,6 +597,68 @@ useEffect(() => {
                 </div>
               );
             })}
+          </div>
+        </div>
+
+        {/* Overdue Follow-ups / Missed Reminders (Phase 4) */}
+        <div className="bg-white rounded-2xl p-5 border border-red-100 shadow-sm flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-red-50 text-red-600">
+                  <AlertTriangle size={16} />
+                </div>
+                <div>
+                  <h3 className="text-slate-800 font-semibold text-sm">Overdue Follow-ups</h3>
+                  <p className="text-[11px] text-slate-400">Missed salesperson reminders</p>
+                </div>
+              </div>
+              <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-red-100 text-red-600">
+                {overdueLeads.length} Leads
+              </span>
+            </div>
+
+            <div className="space-y-2.5">
+              {overdueLeads.length === 0 ? (
+                <div className="py-8 text-center text-xs text-slate-400 bg-slate-50 rounded-xl">
+                  🎉 All follow-ups are on schedule!
+                </div>
+              ) : (
+                overdueLeads.slice(0, 4).map((lead) => {
+                  const followDate = lead.next_followup || lead.nextFollowup || lead.nextMeetingAt!;
+                  return (
+                    <div
+                      key={lead.id}
+                      onClick={() => navigate(`/leads`)}
+                      className="p-3 rounded-xl border border-slate-100 hover:border-red-200 hover:bg-red-50/30 transition-all cursor-pointer group"
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs font-semibold text-slate-800 group-hover:text-indigo-600 transition-colors">
+                          {lead.name}
+                        </span>
+                        <span className="text-[10px] text-slate-400 font-medium">
+                          {lead.owner || "Unassigned"}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5 text-[11px] text-red-600 font-medium">
+                        <Clock size={11} className="text-red-500" />
+                        <span>{formatOverdueDuration(followDate)}</span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          <div className="pt-3 mt-3 border-t border-slate-100">
+            <button
+              onClick={() => navigate("/leads?filter=overdue")}
+              className="w-full py-2 text-xs font-semibold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50/50 rounded-xl transition-colors flex items-center justify-center gap-1"
+            >
+              <span>View All Overdue Leads</span>
+              <ChevronRight size={13} />
+            </button>
           </div>
         </div>
 

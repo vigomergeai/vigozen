@@ -6,9 +6,9 @@ import {
   User, X, CheckCircle, XCircle, Clock, Target, RefreshCw,
   AlertTriangle, ChevronLeft, ChevronRight, Upload, FileSpreadsheet,
   FileDown, CheckSquare, AlertCircle, Loader2, MessagesSquare, Lock,
-  Check, TrendingUp, Minus, Circle
+  Check, TrendingUp, Minus, Circle, Activity
 } from "lucide-react";
-import { useNavigate } from "react-router";
+import { useNavigate, useLocation } from "react-router";
 import { usePermissions } from "../hooks/usePermissions";
 import { hasModuleAccess, canWrite, isAdminRole, canEdit, canDelete, canExport } from "../utils/permissions";
 
@@ -72,6 +72,8 @@ interface LeadForm {
   status: LeadStatus; source: LeadSource; industry: Industry;
   value: string; notes: string; tags: string;
   owner: string; ownerId: string; probability: string; nextMeetingAt: string;
+  next_followup: string;
+  last_activity_date: string;
   lead_category: LeadCategory;
   reason_to_buy: ReasonToBuy | "";
 }
@@ -80,6 +82,8 @@ const emptyForm: LeadForm = {
   name: "", company: "", email: "", phone: "",
   status: "New", source: "Website", industry: "Technology",
   value: "", notes: "", tags: "", owner: "", ownerId: "", probability: "50", nextMeetingAt: "",
+  next_followup: "",
+  last_activity_date: "",
   lead_category: "Warm",
   reason_to_buy: "",
 };
@@ -99,6 +103,7 @@ export default function LeadsPage() {
   const canExportLeads = canExport(permissions, 'leads', role);
   const canConvertLeads = hasModuleAccess(permissions, 'leads', ['full', 'dept']);
   const navigate = useNavigate();
+  const location = useLocation();
   const [search, setSearch] = useState("");
   // ── Convert Lead Modal State ──
   const [showConvertModal, setShowConvertModal] = useState(false);
@@ -114,6 +119,16 @@ export default function LeadsPage() {
   const [categoryFilter, setCategoryFilter] = useState<string>("All");
   const [empFilter, setEmpFilter] = useState<string>("All");
   const [dateFilter, setDateFilter] = useState<"all" | "today" | "week" | "month">("all");
+  const [overdueOnly, setOverdueOnly] = useState<boolean>(() => {
+    return new URLSearchParams(window.location.search).get("filter") === "overdue";
+  });
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get("filter") === "overdue") {
+      setOverdueOnly(true);
+    }
+  }, [location.search]);
   const [sortField, setSortField] = useState<keyof Lead>("createdAt");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [showAddModal, setShowAddModal] = useState(false);
@@ -157,6 +172,19 @@ export default function LeadsPage() {
     if (sourceFilter !== "All") data = data.filter(l => l.source === sourceFilter);
     if (empFilter !== "All") data = data.filter(l => l.owner === empFilter);
     if (categoryFilter !== "All") data = data.filter(l => (l.lead_category || "Warm") === categoryFilter);
+    
+    // Overdue Follow-ups filter
+    if (overdueOnly) {
+      const now = new Date();
+      data = data.filter(l => {
+        const followDateStr = l.next_followup || l.nextFollowup || l.nextMeetingAt;
+        if (!followDateStr) return false;
+        const isClosed = ["won", "booking done", "token done", "lost", "unqualified"].includes(String(l.status).toLowerCase());
+        if (isClosed) return false;
+        return new Date(followDateStr) < now;
+      });
+    }
+
     const today = new Date();
     if (dateFilter === "today") {
       const todayStr = today.toISOString().split("T")[0];
@@ -175,7 +203,7 @@ export default function LeadsPage() {
       return sortDir === "asc" ? c : -c;
     });
     return data;
-  }, [myLeads, search, statusFilter, sourceFilter, categoryFilter, empFilter, dateFilter, sortField, sortDir]);
+  }, [myLeads, search, statusFilter, sourceFilter, categoryFilter, empFilter, dateFilter, overdueOnly, sortField, sortDir]);
 
   const paginated = filtered.slice((page - 1) * perPage, page * perPage);
   const totalPages = Math.ceil(filtered.length / perPage);
@@ -228,12 +256,15 @@ export default function LeadsPage() {
 
   const openEdit = (lead: Lead) => {
     setFormErrors({});
+    const nextFollow = lead.next_followup || lead.nextFollowup || lead.nextMeetingAt || "";
     setForm({
       name: lead.name, company: lead.company, email: lead.email, phone: lead.phone,
       status: lead.status, source: lead.source, industry: lead.industry,
       value: String(lead.value), notes: lead.notes, tags: lead.tags.join(", "),
       owner: lead.owner, ownerId: lead.ownerId, probability: String(lead.probability),
       nextMeetingAt: lead.nextMeetingAt ? lead.nextMeetingAt.slice(0, 16) : "",
+      next_followup: nextFollow ? nextFollow.slice(0, 16) : "",
+      last_activity_date: lead.last_activity_date || lead.lastActivityDate || lead.createdAt || "",
       lead_category: (lead.lead_category as LeadCategory) || "Warm",
       reason_to_buy: (lead.reason_to_buy as ReasonToBuy) || "",
     });
@@ -253,6 +284,7 @@ export default function LeadsPage() {
       return;
     }
     setSaving(true);
+    const followupIso = form.next_followup ? new Date(form.next_followup).toISOString() : (form.nextMeetingAt ? new Date(form.nextMeetingAt).toISOString() : null);
     const payload: Partial<Lead> = {
       name: form.name.trim(),
       company: form.company.trim(),
@@ -267,7 +299,9 @@ export default function LeadsPage() {
       owner: form.owner || currentUser.name,
       ownerId: form.ownerId || currentUser.employeeId,
       probability: Number(form.probability) || 50,
-      nextMeetingAt: form.nextMeetingAt ? new Date(form.nextMeetingAt).toISOString() : null,
+      nextMeetingAt: followupIso,
+      next_followup: followupIso,
+      nextFollowup: followupIso,
       createdAt: new Date().toISOString().split("T")[0],
       lead_category: form.lead_category,
       reason_to_buy: form.reason_to_buy || null,
@@ -281,6 +315,65 @@ export default function LeadsPage() {
     setEditLead(null);
     setForm(emptyForm);
     setFormErrors({});
+  };
+
+  const getFollowupBadge = (lead: Lead) => {
+    const followDateStr = lead.next_followup || lead.nextFollowup || lead.nextMeetingAt;
+    if (!followDateStr) return <span className="text-xs text-slate-400">—</span>;
+
+    const followDate = new Date(followDateStr);
+    const now = new Date();
+    const isClosed = ["won", "booking done", "token done", "lost", "unqualified"].includes(String(lead.status).toLowerCase());
+
+    const formattedTime = followDate.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+    const formattedDate = followDate.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+
+    if (isClosed) {
+      return (
+        <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-lg bg-slate-50 text-slate-500 border border-slate-200">
+          <Clock size={10} />
+          {formattedDate}, {formattedTime}
+        </span>
+      );
+    }
+
+    const isToday = followDate.toDateString() === now.toDateString();
+    const isOverdue = followDate < now;
+
+    if (isOverdue) {
+      const diffMs = now.getTime() - followDate.getTime();
+      const hours = Math.floor(diffMs / (1000 * 60 * 60));
+      const days = Math.floor(hours / 24);
+      const overdueText = days >= 1 ? `${days}d overdue` : `${Math.max(1, hours)}h overdue`;
+
+      return (
+        <div className="flex flex-col">
+          <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-lg bg-red-50 text-red-600 border border-red-200 w-fit">
+            <AlertTriangle size={11} className="text-red-500 flex-shrink-0" />
+            {overdueText}
+          </span>
+          <span className="text-[10px] text-slate-400 mt-0.5 ml-1">
+            {formattedDate}, {formattedTime}
+          </span>
+        </div>
+      );
+    }
+
+    if (isToday) {
+      return (
+        <span className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded-lg bg-amber-50 text-amber-700 border border-amber-200 w-fit">
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+          Today, {formattedTime}
+        </span>
+      );
+    }
+
+    return (
+      <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-lg bg-blue-50 text-blue-700 border border-blue-200">
+        <Clock size={10} />
+        {formattedDate}, {formattedTime}
+      </span>
+    );
   };
 
 const handleDelete = async (id: string) => {
@@ -791,6 +884,16 @@ return (
           </button>
         ))}
       </div>
+      <button
+        onClick={() => {
+          setOverdueOnly(prev => !prev);
+          setPage(1);
+        }}
+        className={`px-3 py-1.5 text-xs rounded-xl transition-all border flex items-center gap-1.5 font-medium ${overdueOnly ? "bg-red-500 text-white border-red-500 shadow-sm" : "bg-white text-slate-600 border-slate-200 hover:border-red-300 hover:text-red-600"}`}
+      >
+        <AlertTriangle size={12} className={overdueOnly ? "text-white" : "text-red-500"} />
+        Overdue Follow-ups
+      </button>
       {canDeleteLeadsSeq && selectedIds.length > 0 && (
         <div className="flex items-center gap-2 px-3 py-1.5 bg-red-50 border border-red-200 rounded-xl">
           <span className="text-xs text-red-600 font-medium">
@@ -898,7 +1001,7 @@ return (
                 )}
                 {visibleColumns.includes("nextMeeting") && (
                   <th className="text-left py-3 px-3 text-xs text-slate-500 font-medium">
-                    Next Meeting
+                    Next Follow-up
                   </th>
                 )}
                 {visibleColumns.includes("created") && (
@@ -1032,11 +1135,7 @@ return (
                     )}
                     {visibleColumns.includes("nextMeeting") && (
                       <td className="py-3 px-3">
-                        <div className="text-xs text-slate-500">
-                          {lead.nextMeetingAt
-                            ? new Date(lead.nextMeetingAt).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })
-                            : "—"}
-                        </div>
+                        {getFollowupBadge(lead)}
                       </td>
                     )}
                     {visibleColumns.includes("created") && (
@@ -1263,6 +1362,20 @@ return (
                   label: "Probability",
                   value: `${selectedLead.probability}%`,
                   icon: Target,
+                },
+                {
+                  label: "Next Follow-up",
+                  value: selectedLead.next_followup || selectedLead.nextFollowup || selectedLead.nextMeetingAt
+                    ? new Date(selectedLead.next_followup || selectedLead.nextFollowup || selectedLead.nextMeetingAt!).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })
+                    : "Not Scheduled",
+                  icon: Clock,
+                },
+                {
+                  label: "Last Activity",
+                  value: selectedLead.last_activity_date || selectedLead.lastActivityDate || selectedLead.createdAt
+                    ? new Date(selectedLead.last_activity_date || selectedLead.lastActivityDate || selectedLead.createdAt).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })
+                    : "—",
+                  icon: Activity,
                 },
               ].map(({ label, value, icon: Icon }) => (
                 <div key={label} className="bg-slate-50 rounded-xl p-3">
@@ -1659,21 +1772,44 @@ return (
             </div>
 
             <div>
-              <label className="block text-xs text-slate-500 mb-1.5">
-                Next Meeting
+              <label className="block text-xs text-slate-500 mb-1.5 font-medium">
+                Next Follow-up
               </label>
               <input
                 type="datetime-local"
-                value={form.nextMeetingAt}
+                value={form.next_followup || form.nextMeetingAt}
                 onChange={(e) =>
                   setForm((f) => ({
                     ...f,
+                    next_followup: e.target.value,
                     nextMeetingAt: e.target.value,
                   }))
                 }
                 className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 bg-slate-50"
               />
             </div>
+
+            {editLead && (
+              <div>
+                <label className="block text-xs text-slate-500 mb-1.5 font-medium">
+                  Last Activity (Read-only)
+                </label>
+                <div className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-slate-100 text-slate-600 flex items-center gap-1.5 cursor-not-allowed">
+                  <Clock size={13} className="text-slate-400" />
+                  <span className="text-xs">
+                    {form.last_activity_date
+                      ? new Date(form.last_activity_date).toLocaleString("en-IN", {
+                          day: "2-digit",
+                          month: "short",
+                          year: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })
+                      : "Just now"}
+                  </span>
+                </div>
+              </div>
+            )}
 
             <div>
               <label className="block text-xs text-slate-500 mb-1.5">

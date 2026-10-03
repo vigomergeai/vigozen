@@ -87,6 +87,10 @@ export interface Lead {
   lead_category?: LeadCategory;
   reason_to_buy?: ReasonToBuy | "" | null;
   dead_reason?: DeadReason | string | null;
+  next_followup?: string | null;
+  last_activity_date?: string | null;
+  nextFollowup?: string | null;
+  lastActivityDate?: string | null;
 }
 
 export interface Employee {

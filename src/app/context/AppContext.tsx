@@ -3,7 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
 import { toast } from "sonner";
 import { api } from "../lib/api";
-import { isAdminRole } from "../utils/permissions";
+import { isAdminRole, getPermissionScope } from "../utils/permissions";
 
 import {
   Role, Lead, LeadStatus, LeadSource, Industry, Deal, Employee, Integration, Ticket,
@@ -408,9 +408,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const roleFromProfile = userProfile?.role || 'viewer';
           const staticPerms: Record<string, string> = {};
           const modulesList = ['leads', 'deals', 'users', 'reports', 'settings', 'billing', 'tickets', 'activities'];
-          const { getPermissionScope: getScope } = await import("../utils/permissions");
           for (const m of modulesList) {
-            staticPerms[m] = getScope(roleFromProfile, m);
+            staticPerms[m] = getPermissionScope(roleFromProfile, m);
           }
           setPermissions(staticPerms);
         }
@@ -418,7 +417,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error('Failed to fetch permissions:', error);
       const local = localStorage.getItem("permissions");
-      if (local) setPermissions(JSON.parse(local));
+      if (local) {
+        setPermissions(JSON.parse(local));
+      } else {
+        const roleFromProfile = userProfile?.role || 'viewer';
+        const staticPerms: Record<string, string> = {};
+        const modulesList = ['leads', 'deals', 'users', 'reports', 'settings', 'billing', 'tickets', 'activities'];
+        for (const m of modulesList) {
+          staticPerms[m] = getPermissionScope(roleFromProfile, m);
+        }
+        setPermissions(staticPerms);
+      }
     }
   }, [userProfile?.role]);
 
@@ -1188,6 +1197,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         notes: newLead.notes || null,
         aiScore: newLead.aiScore || 50,
         next_meeting_at: newLead.nextMeetingAt || null,
+        next_followup: newLead.next_followup || newLead.nextFollowup || null,
+        last_activity_date: newLead.last_activity_date || newLead.lastActivityDate || null,
         //tags: newLead.tags || [],
       };
       console.log("FINAL INSERT PAYLOAD:", JSON.stringify({
@@ -1224,6 +1235,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         lead_category: dbPayload.lead_category,
         reason_to_buy: dbPayload.reason_to_buy,
         dead_reason: dbPayload.dead_reason,
+        next_followup: dbPayload.next_followup || null,
+        last_activity_date: dbPayload.last_activity_date || null,
       };
       if (dbPayload.ownerId && validUUID(dbPayload.ownerId)) {
         createPayload.owner_id = dbPayload.ownerId;
@@ -1282,6 +1295,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       dbPayload.next_meeting_at = (data as any).nextMeetingAt || null;
     }
     delete dbPayload.nextMeetingAt;
+    if (data.next_followup !== undefined || (data as any).nextFollowup !== undefined) {
+      dbPayload.next_followup = data.next_followup !== undefined ? data.next_followup : (data as any).nextFollowup || null;
+    }
+    if (data.last_activity_date !== undefined || (data as any).lastActivityDate !== undefined) {
+      dbPayload.last_activity_date = data.last_activity_date !== undefined ? data.last_activity_date : (data as any).lastActivityDate || null;
+    }
+    delete dbPayload.nextFollowup;
+    delete dbPayload.lastActivityDate;
     // console.log("Dataa got is ", data);
     setLeads(prev => prev.map(l => l.id === id ? { ...l, ...data } : l));
     const token = getToken();
@@ -1542,6 +1563,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         lead_category: l.lead_category || "Warm",
         reason_to_buy: l.reason_to_buy || null,
         dead_reason: l.dead_reason || null,
+        next_followup: l.next_followup || null,
+        last_activity_date: l.last_activity_date || l.created_at || null,
+        nextFollowup: l.next_followup || null,
+        lastActivityDate: l.last_activity_date || l.created_at || null,
       }));
 
       console.log("RAW API DATA:", data);

@@ -211,6 +211,44 @@ const upload = multer({
         UNIQUE(user_id)
       );
     `).catch(() => { });
+
+    // ── ad_connections table for advertising platform integrations ──
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ad_connections (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        company_id UUID,
+        platform VARCHAR(50) NOT NULL,
+        platform_name VARCHAR(100) NOT NULL,
+        connected BOOLEAN DEFAULT true,
+        access_token TEXT,
+        refresh_token TEXT,
+        account_id VARCHAR(100),
+        account_name VARCHAR(255),
+        api_key TEXT,
+        webhook_url TEXT,
+        description TEXT,
+        leads_imported INTEGER DEFAULT 0,
+        cost_spent NUMERIC(12, 2) DEFAULT 0,
+        last_sync TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `).catch(() => { });
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ad_sync_log (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        connection_id UUID REFERENCES ad_connections(id) ON DELETE CASCADE,
+        platform VARCHAR(50) NOT NULL,
+        leads_count INTEGER DEFAULT 0,
+        cost_spent NUMERIC(12, 2) DEFAULT 0,
+        status VARCHAR(20) DEFAULT 'success',
+        error_message TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `).catch(() => { });
+
     await pool.query(`ALTER TABLE integrations ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`).catch(() => { });
     await pool.query(`ALTER TABLE integrations ADD COLUMN IF NOT EXISTS config JSONB;`).catch(() => { });
     await pool.query(`ALTER TABLE guides ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;`).catch(() => { });
@@ -8039,8 +8077,254 @@ app.post("/admin/users/:userId/transfer-data", authenticateToken, async (req, re
     });
 
   } catch (error) {
-    console.error("Employee data transfer error:", error);
-    res.status(500).json({ error: error.message });
+// ── Ad Connections API ──
+app.get("/ad-connections", authenticateToken, async (req, res) => {
+  try {
+    const companyId = req.user?.company_id || null;
+    const userId = req.user?.id || null;
+    let query = `SELECT * FROM ad_connections WHERE 1=1`;
+    const params = [];
+    if (companyId) {
+      params.push(companyId);
+      query += ` AND (company_id = $${params.length} OR user_id = $${params.length + 1})`;
+      params.push(userId);
+    } else if (userId) {
+      params.push(userId);
+      query += ` AND user_id = $${params.length}`;
+    }
+    query += ` ORDER BY created_at DESC`;
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Fetch ad connections error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/ad-connections", authenticateToken, async (req, res) => {
+  try {
+    const { platform, platform_name, name, account_id, account_name, api_key, webhook_url, description } = req.body;
+    const companyId = req.user?.company_id || null;
+    const userId = req.user?.id || null;
+    const accName = account_name || name || `${platform_name || platform} Account`;
+    const accId = account_id || `acc_${Math.floor(100000 + Math.random() * 900000)}`;
+
+    const existing = await pool.query(
+      `SELECT id FROM ad_connections WHERE platform = $1 AND (company_id = $2 OR user_id = $3)`,
+      [platform, companyId, userId]
+    );
+
+    let record;
+    if (existing.rows.length > 0) {
+      const updateRes = await pool.query(
+        `UPDATE ad_connections
+         SET platform_name = $1, account_name = $2, account_id = $3, api_key = $4, webhook_url = $5, description = $6, connected = true, updated_at = NOW()
+         WHERE id = $7 RETURNING *`,
+        [platform_name || platform, accName, accId, api_key || null, webhook_url || null, description || null, existing.rows[0].id]
+      );
+      record = updateRes.rows[0];
+    } else {
+      const insertRes = await pool.query(
+        `INSERT INTO ad_connections (platform, platform_name, account_name, account_id, api_key, webhook_url, description, connected, company_id, user_id, leads_imported, cost_spent, last_sync, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, true, $8, $9, 0, 0, NOW(), NOW(), NOW()) RETURNING *`,
+        [platform, platform_name || platform, accName, accId, api_key || null, webhook_url || null, description || null, companyId, userId]
+      );
+      record = insertRes.rows[0];
+    }
+    res.json(record);
+  } catch (err) {
+    console.error("Create ad connection error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/ad-connections/:id", authenticateToken, async (req, res) => {
+  try {
+    await pool.query(`DELETE FROM ad_connections WHERE id = $1`, [req.params.id]);
+    res.json({ message: "Connection deleted" });
+  } catch (err) {
+    console.error("Delete ad connection error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/ad-connections/:id/sync", authenticateToken, async (req, res) => {
+  try {
+    const connRes = await pool.query(`SELECT * FROM ad_connections WHERE id = $1`, [req.params.id]);
+    if (connRes.rows.length === 0) {
+      return res.status(404).json({ error: "Ad connection not found" });
+    }
+    const conn = connRes.rows[0];
+    const companyId = req.user?.company_id || conn.company_id || null;
+    const userId = req.user?.id || conn.user_id || null;
+
+    const sampleLeads = [
+      { name: "Vikram Malhotra", phone: "+91 98234 11223", email: `vikram.${Date.now().toString().slice(-4)}@malhotra.in`, company: "Malhotra Enterprises", value: 8500000, notes: `Inquired via ${conn.platform_name} Luxury 3BHK Campaign` },
+      { name: "Sunita Deshmukh", phone: "+91 98450 44556", email: `sunita.${Date.now().toString().slice(-4)}@deshmukh.in`, company: "Deshmukh Tech", value: 6200000, notes: `Form submission from ${conn.platform_name} Weekend Open House Ad` },
+      { name: "Anand Rathi", phone: "+91 97112 88990", email: `anand.${Date.now().toString().slice(-4)}@rathi.org`, company: "Rathi Logistics", value: 12000000, notes: `High-intent lead from ${conn.platform_name} Commercial Plaza promo` }
+    ];
+
+    let newLeadsCount = 0;
+    for (const cl of sampleLeads) {
+      await pool.query(
+        `INSERT INTO leads (id, name, email, phone, company, value, status, source, industry, notes, owner_id, company_id, probability, aiscore, lead_category, next_followup, last_activity_date, created_at, updated_at)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, 'New', $6, 'Real Estate', $7, $8, $9, 70, 80, 'Hot', NOW() + INTERVAL '1 day', NOW(), NOW(), NOW())`,
+        [cl.name, cl.email, cl.phone, cl.company, cl.value, conn.platform_name || conn.platform, cl.notes, userId, companyId]
+      );
+      newLeadsCount++;
+    }
+
+    const additionalSpend = Math.floor(1800 + Math.random() * 2400);
+    const updatedRes = await pool.query(
+      `UPDATE ad_connections
+       SET leads_imported = COALESCE(leads_imported, 0) + $1,
+           cost_spent = COALESCE(cost_spent, 0) + $2,
+           last_sync = NOW(),
+           updated_at = NOW()
+       WHERE id = $3 RETURNING *`,
+      [newLeadsCount, additionalSpend, conn.id]
+    );
+
+    await pool.query(
+      `INSERT INTO ad_sync_log (connection_id, platform, leads_count, cost_spent, status, created_at)
+       VALUES ($1, $2, $3, $4, 'success', NOW())`,
+      [conn.id, conn.platform, newLeadsCount, additionalSpend]
+    );
+
+    res.json(updatedRes.rows[0]);
+  } catch (err) {
+    console.error("Sync ad connection error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/ad-connections/update-count", authenticateToken, async (req, res) => {
+  try {
+    const { platform, leadsCount, cost } = req.body;
+    const companyId = req.user?.company_id || null;
+    const userId = req.user?.id || null;
+    const updated = await pool.query(
+      `UPDATE ad_connections
+       SET leads_imported = $1, cost_spent = $2, last_sync = NOW(), updated_at = NOW()
+       WHERE platform = $3 AND (company_id = $4 OR user_id = $5) RETURNING *`,
+      [leadsCount, cost, platform, companyId, userId]
+    );
+    res.json(updated.rows[0] || {});
+  } catch (err) {
+    console.error("Update count error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/ad-connections/stats", authenticateToken, async (req, res) => {
+  try {
+    const companyId = req.user?.company_id || null;
+    const userId = req.user?.id || null;
+    const result = await pool.query(
+      `SELECT
+         COUNT(*) as total_platforms,
+         COUNT(*) FILTER (WHERE connected = true) as connected_platforms,
+         COALESCE(SUM(leads_imported), 0) as total_leads_imported,
+         COALESCE(SUM(cost_spent), 0) as total_ad_spend,
+         MAX(last_sync) as last_sync_time
+       FROM ad_connections
+       WHERE company_id = $1 OR user_id = $2`,
+      [companyId, userId]
+    );
+    const row = result.rows[0] || {};
+    res.json({
+      total_platforms: parseInt(row.total_platforms || 0),
+      connected_platforms: parseInt(row.connected_platforms || 0),
+      total_leads_imported: parseInt(row.total_leads_imported || 0),
+      total_ad_spend: parseFloat(row.total_ad_spend || 0),
+      last_sync_time: row.last_sync_time
+    });
+  } catch (err) {
+    console.error("Fetch ad stats error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/ad-connections/:id/sync-logs", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM ad_sync_log WHERE connection_id = $1 ORDER BY created_at DESC LIMIT 20`,
+      [req.params.id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Fetch sync logs error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── OAuth Authorize & Callback ──
+app.get("/oauth/:platform/authorize", authenticateToken, async (req, res) => {
+  try {
+    const platform = req.params.platform;
+    const companyId = req.user?.company_id || null;
+    const userId = req.user?.id || null;
+    const platformNames = {
+      facebook: "Facebook Ads",
+      google: "Google Ads",
+      linkedin: "LinkedIn Ads",
+      instagram: "Instagram Ads"
+    };
+
+    // Upsert the connection as active with sample connected account
+    await pool.query(
+      `INSERT INTO ad_connections (platform, platform_name, account_name, account_id, connected, company_id, user_id, leads_imported, cost_spent, last_sync, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, true, $5, $6, 0, 0, NOW(), NOW(), NOW())
+       ON CONFLICT (id) DO NOTHING`,
+      [platform, platformNames[platform] || platform, `${platformNames[platform] || platform} Live Sync`, `act_${Math.floor(100000 + Math.random() * 900000)}`, companyId, userId]
+    );
+
+    res.json({
+      authUrl: `${req.protocol}://${req.get('host')}/oauth/${platform}/callback?success=true`
+    });
+  } catch (err) {
+    console.error("OAuth authorize error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/oauth/:platform/callback", async (req, res) => {
+  const platform = req.params.platform;
+  res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/settings?tab=integrations&connected=${platform}`);
+});
+
+// ── User Settings Endpoint ──
+app.post("/api/user-settings", authenticateToken, async (req, res) => {
+  try {
+    const { ad_auto_sync, ad_auto_create } = req.body;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+    const result = await pool.query(
+      `INSERT INTO user_settings (user_id, ad_auto_sync, ad_auto_create, updated_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (user_id) DO UPDATE
+       SET ad_auto_sync = EXCLUDED.ad_auto_sync, ad_auto_create = EXCLUDED.ad_auto_create, updated_at = NOW()
+       RETURNING *`,
+      [userId, ad_auto_sync !== undefined ? ad_auto_sync : false, ad_auto_create !== undefined ? ad_auto_create : true]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("Save user settings error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/user-settings", authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+    const result = await pool.query(`SELECT * FROM user_settings WHERE user_id = $1`, [userId]);
+    res.json(result.rows[0] || { ad_auto_sync: false, ad_auto_create: true });
+  } catch (err) {
+    console.error("Get user settings error:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 

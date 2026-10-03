@@ -225,8 +225,10 @@ const upload = multer({
     await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS lead_category VARCHAR(50) DEFAULT 'Warm';`).catch(() => { });
     await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS reason_to_buy VARCHAR(100);`).catch(() => { });
         await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS dead_reason VARCHAR(255);`).catch(() => { });
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_leads_dead_reason ON leads(dead_reason);`).catch(() => { });
     await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS next_followup TIMESTAMP;`).catch(() => { });
+    await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_activity_date TIMESTAMPTZ DEFAULT NOW();`).catch(() => { });
+    await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS followup_notified BOOLEAN DEFAULT false;`).catch(() => { });
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_leads_next_followup ON leads(next_followup);`).catch(() => { });
     await pool.query(`UPDATE leads SET converted_to_deal = false WHERE converted_to_deal IS NULL;`).catch(() => { });
     await pool.query(`ALTER TABLE deals DROP CONSTRAINT IF EXISTS deals_stage_check;`).catch(() => { });
     await pool.query(`ALTER TABLE lead_comments ADD COLUMN IF NOT EXISTS user_name VARCHAR(255);`).catch(() => { });

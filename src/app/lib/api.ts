@@ -329,6 +329,8 @@ export const api = {
       request("GET", `/api/reports/status-wise${start && end ? `?startDate=${start}&endDate=${end}` : ''}`, undefined, token),
     getSalesWise: (token?: string, start?: string, end?: string) =>
       request("GET", `/api/reports/sales-wise${start && end ? `?startDate=${start}&endDate=${end}` : ''}`, undefined, token),
+    getPaymentSchedules: (token?: string, start?: string, end?: string) =>
+      request("GET", `/api/reports/payment-schedules${start && end ? `?startDate=${start}&endDate=${end}` : ''}`, undefined, token),
     exportCSV: (token?: string) => request("GET", "/api/reports/export/csv", undefined, token),
     exportPDF: (token?: string) => request("GET", "/api/reports/export/pdf", undefined, token),
   },

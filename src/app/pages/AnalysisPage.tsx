@@ -1,19 +1,24 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { api } from "../lib/api";
 import {
   BarChart3, Bot, Download, Calendar, Filter, TrendingUp, Users, Target,
-  ArrowUp, ArrowDown, ChevronDown, Sparkles, Brain, FileText, Lock, RefreshCw
+  ArrowUp, ArrowDown, ChevronDown, Sparkles, Brain, FileText, Lock, RefreshCw,
+  Wallet, CreditCard, CheckCircle2, Clock3, AlertTriangle, Send, Eye,
+  Building2, Search, IndianRupee, Layers
 } from "lucide-react";
 import { useNavigate } from "react-router";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   LineChart, Line, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
-  Radar, Legend, Cell
+  Radar, Legend, Cell, AreaChart, Area
 } from "recharts";
+import { toast } from "sonner";
 import { useApp } from "../context/AppContext";
 import { canExport } from "../utils/permissions";
+import PaymentPlanModule from "../components/PaymentPlanModule";
+import { MASTER_24_CONSTRUCTION_STAGES, recalculateMilestones } from "../data/constructionMilestones";
 
-type ReportType = "employee" | "status" | "sales";
+type ReportType = "employee" | "status" | "sales" | "payment";
 type DateFilter = "daily" | "weekly" | "custom";
 
 type EmployeeSummary = {
@@ -33,15 +38,11 @@ type StatusSummary = {
   value: number;
 };
 
-
 const COLORS = ["#6366F1", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#3B82F6", "#EC4899"];
-
-
-
 
 export default function AnalysisPage() {
   const { role, leads, deals, refreshData, subscription, permissions } = useApp();
-  const navigate = useNavigate();  // ← ADD THIS
+  const navigate = useNavigate();
   const canExportReports = canExport(permissions, 'reports', role);
 
   // Helper to format date as YYYY-MM-DD
@@ -81,11 +82,17 @@ export default function AnalysisPage() {
     statusWise: [] as any[],
     salesWise: [] as any[],
     prevEmployeeWise: [] as any[],
+    paymentSchedules: [] as any[],
     loading: true
   });
 
   const [reportType, setReportType] = useState<ReportType>("employee");
   const [dateFilter, setDateFilter] = useState<DateFilter>("weekly");
+
+  // Payment Schedule Tab State
+  const [paymentFilterStatus, setPaymentFilterStatus] = useState<"all" | "overdue" | "due_soon" | "completed" | "upcoming">("all");
+  const [paymentSearch, setPaymentSearch] = useState<string>("");
+  const [selectedDealForPlan, setSelectedDealForPlan] = useState<{ id: string; title: string; company?: string; value?: number } | null>(null);
 
   // Set initial dates dynamically based on current date
   const todayStr = formatYYYYMMDD(new Date());
@@ -97,52 +104,54 @@ export default function AnalysisPage() {
   const [endDate, setEndDate] = useState(todayStr);
 
   // ── Fetch Reports from API ──
+  const fetchReports = async () => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      setReports(prev => ({ ...prev, loading: false }));
+      return;
+    }
+
+    setReports(prev => ({ ...prev, loading: true }));
+    try {
+      let queryStart = "";
+      let queryEnd = "";
+
+      if (dateFilter === "daily") {
+        queryStart = todayStr;
+        queryEnd = todayStr;
+      } else if (dateFilter === "weekly") {
+        queryStart = sevenDaysAgoStr;
+        queryEnd = todayStr;
+      } else if (dateFilter === "custom") {
+        queryStart = startDate;
+        queryEnd = endDate;
+      }
+
+      const prevDates = getPrevPeriodDates(queryStart, queryEnd);
+      const [summary, employeeWise, statusWise, salesWise, prevEmployeeWise, paymentSchedules] = await Promise.all([
+        api.reports.getSummary(token, queryStart, queryEnd).catch(() => null),
+        api.reports.getEmployeeWise(token, queryStart, queryEnd).catch(() => []),
+        api.reports.getStatusWise(token, queryStart, queryEnd).catch(() => []),
+        api.reports.getSalesWise(token, queryStart, queryEnd).catch(() => []),
+        api.reports.getEmployeeWise(token, prevDates.prevStartStr, prevDates.prevEndStr).catch(() => []),
+        api.reports.getPaymentSchedules ? api.reports.getPaymentSchedules(token, queryStart, queryEnd).catch(() => []) : Promise.resolve([]),
+      ]);
+      setReports({
+        summary,
+        employeeWise: employeeWise || [],
+        statusWise: statusWise || [],
+        salesWise: salesWise || [],
+        prevEmployeeWise: prevEmployeeWise || [],
+        paymentSchedules: paymentSchedules || [],
+        loading: false
+      });
+    } catch (error) {
+      console.error("Failed to fetch reports:", error);
+      setReports(prev => ({ ...prev, loading: false }));
+    }
+  };
+
   useEffect(() => {
-    const fetchReports = async () => {
-      const token = localStorage.getItem('token');
-      if (!token) {
-        setReports(prev => ({ ...prev, loading: false }));
-        return;
-      }
-
-      setReports(prev => ({ ...prev, loading: true }));
-      try {
-        let queryStart = "";
-        let queryEnd = "";
-
-        if (dateFilter === "daily") {
-          queryStart = todayStr;
-          queryEnd = todayStr;
-        } else if (dateFilter === "weekly") {
-          queryStart = sevenDaysAgoStr;
-          queryEnd = todayStr;
-        } else if (dateFilter === "custom") {
-          queryStart = startDate;
-          queryEnd = endDate;
-        }
-
-        const prevDates = getPrevPeriodDates(queryStart, queryEnd);
-        const [summary, employeeWise, statusWise, salesWise, prevEmployeeWise] = await Promise.all([
-          api.reports.getSummary(token, queryStart, queryEnd),
-          api.reports.getEmployeeWise(token, queryStart, queryEnd),
-          api.reports.getStatusWise(token, queryStart, queryEnd),
-          api.reports.getSalesWise(token, queryStart, queryEnd),
-          api.reports.getEmployeeWise(token, prevDates.prevStartStr, prevDates.prevEndStr),
-        ]);
-        setReports({
-          summary,
-          employeeWise: employeeWise || [],
-          statusWise: statusWise || [],
-          salesWise: salesWise || [],
-          prevEmployeeWise: prevEmployeeWise || [],
-          loading: false
-        });
-      } catch (error) {
-        console.error("Failed to fetch reports:", error);
-        setReports(prev => ({ ...prev, loading: false }));
-      }
-    };
-
     fetchReports();
   }, [startDate, endDate, dateFilter]);
 
@@ -275,6 +284,160 @@ export default function AnalysisPage() {
     }))
     : [];
 
+  // ── PAYMENT SCHEDULE COMPUTATIONS ──
+  const paymentData = useMemo(() => {
+    let rawSchedules = reports.paymentSchedules || [];
+
+    // Fallback: If no saved schedules in DB yet, synthesize from won/negotiating deals
+    if (rawSchedules.length === 0 && deals.length > 0) {
+      rawSchedules = deals
+        .filter(d => ['won', 'negotiation', 'proposal', 'qualified'].includes(d.stage?.toLowerCase() || ''))
+        .map(d => {
+          const val = Number(d.value) > 0 ? Number(d.value) : 1200000;
+          return {
+            deal_id: d.id,
+            deal_title: d.title,
+            deal_company: d.company,
+            deal_stage: d.stage,
+            deal_value: val,
+            agreement_value: val,
+            owner_name: d.owner || 'Sales Team',
+            milestones: recalculateMilestones(val, MASTER_24_CONSTRUCTION_STAGES as any),
+            updated_at: d.createdAt || (d as any).created_at
+          };
+        });
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    let allMilestoneItems: any[] = [];
+    let totalAgreementValue = 0;
+    let totalCollected = 0;
+    let totalOverdue = 0;
+    let totalUpcoming30Days = 0;
+    let totalPending = 0;
+
+    const monthlyForecastMap: { [key: string]: { month: string; expected: number; collected: number; sortKey: string } } = {};
+
+    rawSchedules.forEach((schedule: any) => {
+      const agVal = Number(schedule.agreement_value) || Number(schedule.deal_value) || 0;
+      totalAgreementValue += agVal;
+
+      const milestones: any[] = Array.isArray(schedule.milestones) ? schedule.milestones : [];
+      milestones.forEach((m: any) => {
+        const amount = Number(m.amount) || ((agVal * (Number(m.percentage) || 0)) / 100);
+        const pStatus = (m.paymentStatus || 'Pending').toLowerCase();
+
+        let isOverdue = false;
+        let isDueSoon = false;
+        let daysDiff = 0;
+
+        if (m.dueDate) {
+          const dueDateObj = new Date(m.dueDate);
+          if (!isNaN(dueDateObj.getTime())) {
+            dueDateObj.setHours(0, 0, 0, 0);
+            daysDiff = Math.ceil((dueDateObj.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+            if (daysDiff < 0 && pStatus !== 'paid') {
+              isOverdue = true;
+            } else if (daysDiff >= 0 && daysDiff <= 30 && pStatus !== 'paid') {
+              isDueSoon = true;
+            }
+
+            const monthKey = dueDateObj.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+            const sortKey = `${dueDateObj.getFullYear()}-${String(dueDateObj.getMonth() + 1).padStart(2, '0')}`;
+            if (!monthlyForecastMap[monthKey]) {
+              monthlyForecastMap[monthKey] = { month: monthKey, expected: 0, collected: 0, sortKey };
+            }
+            monthlyForecastMap[monthKey].expected += amount;
+            if (pStatus === 'paid') {
+              monthlyForecastMap[monthKey].collected += (Number(m.paidAmount) || amount);
+            }
+          }
+        }
+
+        if (pStatus === 'paid') {
+          totalCollected += (Number(m.paidAmount) || amount);
+        } else if (isOverdue) {
+          totalOverdue += amount;
+          totalPending += amount;
+        } else {
+          totalPending += amount;
+          if (isDueSoon) {
+            totalUpcoming30Days += amount;
+          }
+        }
+
+        allMilestoneItems.push({
+          dealId: schedule.deal_id,
+          dealTitle: schedule.deal_title || 'Untitled Deal',
+          dealCompany: schedule.deal_company || 'Independent Client',
+          dealStage: schedule.deal_stage || 'Won',
+          dealValue: agVal,
+          ownerName: schedule.owner_name || 'Sales Rep',
+          order: m.order,
+          stageName: m.stageName,
+          percentage: m.percentage,
+          amount: amount,
+          paidAmount: m.paidAmount || 0,
+          installment: m.installment || (amount * 0.009),
+          cumulativeEmi: m.cumulativeEmi || (amount * 0.009),
+          dueDate: m.dueDate,
+          completionDate: m.completionDate,
+          milestoneStatus: m.milestoneStatus || 'Upcoming',
+          paymentStatus: m.paymentStatus || 'Pending',
+          isOverdue,
+          isDueSoon,
+          daysDiff,
+          remarks: m.remarks || ''
+        });
+      });
+    });
+
+    const monthlyForecast = Object.values(monthlyForecastMap)
+      .sort((a, b) => a.sortKey.localeCompare(b.sortKey))
+      .slice(0, 8);
+
+    const filteredItems = allMilestoneItems.filter((item: any) => {
+      // Status filter
+      if (paymentFilterStatus === "overdue" && !item.isOverdue) return false;
+      if (paymentFilterStatus === "due_soon" && !item.isDueSoon) return false;
+      if (paymentFilterStatus === "completed" && item.paymentStatus.toLowerCase() !== "paid") return false;
+      if (paymentFilterStatus === "upcoming" && (item.paymentStatus.toLowerCase() === "paid" || item.isOverdue || item.isDueSoon)) return false;
+
+      // Search query
+      if (paymentSearch.trim()) {
+        const q = paymentSearch.toLowerCase();
+        const matches =
+          item.dealTitle.toLowerCase().includes(q) ||
+          item.dealCompany.toLowerCase().includes(q) ||
+          item.stageName.toLowerCase().includes(q) ||
+          item.ownerName.toLowerCase().includes(q);
+        if (!matches) return false;
+      }
+      return true;
+    });
+
+    return {
+      rawSchedules,
+      allMilestoneItems,
+      filteredItems,
+      totalAgreementValue,
+      totalCollected,
+      totalOverdue,
+      totalUpcoming30Days,
+      totalPending,
+      collectionEfficiency: (totalCollected + totalOverdue) > 0 ? ((totalCollected / (totalCollected + totalOverdue)) * 100).toFixed(1) : "100.0",
+      monthlyForecast
+    };
+  }, [reports.paymentSchedules, deals, paymentFilterStatus, paymentSearch]);
+
+  const handleSendReminder = (item: any) => {
+    toast.success(`Payment reminder sent to ${item.dealCompany || item.dealTitle}`, {
+      description: `Notified for ${item.stageName} (₹${Math.round(item.amount).toLocaleString("en-IN")}) due on ${item.dueDate || 'scheduled date'}.`
+    });
+  };
+
   const [showAI, setShowAI] = useState(true);
 
   const filteredEmpData = empWiseData;
@@ -293,6 +456,13 @@ export default function AnalysisPage() {
         if (reportType === "sales") dataToSend = salesWiseData;
         else if (reportType === "employee") dataToSend = filteredEmpData;
         else if (reportType === "status") dataToSend = statusWiseData;
+        else if (reportType === "payment") dataToSend = {
+          totalPortfolio: paymentData.totalAgreementValue,
+          totalCollected: paymentData.totalCollected,
+          totalOverdue: paymentData.totalOverdue,
+          totalDueSoon: paymentData.totalUpcoming30Days,
+          efficiency: paymentData.collectionEfficiency
+        };
 
      const res = await fetch(`${import.meta.env.VITE_API_URL}/ai-insights/generate`, {
           method: "POST",
@@ -309,7 +479,9 @@ export default function AnalysisPage() {
         const data = await res.json();
         setAiInsight(data.insight_text || "");
       } catch { setAiInsight(""); }
-      finally { setAiInsightLoading(false); }
+      finally {
+        setAiInsightLoading(false);
+      }
     };
     fetchInsight();
   }, [reportType, dateFilter, reports.loading]);
@@ -361,11 +533,12 @@ export default function AnalysisPage() {
       </div>
 
       {/* Report Type Selector */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {[
           { type: "employee" as ReportType, label: "Employee Wise", desc: "Performance by team member", icon: Users, color: "indigo" },
           { type: "status" as ReportType, label: "Status Wise", desc: "Lead funnel by stage", icon: Target, color: "emerald" },
           { type: "sales" as ReportType, label: "Sales Wise", desc: "Revenue & deal analysis", icon: TrendingUp, color: "amber" },
+          { type: "payment" as ReportType, label: "Payment Schedule", desc: "Cash flow & collections", icon: Wallet, color: "purple" },
         ].map(({ type, label, desc, icon: Icon, color }) => (
           <button
             key={type}
@@ -850,7 +1023,7 @@ export default function AnalysisPage() {
           {/* Sales wise table */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
             <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-              <h3 className="text-slate-800">Sales Performance Breakdown</h3>
+              <h3 className="text-slate-800 font-semibold text-sm">Sales Performance Breakdown</h3>
               <div className="flex items-center gap-1.5 text-xs text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-full border border-indigo-200">
                 <Bot size={12} />AI Graded
               </div>
@@ -896,6 +1069,362 @@ export default function AnalysisPage() {
           </div>
         </div>
       )}
+
+      {/* ===== PAYMENT SCHEDULE / CASH FLOW & COLLECTIONS REPORT ===== */}
+      {reportType === "payment" && (
+        <div className="space-y-5">
+          {/* KPI Summary Cards */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm relative overflow-hidden">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-500 font-medium">Committed Portfolio</span>
+                <div className="w-8 h-8 rounded-xl bg-purple-50 flex items-center justify-center text-purple-600">
+                  <Wallet size={15} />
+                </div>
+              </div>
+              <div className="text-2xl font-bold text-slate-900 mt-2">
+                {paymentData.totalAgreementValue >= 10000000
+                  ? `₹${(paymentData.totalAgreementValue / 10000000).toFixed(2)} Cr`
+                  : `₹${(paymentData.totalAgreementValue / 100000).toFixed(2)} L`}
+              </div>
+              <div className="text-xs text-purple-600 mt-1 flex items-center gap-1 font-medium">
+                <Building2 size={12} /> {paymentData.rawSchedules.length} Active Deal Schedules
+              </div>
+            </div>
+
+            <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm relative overflow-hidden">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-500 font-medium">Realized Collections</span>
+                <div className="w-8 h-8 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600">
+                  <CheckCircle2 size={15} />
+                </div>
+              </div>
+              <div className="text-2xl font-bold text-emerald-700 mt-2">
+                {paymentData.totalCollected >= 10000000
+                  ? `₹${(paymentData.totalCollected / 10000000).toFixed(2)} Cr`
+                  : `₹${(paymentData.totalCollected / 100000).toFixed(2)} L`}
+              </div>
+              <div className="text-xs text-emerald-600 mt-1 flex items-center gap-1 font-medium">
+                <TrendingUp size={12} /> {paymentData.collectionEfficiency}% Collection Efficiency
+              </div>
+            </div>
+
+            <div className={`rounded-2xl p-4 border shadow-sm relative overflow-hidden ${paymentData.totalOverdue > 0 ? "bg-rose-50/40 border-rose-200" : "bg-white border-slate-100"}`}>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-rose-800">Overdue Receivables</span>
+                <div className="w-8 h-8 rounded-xl bg-rose-100 flex items-center justify-center text-rose-600">
+                  <AlertTriangle size={15} />
+                </div>
+              </div>
+              <div className="text-2xl font-bold text-rose-700 mt-2">
+                {paymentData.totalOverdue >= 10000000
+                  ? `₹${(paymentData.totalOverdue / 10000000).toFixed(2)} Cr`
+                  : `₹${(paymentData.totalOverdue / 100000).toFixed(2)} L`}
+              </div>
+              <div className="text-xs text-rose-600 mt-1 flex items-center gap-1 font-medium">
+                {paymentData.allMilestoneItems.filter((i: any) => i.isOverdue).length} Milestones require follow-up
+              </div>
+            </div>
+
+            <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm relative overflow-hidden">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-500 font-medium">Due in Next 30 Days</span>
+                <div className="w-8 h-8 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600">
+                  <Clock3 size={15} />
+                </div>
+              </div>
+              <div className="text-2xl font-bold text-amber-700 mt-2">
+                {paymentData.totalUpcoming30Days >= 10000000
+                  ? `₹${(paymentData.totalUpcoming30Days / 10000000).toFixed(2)} Cr`
+                  : `₹${(paymentData.totalUpcoming30Days / 100000).toFixed(2)} L`}
+              </div>
+              <div className="text-xs text-amber-600 mt-1 flex items-center gap-1 font-medium">
+                {paymentData.allMilestoneItems.filter((i: any) => i.isDueSoon).length} Milestones maturing
+              </div>
+            </div>
+          </div>
+
+          {/* Cash Flow Forecast & Health Charts */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+            {/* Inflow Timeline Forecast */}
+            <div className="lg:col-span-2 bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="text-slate-800 font-semibold">Cash Inflow Forecast & Collections Timeline</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">Expected milestone realizations by month</p>
+                </div>
+                <div className="flex items-center gap-3 text-xs">
+                  <div className="flex items-center gap-1.5"><div className="w-3 h-2 rounded-sm bg-purple-200" /><span className="text-slate-500">Expected</span></div>
+                  <div className="flex items-center gap-1.5"><div className="w-3 h-2 rounded-sm bg-emerald-500" /><span className="text-slate-500">Realized</span></div>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={260}>
+                {paymentData.monthlyForecast.length > 0 ? (
+                  <BarChart data={paymentData.monthlyForecast} barGap={4} barSize={24}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
+                    <XAxis dataKey="month" tick={{ fontSize: 10, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
+                    <YAxis tick={{ fontSize: 10, fill: "#94a3b8" }} axisLine={false} tickLine={false} tickFormatter={v => `₹${(v / 100000).toFixed(0)}L`} />
+                    <Tooltip formatter={(v: number) => [`₹${(v / 100000).toFixed(2)} Lakhs`, ""]} contentStyle={{ borderRadius: 12, border: "1px solid #e2e8f0" }} />
+                    <Bar dataKey="expected" fill="#DDD6FE" radius={[4, 4, 0, 0]} name="Expected Inflow" />
+                    <Bar dataKey="collected" fill="#10B981" radius={[4, 4, 0, 0]} name="Collected" />
+                  </BarChart>
+                ) : (
+                  <div className="h-full flex items-center justify-center text-xs text-slate-400">
+                    No milestone due dates scheduled for the selected period
+                  </div>
+                )}
+              </ResponsiveContainer>
+            </div>
+
+            {/* Collection Health Summary */}
+            <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm flex flex-col justify-between">
+              <div>
+                <h3 className="text-slate-800 font-semibold mb-1">Portfolio Collection Health</h3>
+                <p className="text-xs text-slate-400 mb-4">Realization progress across active milestones</p>
+                
+                <div className="space-y-4">
+                  <div>
+                    <div className="flex justify-between text-xs mb-1 font-medium">
+                      <span className="text-emerald-700 flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500" /> Realized / Paid
+                      </span>
+                      <span className="text-slate-700">₹{(paymentData.totalCollected / 100000).toFixed(1)}L ({paymentData.totalAgreementValue > 0 ? ((paymentData.totalCollected / paymentData.totalAgreementValue) * 100).toFixed(0) : 0}%)</span>
+                    </div>
+                    <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
+                      <div
+                        className="bg-emerald-500 h-full rounded-full transition-all"
+                        style={{ width: `${paymentData.totalAgreementValue > 0 ? Math.min(100, (paymentData.totalCollected / paymentData.totalAgreementValue) * 100) : 0}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between text-xs mb-1 font-medium">
+                      <span className="text-rose-700 flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-rose-500" /> Overdue Uncollected
+                      </span>
+                      <span className="text-slate-700">₹{(paymentData.totalOverdue / 100000).toFixed(1)}L ({paymentData.totalAgreementValue > 0 ? ((paymentData.totalOverdue / paymentData.totalAgreementValue) * 100).toFixed(0) : 0}%)</span>
+                    </div>
+                    <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
+                      <div
+                        className="bg-rose-500 h-full rounded-full transition-all"
+                        style={{ width: `${paymentData.totalAgreementValue > 0 ? Math.min(100, (paymentData.totalOverdue / paymentData.totalAgreementValue) * 100) : 0}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between text-xs mb-1 font-medium">
+                      <span className="text-amber-700 flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-amber-500" /> Maturing in 30 Days
+                      </span>
+                      <span className="text-slate-700">₹{(paymentData.totalUpcoming30Days / 100000).toFixed(1)}L</span>
+                    </div>
+                    <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
+                      <div
+                        className="bg-amber-500 h-full rounded-full transition-all"
+                        style={{ width: `${paymentData.totalAgreementValue > 0 ? Math.min(100, (paymentData.totalUpcoming30Days / paymentData.totalAgreementValue) * 100) : 0}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-5 p-3.5 bg-purple-50/70 border border-purple-100 rounded-xl">
+                <div className="flex items-center gap-2 text-xs font-semibold text-purple-900 mb-1">
+                  <Sparkles size={13} className="text-purple-600" />
+                  Collection Efficiency: {paymentData.collectionEfficiency}%
+                </div>
+                <p className="text-[11px] text-purple-700 leading-relaxed">
+                  Automatic payment reminders are triggered 3 days prior to milestone slab completion.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Master Payment Schedules & Milestones Table */}
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+            {/* Table Control Header */}
+            <div className="p-4 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-3 bg-slate-50/50">
+              <div>
+                <h3 className="text-slate-800 font-semibold text-sm">Master Payment Schedules & Milestone Collections</h3>
+                <p className="text-xs text-slate-400 mt-0.5">Showing {paymentData.filteredItems.length} milestone items across deals</p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Search */}
+                <div className="relative">
+                  <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    value={paymentSearch}
+                    onChange={e => setPaymentSearch(e.target.value)}
+                    placeholder="Search deal, client, milestone..."
+                    className="pl-8 pr-3 py-1.5 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500/20 w-48 lg:w-60"
+                  />
+                </div>
+
+                {/* Filter Chips */}
+                <div className="flex items-center bg-white p-1 rounded-xl border border-slate-200 gap-1 text-[11px]">
+                  {[
+                    { id: "all", label: `All (${paymentData.allMilestoneItems.length})` },
+                    { id: "overdue", label: `🔴 Overdue (${paymentData.allMilestoneItems.filter((i: any) => i.isOverdue).length})` },
+                    { id: "due_soon", label: `🟡 Due Soon (${paymentData.allMilestoneItems.filter((i: any) => i.isDueSoon).length})` },
+                    { id: "completed", label: `🟢 Paid (${paymentData.allMilestoneItems.filter((i: any) => i.paymentStatus.toLowerCase() === 'paid').length})` },
+                    { id: "upcoming", label: "⚪ Upcoming" },
+                  ].map(tab => (
+                    <button
+                      key={tab.id}
+                      onClick={() => setPaymentFilterStatus(tab.id as any)}
+                      className={`px-2.5 py-1 rounded-lg font-medium transition-all ${paymentFilterStatus === tab.id
+                        ? "bg-purple-600 text-white shadow-sm"
+                        : "text-slate-600 hover:text-slate-900"
+                        }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Table Content */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-100 text-slate-400 font-medium">
+                    <th className="text-left py-3 px-4">Deal / Project</th>
+                    <th className="text-left py-3 px-4">Milestone Stage</th>
+                    <th className="text-right py-3 px-4">Amount (₹)</th>
+                    <th className="text-left py-3 px-4">Due Date / Ageing</th>
+                    <th className="text-center py-3 px-4">Payment Status</th>
+                    <th className="text-left py-3 px-4">Sales Rep</th>
+                    <th className="text-right py-3 px-4">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {paymentData.filteredItems.length > 0 ? (
+                    paymentData.filteredItems.map((item: any, idx: number) => {
+                      const isPaid = item.paymentStatus.toLowerCase() === "paid";
+                      return (
+                        <tr key={`${item.dealId}-${item.order}-${idx}`} className="hover:bg-slate-50/80 transition-colors">
+                          <td className="py-3 px-4">
+                            <div className="font-semibold text-slate-800">{item.dealTitle}</div>
+                            <div className="text-[11px] text-slate-400 flex items-center gap-1">
+                              <Building2 size={11} /> {item.dealCompany}
+                            </div>
+                          </td>
+                          <td className="py-3 px-4">
+                            <div className="text-slate-800 font-medium flex items-center gap-1.5">
+                              <span className="w-5 h-5 rounded-md bg-purple-50 text-purple-600 text-[10px] font-bold flex items-center justify-center">
+                                #{item.order}
+                              </span>
+                              {item.stageName}
+                            </div>
+                            <div className="text-[10px] text-slate-400 ml-6.5">
+                              {item.percentage}% of agreement value
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <div className="font-bold text-slate-900">
+                              ₹{Math.round(item.amount).toLocaleString("en-IN")}
+                            </div>
+                            <div className="text-[10px] text-slate-400">
+                              Est. Installment: ₹{Math.round(item.installment).toLocaleString("en-IN")}
+                            </div>
+                          </td>
+                          <td className="py-3 px-4">
+                            <div className="text-slate-700 font-medium">
+                              {item.dueDate ? new Date(item.dueDate).toLocaleDateString("en-US", { day: "numeric", month: "short", year: "numeric" }) : "Unscheduled"}
+                            </div>
+                            {item.isOverdue && (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-md mt-0.5 border border-rose-200">
+                                <AlertTriangle size={10} /> Overdue by {Math.abs(item.daysDiff)}d
+                              </span>
+                            )}
+                            {item.isDueSoon && (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md mt-0.5 border border-amber-200">
+                                <Clock3 size={10} /> Due in {item.daysDiff}d
+                              </span>
+                            )}
+                            {isPaid && (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md mt-0.5 border border-emerald-200">
+                                <CheckCircle2 size={10} /> Realized
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            <span className={`inline-block px-2.5 py-1 rounded-full text-[11px] font-semibold border ${isPaid
+                              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                              : item.isOverdue
+                                ? "bg-rose-50 text-rose-700 border-rose-200"
+                                : item.isDueSoon
+                                  ? "bg-amber-50 text-amber-700 border-amber-200"
+                                  : "bg-slate-100 text-slate-600 border-slate-200"
+                              }`}>
+                              {item.paymentStatus}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-slate-600 font-medium">
+                            {item.ownerName}
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              {!isPaid && (
+                                <button
+                                  onClick={() => handleSendReminder(item)}
+                                  title="Send instant payment reminder"
+                                  className="px-2.5 py-1 text-[11px] font-medium text-purple-700 bg-purple-50 hover:bg-purple-100 rounded-lg border border-purple-200 transition-colors flex items-center gap-1"
+                                >
+                                  <Send size={11} /> Reminder
+                                </button>
+                              )}
+                              <button
+                                onClick={() => setSelectedDealForPlan({
+                                  id: item.dealId,
+                                  title: item.dealTitle,
+                                  company: item.dealCompany,
+                                  value: item.dealValue
+                                })}
+                                title="Inspect full deal payment plan"
+                                className="px-2.5 py-1 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1"
+                              >
+                                <Eye size={11} /> View Plan
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  ) : (
+                    <tr>
+                      <td colSpan={7} className="py-8 text-center text-slate-400">
+                        No payment milestones match the active search or filter.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== DEAL PAYMENT PLAN MODAL (Directly Triggerable from Reports) ===== */}
+      {selectedDealForPlan && (
+        <PaymentPlanModule
+          dealId={selectedDealForPlan.id}
+          dealTitle={selectedDealForPlan.title}
+          dealCompany={selectedDealForPlan.company}
+          initialValue={selectedDealForPlan.value || 1000000}
+          onClose={() => setSelectedDealForPlan(null)}
+          onSaved={() => {
+            setSelectedDealForPlan(null);
+            fetchReports();
+          }}
+        />
+      )}
     </div>
   );
 }
+

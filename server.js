@@ -16,6 +16,7 @@ const { startInsightCron } = require("./insightCron");
 const notificationQueue = require("./server/notificationQueue");
 const notificationService = require("./server/notificationService");
 const { startNotificationWorker } = require("./server/notificationWorker");
+const { createPlatformIntegration, mapMultipleLeadsToCRM } = require("./server/adPlatformIntegrations");
 const path = require("path");
 const nodemailer = require("nodemailer");
 const mailTransporter = nodemailer.createTransport({
@@ -262,10 +263,16 @@ const upload = multer({
     await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS deal_id UUID;`).catch(() => { });
     await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS lead_category VARCHAR(50) DEFAULT 'Warm';`).catch(() => { });
     await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS reason_to_buy VARCHAR(100);`).catch(() => { });
-        await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS dead_reason VARCHAR(255);`).catch(() => { });
+    await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS dead_reason VARCHAR(255);`).catch(() => { });
     await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS next_followup TIMESTAMP;`).catch(() => { });
     await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_activity_date TIMESTAMPTZ DEFAULT NOW();`).catch(() => { });
     await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS followup_notified BOOLEAN DEFAULT false;`).catch(() => { });
+    await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS platform VARCHAR(50);`).catch(() => { });
+    await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS platform_id TEXT;`).catch(() => { });
+    await pool.query(`ALTER TYPE crm_source ADD VALUE IF NOT EXISTS 'google';`).catch(() => { });
+    await pool.query(`ALTER TYPE crm_source ADD VALUE IF NOT EXISTS 'instagram';`).catch(() => { });
+    await pool.query(`ALTER TYPE crm_source ADD VALUE IF NOT EXISTS 'webhook';`).catch(() => { });
+    await pool.query(`ALTER TYPE crm_source ADD VALUE IF NOT EXISTS 'ads';`).catch(() => { });
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_leads_next_followup ON leads(next_followup);`).catch(() => { });
     await pool.query(`UPDATE leads SET converted_to_deal = false WHERE converted_to_deal IS NULL;`).catch(() => { });
     await pool.query(`ALTER TABLE deals DROP CONSTRAINT IF EXISTS deals_stage_check;`).catch(() => { });
@@ -521,6 +528,24 @@ const upload = multer({
           ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'converted';
           ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'lost';
           ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'Lost';
+          ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'attempted-1';
+          ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'attempted-2';
+          ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'attempted-3';
+          ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'in-process';
+          ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'site_visit_scheduled';
+          ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'Site Visit Scheduled';
+          ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'site_visit_done';
+          ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'Site Visit Done';
+          ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'zoom_meeting';
+          ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'Zoom Meeting';
+          ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'final_negotiation';
+          ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'Final Negotiation';
+          ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'token_done';
+          ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'Token Done';
+          ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'booking_done';
+          ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'Booking Done';
+          ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'unqualified';
+          ALTER TYPE crm_status ADD VALUE IF NOT EXISTS 'Unqualified';
         END IF;
       END $$;
     `).catch(() => { });
@@ -5091,10 +5116,15 @@ async function syncConnection(connection) {
         rawLeads = await integration.fetchAllLeads(connection.account_id, since);
         break;
       case 'google':
+        if (connection.access_token || connection.refresh_token || connection.api_key) {
+          rawLeads = await integration.fetchLeads(connection.account_id, since);
+        }
+        break;
       case 'linkedin':
       case 'instagram':
-        // For now return empty array for other platforms
-        rawLeads = [];
+        if (integration.fetchLeads) {
+          rawLeads = await integration.fetchLeads(connection.account_id, since);
+        }
         break;
       default:
         throw new Error(`Unsupported platform: ${connection.platform}`);
@@ -6421,6 +6451,67 @@ app.get("/api/reports/sales-wise", authenticateToken, checkPermission('reports')
     res.status(500).json({ error: err.message });
   }
 });
+
+// ── Reports: Payment Schedules & Collections Master ──
+app.get("/api/reports/payment-schedules", authenticateToken, checkPermission('reports'), async (req, res) => {
+  try {
+    const { permissionScope, companyId, userId, teamId } = req;
+    const params = [];
+    let paramIndex = 1;
+
+    let companyFilter = '';
+    if (companyId) {
+      companyFilter = ` AND d.company_id = $${paramIndex}`;
+      params.push(companyId);
+      paramIndex++;
+    } else {
+      companyFilter = ` AND d.company_id IS NULL`;
+    }
+
+    let hierarchyFilter = '';
+    if (permissionScope !== 'full') {
+      let targetUserIds;
+      if (permissionScope === 'dept') {
+        targetUserIds = await getDepartmentUserIds(companyId, req.user.department, userId);
+      } else if (permissionScope === 'team') {
+        targetUserIds = await getSubordinateUserIds(userId, teamId);
+      } else {
+        targetUserIds = [userId];
+      }
+      hierarchyFilter = ` AND d.owner_id = ANY($${paramIndex})`;
+      params.push(targetUserIds);
+      paramIndex++;
+    }
+
+    const query = `
+      SELECT 
+        dps.id as schedule_id,
+        dps.deal_id,
+        dps.agreement_value,
+        dps.milestones,
+        dps.notes,
+        dps.updated_at,
+        d.title as deal_title,
+        d.company as deal_company,
+        d.stage as deal_stage,
+        d.value as deal_value,
+        COALESCE(u.name, d.owner, 'Unassigned') as owner_name,
+        COALESCE(u.email, '') as owner_email
+      FROM deal_payment_schedules dps
+      JOIN deals d ON dps.deal_id = d.id
+      LEFT JOIN users u ON d.owner_id = u.id
+      WHERE 1=1 ${companyFilter} ${hierarchyFilter}
+      ORDER BY dps.updated_at DESC
+    `;
+
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Reports Payment Schedules Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 // ── CSV Export Endpoint ──
 app.get("/api/reports/export/csv", authenticateToken, async (req, res) => {
@@ -8346,13 +8437,140 @@ require('./server/meetingReminder');
 require('./server/followupReminder');
 console.log('⏰ Cron sync & reminders started');
 
-// Nodemon trigger restart comment
+// ── OAuth Flow Handlers for All Platforms ──
+try {
+  const oauthRouter = require("./server/oauthHandlers");
+  app.use("/api/oauth", oauthRouter);
+  app.use("/api/ad-connections/oauth", oauthRouter);
+} catch (e) {
+  console.error("Failed to load OAuth handlers router:", e.message);
+}
+
+// ── Helper: Process and Store Meta (Facebook / Instagram) Lead ──
+async function processMetaLead(leadgenId, pageId, formId, platform = "facebook") {
+  try {
+    let connection = null;
+    const connRes = await pool.query(
+      `SELECT * FROM ad_connections WHERE platform = $1 AND connected = true ORDER BY updated_at DESC LIMIT 1`,
+      [platform]
+    );
+    if (connRes.rows.length > 0) connection = connRes.rows[0];
+
+    const token = connection?.access_token || process.env.FACEBOOK_PAGE_ACCESS_TOKEN || process.env.FACEBOOK_ACCESS_TOKEN;
+
+    let leadName = `${platform === 'instagram' ? 'Instagram' : 'Facebook'} Lead`;
+    let email = "";
+    let phone = "";
+    let company = "";
+    const extraFields = [];
+
+    if (token) {
+      try {
+        const axios = require("axios");
+        const fbRes = await axios.get(`https://graph.facebook.com/v18.0/${leadgenId}`, {
+          params: { access_token: token }
+        });
+        const fieldData = fbRes.data?.field_data || [];
+        for (const f of fieldData) {
+          const name = (f.name || "").toLowerCase();
+          const val = (f.values && f.values[0]) || "";
+          if (!val) continue;
+
+          if (name.includes("full_name") || name === "name") {
+            leadName = val;
+          } else if (name.includes("first_name") && !leadName) {
+            leadName = val;
+          } else if (name.includes("email")) {
+            email = val;
+          } else if (name.includes("phone")) {
+            phone = val;
+          } else if (name.includes("company")) {
+            company = val;
+          } else {
+            extraFields.push(`${f.name}: ${val}`);
+          }
+        }
+      } catch (graphErr) {
+        console.warn(`Could not fetch full lead from Graph API (token may need refreshing): ${graphErr.message}`);
+      }
+    }
+
+    const messageNotes = [
+      `Form ID: ${formId || 'N/A'}`,
+      `Page ID: ${pageId || 'N/A'}`,
+      ...extraFields
+    ].filter(Boolean).join(" | ");
+
+    const targetUserId = connection?.user_id || null;
+    const targetCompanyId = connection?.company_id || null;
+    const externalLeadId = leadgenId || `meta_${Date.now()}`;
+
+    // Deduplication check
+    let existingLead = null;
+    if (targetCompanyId) {
+      const existRes = await pool.query(
+        `SELECT id FROM leads WHERE platform_id = $1 AND company_id = $2`,
+        [externalLeadId, targetCompanyId]
+      );
+      if (existRes.rows.length > 0) existingLead = existRes.rows[0];
+    } else {
+      const existRes = await pool.query(
+        `SELECT id FROM leads WHERE platform_id = $1`,
+        [externalLeadId]
+      );
+      if (existRes.rows.length > 0) existingLead = existRes.rows[0];
+    }
+
+    if (!existingLead) {
+      const leadInsert = await pool.query(
+        `INSERT INTO leads (
+          id, name, email, phone, company, notes, source, platform, platform_id, status, owner_id, company_id, created_at, updated_at
+        ) VALUES (
+          gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, 'new', $9, $10, NOW(), NOW()
+        ) RETURNING *`,
+        [leadName, email, phone, company, messageNotes, platform, platform, externalLeadId, targetUserId, targetCompanyId]
+      );
+
+      if (connection) {
+        await pool.query(
+          `UPDATE ad_connections SET leads_imported = leads_imported + 1, last_sync = NOW() WHERE id = $1`,
+          [connection.id]
+        ).catch(() => {});
+      }
+
+      await pool.query(
+        `INSERT INTO ad_sync_log (connection_id, platform, leads_count, status, error_message, created_at)
+         VALUES ($1, $2, 1, 'success', $3, NOW())`,
+        [connection ? connection.id : null, platform, `Lead ID: ${leadgenId}`]
+      ).catch(() => {});
+
+      console.log(`🎉 New ${platform} lead saved to CRM: ${leadName} (ID: ${leadInsert.rows[0]?.id})`);
+
+      if (targetUserId) {
+        try {
+          await notificationQueue.createNotification(
+            targetUserId,
+            'lead_created',
+            `🎯 New ${platform === 'instagram' ? 'Instagram' : 'Facebook'} Lead`,
+            `New lead received from ${platform}: ${leadName}${email ? ` (${email})` : ''}`,
+            `/leads`,
+            'high',
+            { lead_id: leadInsert.rows[0]?.id, platform, form_id: formId, page_id: pageId }
+          );
+        } catch (notifErr) {
+          console.error(`Notification error for ${platform} lead:`, notifErr.message);
+        }
+      }
+    }
+  } catch (err) {
+    console.error(`Error processing ${platform} lead:`, err);
+  }
+}
 
 // ── Facebook Lead Ads Webhook ──
 const FB_WEBHOOK_VERIFY_TOKEN = process.env.FB_WEBHOOK_VERIFY_TOKEN || "vigozen_fb_verify_2026";
 
-// Verification handshake (Facebook calls this once when you set up the webhook)
-app.get("/api/integrations/facebook/webhook", (req, res) => {
+app.get(["/api/integrations/facebook/webhook", "/api/integrations/facebook/webhook/:key"], (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
@@ -8360,11 +8578,10 @@ app.get("/api/integrations/facebook/webhook", (req, res) => {
     console.log("Facebook webhook verified");
     return res.status(200).send(challenge);
   }
-  return res.sendStatus(403);
+  return res.status(200).json({ status: "active", platform: "facebook", message: "Facebook webhook endpoint is live" });
 });
 
-// Receives real-time lead notifications
-app.post("/api/integrations/facebook/webhook", async (req, res) => {
+app.post(["/api/integrations/facebook/webhook", "/api/integrations/facebook/webhook/:key"], async (req, res) => {
   try {
     console.log("Facebook webhook payload:", JSON.stringify(req.body));
     const entries = req.body.entry || [];
@@ -8375,12 +8592,7 @@ app.post("/api/integrations/facebook/webhook", async (req, res) => {
           const leadgenId = change.value.leadgen_id;
           const pageId = change.value.page_id;
           const formId = change.value.form_id;
-          await pool.query(
-            `INSERT INTO ad_sync_log (platform, external_lead_id, page_id, form_id, status, created_at)
-             VALUES ($1, $2, $3, $4, 'received', NOW())`,
-            ["facebook", leadgenId, pageId, formId]
-          );
-          console.log("New Facebook lead received:", leadgenId);
+          await processMetaLead(leadgenId, pageId, formId, "facebook");
         }
       }
     }
@@ -8388,5 +8600,399 @@ app.post("/api/integrations/facebook/webhook", async (req, res) => {
   } catch (err) {
     console.error("Facebook webhook error:", err);
     res.sendStatus(500);
+  }
+});
+
+// ── Instagram Ads Webhook ──
+app.get(["/api/integrations/instagram/webhook", "/api/integrations/instagram/webhook/:key"], (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+  if (mode === "subscribe" && token === FB_WEBHOOK_VERIFY_TOKEN) {
+    console.log("Instagram webhook verified");
+    return res.status(200).send(challenge);
+  }
+  return res.status(200).json({ status: "active", platform: "instagram", message: "Instagram webhook endpoint is live" });
+});
+
+app.post(["/api/integrations/instagram/webhook", "/api/integrations/instagram/webhook/:key"], async (req, res) => {
+  try {
+    console.log("Instagram webhook payload:", JSON.stringify(req.body));
+    const entries = req.body.entry || [];
+    for (const entry of entries) {
+      const changes = entry.changes || [];
+      for (const change of changes) {
+        if (change.field === "leadgen") {
+          const leadgenId = change.value.leadgen_id;
+          const pageId = change.value.page_id;
+          const formId = change.value.form_id;
+          await processMetaLead(leadgenId, pageId, formId, "instagram");
+        }
+      }
+    }
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("Instagram webhook error:", err);
+    res.sendStatus(500);
+  }
+});
+
+// ── Google Ads Lead Form Webhook ──
+app.get(["/api/integrations/google/webhook", "/api/integrations/google/webhook/:key"], (req, res) => {
+  res.status(200).json({
+    status: "active",
+    platform: "google",
+    message: "Google Ads Lead Form Webhook endpoint is live and ready.",
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.post(["/api/integrations/google/webhook", "/api/integrations/google/webhook/:key"], async (req, res) => {
+  try {
+    console.log("📥 Google Ads Webhook payload received:", JSON.stringify(req.body));
+    const { lead_id, user_column_data, form_id, campaign_id, google_key, is_test, gcl_id } = req.body || {};
+    const incomingKey = google_key || req.params.key || req.query.key || req.headers["x-google-key"];
+
+    let connection = null;
+    if (incomingKey) {
+      const connRes = await pool.query(
+        `SELECT * FROM ad_connections WHERE platform = 'google' AND (api_key = $1 OR id::text = $1) LIMIT 1`,
+        [incomingKey]
+      );
+      if (connRes.rows.length > 0) connection = connRes.rows[0];
+    }
+    if (!connection) {
+      const defaultConn = await pool.query(
+        `SELECT * FROM ad_connections WHERE platform = 'google' AND connected = true ORDER BY updated_at DESC LIMIT 1`
+      );
+      if (defaultConn.rows.length > 0) connection = defaultConn.rows[0];
+    }
+
+    let fullName = "";
+    let firstName = "";
+    let lastName = "";
+    let email = "";
+    let phone = "";
+    let company = "";
+    const extraFields = [];
+
+    if (Array.isArray(user_column_data)) {
+      for (const col of user_column_data) {
+        const colId = (col.column_id || "").toUpperCase();
+        const colName = col.column_name || colId;
+        const val = col.string_value || "";
+        if (!val) continue;
+
+        if (colId === "FULL_NAME") fullName = val;
+        else if (colId === "FIRST_NAME") firstName = val;
+        else if (colId === "LAST_NAME") lastName = val;
+        else if (colId === "EMAIL" || colId === "WORK_EMAIL") {
+          if (!email) email = val;
+        } else if (colId === "PHONE_NUMBER" || colId === "WORK_PHONE") {
+          if (!phone) phone = val;
+        } else if (colId === "COMPANY_NAME") {
+          company = val;
+        } else {
+          extraFields.push(`${colName}: ${val}`);
+        }
+      }
+    }
+
+    const leadName = fullName || (firstName || lastName ? `${firstName} ${lastName}`.trim() : (is_test ? "Google Ads Test Lead" : "Google Ads Lead"));
+    const messageNotes = [
+      campaign_id ? `Campaign ID: ${campaign_id}` : null,
+      form_id ? `Form ID: ${form_id}` : null,
+      gcl_id ? `GCLID: ${gcl_id}` : null,
+      ...extraFields
+    ].filter(Boolean).join(" | ");
+
+    await pool.query(
+      `INSERT INTO ad_sync_log (connection_id, platform, leads_count, status, error_message, created_at)
+       VALUES ($1, 'google', 1, $2, $3, NOW())`,
+      [connection ? connection.id : null, is_test ? 'test_received' : 'success', is_test ? 'Test lead verified from Google Ads' : `Lead ID: ${lead_id || 'N/A'}`]
+    ).catch(err => console.error("Ad sync log error:", err.message));
+
+    if (is_test) {
+      console.log("✅ Google Ads Webhook verification test lead processed successfully.");
+      return res.status(200).json({
+        success: true,
+        is_test: true,
+        message: "Google Ads test webhook received and verified successfully"
+      });
+    }
+
+    const targetUserId = connection?.user_id || null;
+    const targetCompanyId = connection?.company_id || null;
+    const externalLeadId = lead_id || `google_${Date.now()}`;
+
+    let existingLead = null;
+    if (targetCompanyId) {
+      const existRes = await pool.query(
+        `SELECT id FROM leads WHERE platform_id = $1 AND company_id = $2`,
+        [externalLeadId, targetCompanyId]
+      );
+      if (existRes.rows.length > 0) existingLead = existRes.rows[0];
+    } else {
+      const existRes = await pool.query(
+        `SELECT id FROM leads WHERE platform_id = $1`,
+        [externalLeadId]
+      );
+      if (existRes.rows.length > 0) existingLead = existRes.rows[0];
+    }
+
+    let insertedLead = null;
+    if (!existingLead) {
+      const leadInsert = await pool.query(
+        `INSERT INTO leads (
+          id, name, email, phone, company, notes, source, platform, platform_id, status, owner_id, company_id, created_at, updated_at
+        ) VALUES (
+          gen_random_uuid(), $1, $2, $3, $4, $5, 'google', 'google', $6, 'new', $7, $8, NOW(), NOW()
+        ) RETURNING *`,
+        [leadName, email, phone, company, messageNotes, externalLeadId, targetUserId, targetCompanyId]
+      );
+      insertedLead = leadInsert.rows[0];
+
+      if (connection) {
+        await pool.query(
+          `UPDATE ad_connections SET leads_imported = leads_imported + 1, last_sync = NOW() WHERE id = $1`,
+          [connection.id]
+        ).catch(() => {});
+      }
+
+      console.log(`🎉 New Google Ads lead saved to CRM: ${leadName} (ID: ${insertedLead?.id})`);
+
+      if (targetUserId) {
+        try {
+          await notificationQueue.createNotification(
+            targetUserId,
+            'lead_created',
+            '🎯 New Google Ads Lead',
+            `New lead received from Google Ads: ${leadName}${email ? ` (${email})` : ''}`,
+            `/leads`,
+            'high',
+            { lead_id: insertedLead?.id, platform: 'google', campaign_id, form_id }
+          );
+        } catch (notifErr) {
+          console.error("Failed to enqueue notification for Google lead:", notifErr.message);
+        }
+      }
+    } else {
+      console.log(`ℹ️ Google Ads lead ${externalLeadId} already exists in CRM, skipping duplicate insert.`);
+    }
+
+    res.status(200).json({
+      success: true,
+      lead_id: externalLeadId,
+      message: "Lead processed successfully"
+    });
+  } catch (err) {
+    console.error("❌ Google Ads webhook error:", err);
+    res.status(500).json({ error: "Internal server error processing Google webhook", details: err.message });
+  }
+});
+
+// ── LinkedIn Ads Webhook ──
+app.get(["/api/integrations/linkedin/webhook", "/api/integrations/linkedin/webhook/:key"], (req, res) => {
+  res.status(200).json({
+    status: "active",
+    platform: "linkedin",
+    message: "LinkedIn Ads Webhook endpoint is live and ready.",
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.post(["/api/integrations/linkedin/webhook", "/api/integrations/linkedin/webhook/:key"], async (req, res) => {
+  try {
+    console.log("📥 LinkedIn Webhook payload received:", JSON.stringify(req.body));
+    const payload = req.body || {};
+    const incomingKey = req.params.key || req.query.key || req.headers["x-linkedin-key"];
+
+    let connection = null;
+    if (incomingKey) {
+      const connRes = await pool.query(
+        `SELECT * FROM ad_connections WHERE platform = 'linkedin' AND (api_key = $1 OR id::text = $1) LIMIT 1`,
+        [incomingKey]
+      );
+      if (connRes.rows.length > 0) connection = connRes.rows[0];
+    }
+    if (!connection) {
+      const defaultConn = await pool.query(
+        `SELECT * FROM ad_connections WHERE platform = 'linkedin' AND connected = true ORDER BY updated_at DESC LIMIT 1`
+      );
+      if (defaultConn.rows.length > 0) connection = defaultConn.rows[0];
+    }
+
+    const formResponse = payload.leadGenFormResponse || payload;
+    const formResponses = formResponse.formResponses || payload.formResponses || [];
+    let name = payload.name || payload.full_name || "";
+    let email = payload.email || "";
+    let phone = payload.phone || "";
+    let company = payload.company || "";
+    const extraFields = [];
+
+    if (Array.isArray(formResponses)) {
+      for (const item of formResponses) {
+        const k = (item.name || "").toLowerCase();
+        const v = item.value || "";
+        if (!v) continue;
+        if (k.includes("name") || k.includes("first")) name = name ? `${name} ${v}` : v;
+        else if (k.includes("email")) email = v;
+        else if (k.includes("phone")) phone = v;
+        else if (k.includes("company")) company = v;
+        else extraFields.push(`${item.name}: ${v}`);
+      }
+    }
+
+    const leadName = name.trim() || "LinkedIn Lead";
+    const externalLeadId = formResponse.id || payload.lead_id || `li_${Date.now()}`;
+    const targetUserId = connection?.user_id || null;
+    const targetCompanyId = connection?.company_id || null;
+    const messageNotes = extraFields.join(" | ");
+
+    let existingLead = null;
+    if (targetCompanyId) {
+      const existRes = await pool.query(
+        `SELECT id FROM leads WHERE platform_id = $1 AND company_id = $2`,
+        [externalLeadId, targetCompanyId]
+      );
+      if (existRes.rows.length > 0) existingLead = existRes.rows[0];
+    } else {
+      const existRes = await pool.query(
+        `SELECT id FROM leads WHERE platform_id = $1`,
+        [externalLeadId]
+      );
+      if (existRes.rows.length > 0) existingLead = existRes.rows[0];
+    }
+
+    if (!existingLead) {
+      const leadInsert = await pool.query(
+        `INSERT INTO leads (
+          id, name, email, phone, company, notes, source, platform, platform_id, status, owner_id, company_id, created_at, updated_at
+        ) VALUES (
+          gen_random_uuid(), $1, $2, $3, $4, $5, 'linkedin', 'linkedin', $6, 'new', $7, $8, NOW(), NOW()
+        ) RETURNING *`,
+        [leadName, email, phone, company, messageNotes, externalLeadId, targetUserId, targetCompanyId]
+      );
+
+      if (connection) {
+        await pool.query(
+          `UPDATE ad_connections SET leads_imported = leads_imported + 1, last_sync = NOW() WHERE id = $1`,
+          [connection.id]
+        ).catch(() => {});
+      }
+
+      await pool.query(
+        `INSERT INTO ad_sync_log (connection_id, platform, leads_count, status, error_message, created_at)
+         VALUES ($1, 'linkedin', 1, 'success', $2, NOW())`,
+        [connection ? connection.id : null, `Lead ID: ${externalLeadId}`]
+      ).catch(() => {});
+
+      console.log(`🎉 New LinkedIn lead saved to CRM: ${leadName} (ID: ${leadInsert.rows[0]?.id})`);
+
+      if (targetUserId) {
+        try {
+          await notificationQueue.createNotification(
+            targetUserId,
+            'lead_created',
+            '🎯 New LinkedIn Lead',
+            `New lead received from LinkedIn: ${leadName}${email ? ` (${email})` : ''}`,
+            `/leads`,
+            'high',
+            { lead_id: leadInsert.rows[0]?.id, platform: 'linkedin' }
+          );
+        } catch (notifErr) {
+          console.error("Failed to enqueue notification for LinkedIn lead:", notifErr.message);
+        }
+      }
+    }
+
+    res.status(200).json({ success: true, lead_id: externalLeadId, message: "LinkedIn lead processed successfully" });
+  } catch (err) {
+    console.error("LinkedIn webhook error:", err);
+    res.status(500).json({ error: "Internal server error processing LinkedIn webhook", details: err.message });
+  }
+});
+
+// ── Universal / Zapier / Make / Landing Page Webhook Connector ──
+app.get(["/api/integrations/webhook", "/api/integrations/webhook/:token"], (req, res) => {
+  res.status(200).json({
+    status: "active",
+    platform: "custom_webhook",
+    message: "Universal Webhook endpoint is live. POST your lead payload with fields: name, email, phone, company, message, source",
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.post(["/api/integrations/webhook", "/api/integrations/webhook/:token"], async (req, res) => {
+  try {
+    console.log("📥 Custom Universal Webhook received:", JSON.stringify(req.body));
+    const token = req.params.token || req.query.token || req.headers["x-webhook-token"] || req.headers["authorization"];
+    const body = req.body || {};
+
+    let targetUserId = null;
+    let targetCompanyId = null;
+
+    if (token) {
+      const connRes = await pool.query(
+        `SELECT user_id, company_id FROM ad_connections WHERE api_key = $1 OR id::text = $1 LIMIT 1`,
+        [token]
+      );
+      if (connRes.rows.length > 0) {
+        targetUserId = connRes.rows[0].user_id;
+        targetCompanyId = connRes.rows[0].company_id;
+      }
+    }
+
+    if (!targetUserId) {
+      const firstAdmin = await pool.query(`SELECT id, company_id FROM users ORDER BY created_at ASC LIMIT 1`);
+      if (firstAdmin.rows.length > 0) {
+        targetUserId = firstAdmin.rows[0].id;
+        targetCompanyId = firstAdmin.rows[0].company_id;
+      }
+    }
+
+    const name = body.name || body.full_name || `${body.first_name || ''} ${body.last_name || ''}`.trim() || "Website Lead";
+    const email = body.email || body.work_email || "";
+    const phone = body.phone || body.phone_number || body.mobile || "";
+    const company = body.company || body.company_name || "";
+    const notes = body.notes || body.message || body.comment || "";
+    const source = body.source || body.platform || "webhook";
+    const externalId = body.id || body.lead_id || `hook_${Date.now()}`;
+
+    const leadInsert = await pool.query(
+      `INSERT INTO leads (
+        id, name, email, phone, company, notes, source, platform, platform_id, status, owner_id, company_id, created_at, updated_at
+      ) VALUES (
+        gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, 'new', $9, $10, NOW(), NOW()
+      ) RETURNING *`,
+      [name, email, phone, company, notes, source, source, externalId, targetUserId, targetCompanyId]
+    );
+
+    console.log(`🎉 New Lead saved via Universal Webhook: ${name} (ID: ${leadInsert.rows[0]?.id})`);
+
+    if (targetUserId) {
+      try {
+        await notificationQueue.createNotification(
+          targetUserId,
+          'lead_created',
+          `🎯 New Lead from ${source}`,
+          `New lead received: ${name}${email ? ` (${email})` : ''}`,
+          `/leads`,
+          'high',
+          { lead_id: leadInsert.rows[0]?.id, source }
+        );
+      } catch (notifErr) {
+        console.error("Failed to enqueue notification for webhook lead:", notifErr.message);
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      lead_id: leadInsert.rows[0]?.id,
+      message: "Lead received and created in CRM successfully"
+    });
+  } catch (err) {
+    console.error("Universal webhook error:", err);
+    res.status(500).json({ error: "Failed to process webhook lead", details: err.message });
   }
 });

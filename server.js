@@ -17,6 +17,7 @@ const notificationQueue = require("./server/notificationQueue");
 const notificationService = require("./server/notificationService");
 const { startNotificationWorker } = require("./server/notificationWorker");
 const { createPlatformIntegration, mapMultipleLeadsToCRM } = require("./server/adPlatformIntegrations");
+const { runDailySubscriptionCheck } = require("./server/subscriptionScheduler");
 const path = require("path");
 const nodemailer = require("nodemailer");
 const mailTransporter = nodemailer.createTransport({
@@ -202,6 +203,17 @@ const upload = multer({
 
     // ── user_settings table for ad preferences ──
     await pool.query(`
+      CREATE TABLE IF NOT EXISTS deal_payment_schedules (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        deal_id UUID NOT NULL UNIQUE REFERENCES deals(id) ON DELETE CASCADE,
+        agreement_value NUMERIC(15, 2) NOT NULL DEFAULT 1000000,
+        milestones JSONB NOT NULL DEFAULT '[]'::jsonb,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_deal_payment_schedules_deal_id ON deal_payment_schedules(deal_id);
+
       CREATE TABLE IF NOT EXISTS user_settings (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -274,8 +286,14 @@ const upload = multer({
     await pool.query(`ALTER TYPE crm_source ADD VALUE IF NOT EXISTS 'webhook';`).catch(() => { });
     await pool.query(`ALTER TYPE crm_source ADD VALUE IF NOT EXISTS 'ads';`).catch(() => { });
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_leads_next_followup ON leads(next_followup);`).catch(() => { });
-    await pool.query(`UPDATE leads SET converted_to_deal = false WHERE converted_to_deal IS NULL;`).catch(() => { });
     await pool.query(`ALTER TABLE deals DROP CONSTRAINT IF EXISTS deals_stage_check;`).catch(() => { });
+    await pool.query(`ALTER TABLE deals ADD COLUMN IF NOT EXISTS lead_id UUID;`).catch(() => { });
+    await pool.query(`ALTER TABLE deals ADD COLUMN IF NOT EXISTS company_id UUID;`).catch(() => { });
+    await pool.query(`ALTER TABLE deals ADD COLUMN IF NOT EXISTS owner_id UUID;`).catch(() => { });
+    await pool.query(`ALTER TABLE deals ADD COLUMN IF NOT EXISTS expectedclose TIMESTAMP;`).catch(() => { });
+    await pool.query(`ALTER TABLE deals ADD COLUMN IF NOT EXISTS expected_close TIMESTAMP;`).catch(() => { });
+    await pool.query(`ALTER TABLE deals ADD COLUMN IF NOT EXISTS daysinstage INTEGER DEFAULT 0;`).catch(() => { });
+    await pool.query(`ALTER TABLE deals ADD COLUMN IF NOT EXISTS probability NUMERIC DEFAULT 50;`).catch(() => { });
     await pool.query(`ALTER TABLE lead_comments ADD COLUMN IF NOT EXISTS user_name VARCHAR(255);`).catch(() => { });
     await pool.query(`ALTER TABLE lead_comments ADD COLUMN IF NOT EXISTS user_avatar VARCHAR(10);`).catch(() => { });
     await pool.query(`ALTER TABLE lead_comments ADD COLUMN IF NOT EXISTS parent_comment_id UUID;`).catch(() => { });
@@ -283,6 +301,8 @@ const upload = multer({
     // ── Add subscription columns to users table ──
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_start TIMESTAMP;`).catch(() => { });
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_end TIMESTAMP;`).catch(() => { });
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_start TIMESTAMP;`).catch(() => { });
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_end TIMESTAMP;`).catch(() => { });
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_status VARCHAR(50) DEFAULT 'trialing';`).catch(() => { });
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS plan_type VARCHAR(100) DEFAULT 'trial';`).catch(() => { });
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS payment_status VARCHAR(50) DEFAULT 'unpaid';`).catch(() => { });
@@ -290,6 +310,23 @@ const upload = multer({
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS deactivated_at TIMESTAMP;`).catch(() => { });
     await pool.query(`ALTER TABLE activities ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`).catch(() => { });
     await pool.query(`ALTER TABLE calendar_events ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`).catch(() => { });
+
+    // ── Subscriptions table enhanced tracking columns ──
+    await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS plan_name VARCHAR(255);`).catch(() => { });
+    await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS duration_months INTEGER DEFAULT 1;`).catch(() => { });
+    await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS subscription_start TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`).catch(() => { });
+    await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS subscription_end TIMESTAMP;`).catch(() => { });
+    await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS reminder_7d_sent BOOLEAN DEFAULT false;`).catch(() => { });
+    await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS reminder_1d_sent BOOLEAN DEFAULT false;`).catch(() => { });
+    await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS reminder_0d_sent BOOLEAN DEFAULT false;`).catch(() => { });
+    await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS customer_name VARCHAR(255);`).catch(() => { });
+    await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS customer_email VARCHAR(255);`).catch(() => { });
+    await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS customer_phone VARCHAR(50);`).catch(() => { });
+    await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS company_id UUID;`).catch(() => { });
+    await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS payment_method VARCHAR(100);`).catch(() => { });
+    await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS payment_id VARCHAR(255);`).catch(() => { });
+    await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS auto_renew BOOLEAN DEFAULT false;`).catch(() => { });
+    await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS notes TEXT;`).catch(() => { });
 
     // ── Company subscription columns ──
     await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS plan_type VARCHAR(100) DEFAULT 'professional';`).catch(() => { });
@@ -1195,7 +1232,7 @@ app.get("/leads", authenticateToken, checkPermission('leads'), async (req, res) 
 app.get("/leads/overdue-followups", authenticateToken, checkPermission('leads'), async (req, res) => {
   try {
     const { whereClause, params } = await getScopedQueryFilters('leads', req);
-    const overdueCond = `next_followup IS NOT NULL AND next_followup < NOW() AND LOWER(status::text) NOT IN ('won', 'booking done', 'token done', 'lost', 'unqualified')`;
+    const overdueCond = `next_followup IS NOT NULL AND next_followup < NOW() AND LOWER(REPLACE(status::text, ' ', '_')) NOT IN ('won', 'lost', 'unqualified', 'booking_done', 'token_done', 'converted') AND LOWER(status::text) NOT IN ('won', 'lost', 'unqualified', 'booking done', 'booking_done', 'token done', 'token_done', 'converted')`;
     const finalWhere = whereClause ? `${whereClause} AND ${overdueCond}` : `WHERE ${overdueCond}`;
     const result = await pool.query(
       `SELECT *, (SELECT name FROM users WHERE id = owner_id) as owner FROM leads ${finalWhere} ORDER BY next_followup ASC`,
@@ -1409,6 +1446,57 @@ app.get("/activities", authenticateToken, checkPermission('activities'), async (
     );
     res.json(result.rows);
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Create Activity (manual call/meeting/note/task logging)
+app.post("/activities", authenticateToken, async (req, res) => {
+  try {
+    const { lead_id, deal_id, type, note, action, target, value, due_date, status } = req.body;
+    const { recordActivity } = require('./server/activityService');
+    const activity = await recordActivity({
+      leadId: lead_id || null,
+      dealId: deal_id || null,
+      companyId: req.user?.company_id || null,
+      user: req.user?.name || req.user?.email || 'User',
+      action: action || 'activity_logged',
+      target: target || 'Record',
+      note: note || '',
+      type: type || 'note',
+      value: value || null,
+      dueDate: due_date || null,
+      status: status || 'completed',
+      isCustomerAction: false
+    });
+    res.status(201).json(activity);
+  } catch (err) {
+    console.error("POST /activities error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Create Activity for specific lead
+app.post("/leads/:id/activities", authenticateToken, async (req, res) => {
+  try {
+    const { type, note, action, target, value, due_date, status } = req.body;
+    const { recordActivity } = require('./server/activityService');
+    const activity = await recordActivity({
+      leadId: req.params.id,
+      companyId: req.user?.company_id || null,
+      user: req.user?.name || req.user?.email || 'User',
+      action: action || 'activity_logged',
+      target: target || 'Lead',
+      note: note || '',
+      type: type || 'note',
+      value: value || null,
+      dueDate: due_date || null,
+      status: status || 'completed',
+      isCustomerAction: false
+    });
+    res.status(201).json(activity);
+  } catch (err) {
+    console.error("POST /leads/:id/activities error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -2935,6 +3023,24 @@ app.post("/leads", authenticateToken, enforceStorageLimit(0.01), async (req, res
       req.ip
     );
 
+    // Record Activity
+    try {
+      const { recordActivity } = require('./server/activityService');
+      await recordActivity({
+        leadId: lead.id,
+        companyId: lead.company_id,
+        user: req.user?.name || 'User',
+        action: 'lead_created',
+        target: lead.name,
+        note: `Lead created manually with status "${lead.status || 'new'}"`,
+        type: 'status_change',
+        value: lead.value || null,
+        isCustomerAction: false
+      });
+    } catch (actErr) {
+      console.error("Activity record error on POST /leads:", actErr);
+    }
+
     // ── Notification Trigger ──
     try {
       const userId = req.body.userId || lead.owner_id || req.user?.id;
@@ -3052,14 +3158,52 @@ app.put("/leads/:id", authenticateToken, async (req, res) => {
 
     const result = await pool.query(
       `UPDATE leads 
-       SET name=$1, email=$2, phone=$3, company=$4, value=$5, status=$6, source=$7, industry=$8, notes=$9, converted_to_deal=$10, deal_id=$11, owner_id=$12, next_meeting_at=$13, meeting_notified=$14, lead_category=$15, reason_to_buy=$16, dead_reason=$17, next_followup=$18, followup_notified=$19, last_activity_date=$20, updated_at=NOW() 
-       WHERE id=$21 RETURNING *`,
-      [finalName, finalEmail, finalPhone, finalCompany, finalValue, finalStatus, finalSource, finalIndustry, finalNotes, finalConverted, finalDealId, ownerId, finalNextMeeting, finalMeetingNotified, finalLeadCategory, finalReasonToBuy, finalDeadReason, finalNextFollowup, finalFollowupNotified, finalLastActivity, req.params.id]
+       SET name=$1, email=$2, phone=$3, company=$4, value=$5, status=$6, source=$7, industry=$8, notes=$9, converted_to_deal=$10, deal_id=$11, owner_id=$12, next_meeting_at=$13, meeting_notified=$14, lead_category=$15, reason_to_buy=$16, dead_reason=$17, next_followup=$18, followup_notified=$19, last_activity_date=$20,
+           followup_reminder_count = CASE WHEN $21 THEN 0 ELSE followup_reminder_count END,
+           last_followup_reminder_at = CASE WHEN $21 THEN NULL ELSE last_followup_reminder_at END,
+           updated_at=NOW() 
+       WHERE id=$22 RETURNING *`,
+      [finalName, finalEmail, finalPhone, finalCompany, finalValue, finalStatus, finalSource, finalIndustry, finalNotes, finalConverted, finalDealId, ownerId, finalNextMeeting, finalMeetingNotified, finalLeadCategory, finalReasonToBuy, finalDeadReason, finalNextFollowup, finalFollowupNotified, finalLastActivity, followupChanged, req.params.id]
     );
+
+    const lead = result.rows[0];
+
+    // Record Activity
+    try {
+      const { recordActivity } = require('./server/activityService');
+      let actAction = 'lead_updated';
+      let actNote = `Lead details updated by ${req.user?.name || 'user'}`;
+      let actType = 'note';
+      if (status && existing.status !== finalStatus) {
+        actAction = 'status_changed';
+        actNote = `Status changed from "${existing.status}" to "${finalStatus}"`;
+        actType = 'status_change';
+      } else if (followupChanged) {
+        actAction = 'followup_scheduled';
+        actNote = `Next follow-up scheduled for ${finalNextFollowup}`;
+        actType = 'task';
+      } else if (meetingChanged) {
+        actAction = 'meeting_scheduled';
+        actNote = `Next meeting scheduled for ${finalNextMeeting}`;
+        actType = 'meeting';
+      }
+      await recordActivity({
+        leadId: lead.id,
+        companyId: lead.company_id,
+        user: req.user?.name || 'User',
+        action: actAction,
+        target: lead.name,
+        note: actNote,
+        type: actType,
+        value: lead.value || null,
+        isCustomerAction: false
+      });
+    } catch (actErr) {
+      console.error("Activity record error in PUT /leads/:id:", actErr);
+    }
 
     // ── Notification: Lead status changed / converted ──
     try {
-      const lead = result.rows[0];
       const companyId = req.user?.company_id || null;
 
       // Notify if status changed
@@ -3132,6 +3276,489 @@ app.put("/leads/:id", authenticateToken, async (req, res) => {
     });
   } catch (err) {
     console.error("PUT LEAD ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ──────────────────────────────────────────────────────────────
+// CRM AUTOMATION: CUSTOMER MESSAGES, REPLIES & WAITING SLA
+// ──────────────────────────────────────────────────────────────
+
+// 1. Inbound Customer Reply (can be called by webhooks, portal, or customer communication tools)
+app.post("/leads/:id/customer-reply", async (req, res) => {
+  try {
+    const leadId = req.params.id;
+    const { message, sender_name, sender_email, sender_phone, subject, channel } = req.body;
+
+    if (!message || !message.trim()) {
+      return res.status(400).json({ error: "Message content is required" });
+    }
+
+    const leadRes = await pool.query(
+      `SELECT l.*, c.name as company_name, u.name as owner_name, u.email as owner_email
+       FROM leads l
+       LEFT JOIN companies c ON l.company_id = c.id
+       LEFT JOIN users u ON l.owner_id = u.id
+       WHERE l.id = $1`,
+      [leadId]
+    );
+
+    if (leadRes.rows.length === 0) {
+      return res.status(404).json({ error: "Lead not found" });
+    }
+
+    const lead = leadRes.rows[0];
+    const customerName = sender_name || lead.name || "Customer";
+    const customerEmail = sender_email || lead.email || null;
+    const customerPhone = sender_phone || lead.phone || null;
+
+    // Insert into customer_messages table
+    const msgInsert = await pool.query(
+      `INSERT INTO customer_messages (
+        id, lead_id, deal_id, company_id, sender_type, sender_name, sender_email, sender_phone, channel, subject, message, direction, read_by_salesperson, created_at, updated_at
+      ) VALUES (
+        gen_random_uuid(), $1, $2, $3, 'customer', $4, $5, $6, $7, $8, $9, 'inbound', false, NOW(), NOW()
+      ) RETURNING *`,
+      [
+        leadId,
+        lead.deal_id || null,
+        lead.company_id,
+        customerName,
+        customerEmail,
+        customerPhone,
+        channel || 'email',
+        subject || null,
+        message.trim()
+      ]
+    );
+
+    // Update lead: mark as customer_waiting with timestamp
+    await pool.query(
+      `UPDATE leads 
+       SET customer_waiting = true,
+           customer_waiting_since = NOW(),
+           last_customer_message_at = NOW(),
+           customer_waiting_warned = false,
+           customer_waiting_reminded = false,
+           customer_waiting_escalated = false,
+           last_activity_date = NOW(),
+           updated_at = NOW()
+       WHERE id = $1`,
+      [leadId]
+    );
+
+    // Record activity in activities table
+    const { recordActivity } = require('./server/activityService');
+    await recordActivity({
+      leadId: lead.id,
+      companyId: lead.company_id,
+      user: customerName,
+      action: 'customer_replied',
+      target: lead.name,
+      note: `Inbound customer message via ${channel || 'email'}: "${message.substring(0, 100)}${message.length > 100 ? '...' : ''}"`,
+      type: 'message',
+      isCustomerAction: true
+    });
+
+    // Notify assigned salesperson (or super admins if unassigned)
+    if (lead.owner_id) {
+      await notificationService.createNotification(
+        lead.owner_id,
+        'comment_added',
+        `💬 Customer Replied: ${customerName}`,
+        `"${customerName}" sent a new message: "${message.substring(0, 80)}${message.length > 80 ? '...' : ''}"`,
+        `/leads/${lead.id}`,
+        'high',
+        { lead_id: lead.id, message_id: msgInsert.rows[0].id }
+      ).catch(err => console.error("Salesperson customer-reply notification error:", err));
+    } else {
+      await notificationService.notifySuperAdmins(
+        'comment_added',
+        `💬 Unassigned Customer Reply: ${customerName}`,
+        `Customer "${customerName}" sent a reply on an unassigned lead.`,
+        `/leads/${lead.id}`,
+        'high',
+        { lead_id: lead.id }
+      ).catch(err => console.error("Super Admin customer-reply notification error:", err));
+    }
+
+    res.json({
+      success: true,
+      message: "Customer reply recorded and salesperson notified",
+      data: msgInsert.rows[0]
+    });
+  } catch (err) {
+    console.error("POST /leads/:id/customer-reply error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 2. Salesperson Response to Customer (clears customer_waiting SLA flag)
+app.post("/leads/:id/send-message", authenticateToken, async (req, res) => {
+  try {
+    const leadId = req.params.id;
+    const { message, channel } = req.body;
+
+    if (!message || !message.trim()) {
+      return res.status(400).json({ error: "Message content is required" });
+    }
+
+    const leadRes = await pool.query(
+      `SELECT l.*, c.name as company_name 
+       FROM leads l
+       LEFT JOIN companies c ON l.company_id = c.id
+       WHERE l.id = $1`,
+      [leadId]
+    );
+
+    if (leadRes.rows.length === 0) {
+      return res.status(404).json({ error: "Lead not found" });
+    }
+
+    const lead = leadRes.rows[0];
+
+    // Insert outbound message into customer_messages table
+    const msgInsert = await pool.query(
+      `INSERT INTO customer_messages (
+        id, lead_id, deal_id, company_id, sender_type, sender_name, sender_email, sender_phone, channel, message, direction, read_by_salesperson, created_at, updated_at
+      ) VALUES (
+        gen_random_uuid(), $1, $2, $3, 'salesperson', $4, $5, NULL, $6, $7, 'outbound', true, NOW(), NOW()
+      ) RETURNING *`,
+      [
+        leadId,
+        lead.deal_id || null,
+        lead.company_id,
+        req.user?.name || 'Sales Representative',
+        req.user?.email || null,
+        channel || 'email',
+        message.trim()
+      ]
+    );
+
+    // Reset customer_waiting flag
+    await pool.query(
+      `UPDATE leads 
+       SET customer_waiting = false,
+           customer_waiting_since = NULL,
+           customer_waiting_warned = false,
+           customer_waiting_reminded = false,
+           customer_waiting_escalated = false,
+           last_activity_date = NOW(),
+           updated_at = NOW()
+       WHERE id = $1`,
+      [leadId]
+    );
+
+    // Record activity
+    const { recordActivity } = require('./server/activityService');
+    await recordActivity({
+      leadId: lead.id,
+      companyId: lead.company_id,
+      user: req.user?.name || 'Sales Representative',
+      action: 'salesperson_responded',
+      target: lead.name,
+      note: `Salesperson sent response via ${channel || 'email'}: "${message.substring(0, 100)}${message.length > 100 ? '...' : ''}"`,
+      type: 'message',
+      isCustomerAction: false
+    });
+
+    // If channel is email and lead has email, dispatch email to customer
+    if ((!channel || channel === 'email') && lead.email) {
+      const emailService = require('./server/emailService');
+      await emailService.sendSalespersonResponseEmail({
+        leadEmail: lead.email,
+        leadName: lead.name,
+        companyName: lead.company_name || lead.company,
+        salespersonName: req.user?.name || 'Your Sales Advisor',
+        messageText: message.trim()
+      }).catch(err => console.error("Failed to email customer reply:", err.message));
+    }
+
+    res.json({
+      success: true,
+      message: "Message sent to customer and waiting status cleared",
+      data: msgInsert.rows[0]
+    });
+  } catch (err) {
+    console.error("POST /leads/:id/send-message error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 3. Get All Messages for a Lead
+app.get("/leads/:id/messages", authenticateToken, async (req, res) => {
+  try {
+    const leadId = req.params.id;
+    const result = await pool.query(
+      `SELECT * FROM customer_messages 
+       WHERE lead_id = $1 
+       ORDER BY created_at ASC`,
+      [leadId]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("GET /leads/:id/messages error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 4. Get Leads with Customers Waiting (Sales SLA Dashboard)
+app.get("/leads/waiting-customers", authenticateToken, async (req, res) => {
+  try {
+    const { whereClause, params } = await getScopedQueryFilters('leads', req);
+    const waitingCond = `customer_waiting = true AND customer_waiting_since IS NOT NULL AND LOWER(REPLACE(status::text, ' ', '_')) NOT IN ('won', 'lost', 'unqualified', 'booking_done', 'token_done', 'converted')`;
+    const finalWhere = whereClause ? `${whereClause} AND ${waitingCond}` : `WHERE ${waitingCond}`;
+
+    const query = `
+      SELECT l.id, l.name, l.email, l.phone, l.company, l.status, l.owner_id,
+             l.customer_waiting, l.customer_waiting_since, l.customer_waiting_escalated,
+             l.last_customer_message_at,
+             ROUND(EXTRACT(EPOCH FROM (NOW() - l.customer_waiting_since)) / 60) as waiting_minutes,
+             (SELECT name FROM users WHERE id = l.owner_id) as owner_name,
+             (SELECT message FROM customer_messages WHERE lead_id = l.id AND direction = 'inbound' ORDER BY created_at DESC LIMIT 1) as latest_customer_message
+      FROM leads l
+      ${finalWhere}
+      ORDER BY l.customer_waiting_since ASC
+    `;
+
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error("GET /leads/waiting-customers error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 5. Get Activity Timeline for a Lead
+app.get("/leads/:id/activities", authenticateToken, async (req, res) => {
+  try {
+    const { getLeadActivities } = require('./server/activityService');
+    const activities = await getLeadActivities(req.params.id);
+    res.json(activities);
+  } catch (err) {
+    console.error("GET /leads/:id/activities error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 6. Log New Activity for a Lead (calls, emails, whatsapp, meetings, notes, status changes, followups)
+app.post("/leads/:id/activities", authenticateToken, async (req, res) => {
+  try {
+    const leadId = req.params.id;
+    const { activity_type, type, description, note, action, target, value, status, due_date } = req.body;
+
+    const leadRes = await pool.query("SELECT * FROM leads WHERE id = $1", [leadId]);
+    if (leadRes.rows.length === 0) {
+      return res.status(404).json({ error: "Lead not found" });
+    }
+    const lead = leadRes.rows[0];
+
+    const finalType = activity_type || type || 'note';
+    const finalNote = description || note || '';
+    const finalAction = action || (finalType === 'call' ? 'called' : finalType === 'meeting' ? 'meeting_held' : finalType === 'whatsapp' ? 'whatsapp_sent' : finalType === 'email' ? 'email_sent' : 'activity_logged');
+
+    const { recordActivity } = require('./server/activityService');
+    const activity = await recordActivity({
+      leadId: lead.id,
+      companyId: lead.company_id,
+      userId: req.user?.id || null,
+      user: req.user?.name || req.user?.email || 'Sales Representative',
+      action: finalAction,
+      target: target || lead.name,
+      note: finalNote,
+      type: finalType,
+      value: value || null,
+      status: status || 'completed',
+      dueDate: due_date || null,
+      isCustomerAction: false
+    });
+
+    res.json({
+      success: true,
+      message: "Activity recorded successfully and last_activity_date updated",
+      data: activity
+    });
+  } catch (err) {
+    console.error("POST /leads/:id/activities error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ──────────────────────────────────────────────────────────────
+// WORKFLOW AUTOMATION MANAGEMENT & SETTINGS API
+// ──────────────────────────────────────────────────────────────
+
+// GET /api/workflow-automation: Retrieve status, configuration, and real-time metrics of all 5 automations
+app.get(["/api/workflow-automation", "/api/automations"], authenticateToken, async (req, res) => {
+  try {
+    const CLOSED_STATUS_CONDITION = `
+      LOWER(REPLACE(status::text, ' ', '_')) NOT IN ('won', 'lost', 'unqualified', 'booking_done', 'token_done', 'converted')
+      AND LOWER(status::text) NOT IN ('won', 'lost', 'unqualified', 'booking done', 'booking_done', 'token done', 'token_done', 'converted')
+    `;
+
+    // Fetch real-time metrics
+    const overdueRes = await pool.query(`
+      SELECT COUNT(*)::int as count 
+      FROM leads 
+      WHERE next_followup_at <= NOW() 
+        AND ${CLOSED_STATUS_CONDITION}
+    `);
+
+    const inactiveRes = await pool.query(`
+      SELECT COUNT(*)::int as count 
+      FROM leads 
+      WHERE (last_activity_date <= NOW() - INTERVAL '7 days' OR (last_activity_date IS NULL AND created_at <= NOW() - INTERVAL '7 days'))
+        AND ${CLOSED_STATUS_CONDITION}
+    `);
+
+    const waitingRes = await pool.query(`
+      SELECT COUNT(*)::int as count 
+      FROM leads 
+      WHERE customer_waiting = true 
+        AND ${CLOSED_STATUS_CONDITION}
+    `);
+
+    const uncontactedRes = await pool.query(`
+      SELECT COUNT(*)::int as count 
+      FROM leads 
+      WHERE LOWER(status::text) = 'new' 
+        AND created_at <= NOW() - INTERVAL '24 hours' 
+        AND (new_lead_notified IS NULL OR new_lead_notified = false)
+        AND ${CLOSED_STATUS_CONDITION}
+    `);
+
+    const activitiesCountRes = await pool.query(`
+      SELECT COUNT(*)::int as count 
+      FROM activities 
+      WHERE user = 'System Automation' OR user = 'SLA Monitor'
+    `);
+
+    const automations = [
+      {
+        id: "missed_followup",
+        name: "Missed Next Follow-up Automation",
+        description: "Automatically emails customer, notifies salesperson, and escalates to managers with repeat reminders when scheduled follow-up is missed.",
+        status: "active",
+        trigger: "Schedule passed (next_followup_at <= NOW())",
+        schedule: "Runs every minute (* * * * *)",
+        actions: [
+          "Auto-email customer with meeting rescheduling link",
+          "High-priority notification to assigned salesperson",
+          "Escalate to sales manager if repeated",
+          "Alert Super Admins if lead has no owner",
+          "Skips all closed leads (won, lost, unqualified, booking_done, token_done)"
+        ],
+        current_affected_count: overdueRes.rows[0]?.count || 0
+      },
+      {
+        id: "inactive_lead",
+        name: "Lead Inactive for X Days Re-engagement",
+        description: "Monitors lead last_activity_date and sends warm re-engagement email to customer after 7 days of inactivity.",
+        status: "active",
+        trigger: "No CRM activity for 7+ days",
+        schedule: "Runs daily at 08:00 AM (0 8 * * *)",
+        actions: [
+          "Send personalized re-engagement check-in email to lead",
+          "Alert salesperson and manager about stale opportunity",
+          "Log automated outreach to activity timeline",
+          "Skips all closed leads"
+        ],
+        current_affected_count: inactiveRes.rows[0]?.count || 0
+      },
+      {
+        id: "customer_waiting_sla",
+        name: "Customer Replied Waiting SLA Monitor",
+        description: "Tracks incoming customer responses and enforces salesperson response SLAs (1h reminder, 4h manager escalation).",
+        status: "active",
+        trigger: "Customer reply received and waiting for response",
+        schedule: "Runs every 5 minutes (*/5 * * * *)",
+        actions: [
+          "Record inbound customer replies via webhooks or API",
+          "1-hour response warning to salesperson",
+          "4-hour SLA breach escalation to manager and super admin",
+          "Auto-clears timer when salesperson replies"
+        ],
+        current_affected_count: waitingRes.rows[0]?.count || 0
+      },
+      {
+        id: "new_lead_uncontacted",
+        name: "New Lead Not Contacted Automation",
+        description: "Detects new leads uncontacted for >24 hours, sends welcome outreach email, and alerts sales reps and managers.",
+        status: "active",
+        trigger: "Lead in 'new' status > 24 hours without contact",
+        schedule: "Runs hourly at :15 (15 * * * *)",
+        actions: [
+          "Send automated welcome & onboarding outreach email",
+          "Alert assigned salesperson and manager",
+          "Alert Super Admins if lead has no assigned owner",
+          "Supports manual entry, ad sync, and webhook imports"
+        ],
+        current_affected_count: uncontactedRes.rows[0]?.count || 0
+      },
+      {
+        id: "closed_deal_automation",
+        name: "Closed Lead Suppression Guard",
+        description: "Excludes won, lost, unqualified, booking_done, and token_done leads across all follow-ups and meetings.",
+        status: "active",
+        trigger: "Lead reaches closed status (with space or underscore)",
+        schedule: "Active on all triggers and queries",
+        actions: [
+          "Halt all automated customer outreach and reminders",
+          "Prevent spamming customers after booking/conversion",
+          "Handles both 'booking done' / 'booking_done' and 'token done' / 'token_done'"
+        ],
+        current_affected_count: 0
+      }
+    ];
+
+    res.json({
+      success: true,
+      total_automations: automations.length,
+      active_automations: automations.length,
+      system_activities_logged: activitiesCountRes.rows[0]?.count || 0,
+      automations
+    });
+  } catch (err) {
+    console.error("GET /api/workflow-automation error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/workflow-automation/run: Trigger an immediate execution run of all CRM automation workflows
+app.post(["/api/workflow-automation/run", "/api/automations/run"], authenticateToken, async (req, res) => {
+  try {
+    const followupModule = require('./server/followupReminder');
+    const inactiveModule = require('./server/inactiveLeadReminder');
+    const waitingModule = require('./server/customerWaitingReminder');
+    const newLeadModule = require('./server/newLeadReminder');
+    const meetingModule = require('./server/meetingReminder');
+
+    const results = {};
+
+    if (typeof followupModule.checkFollowupReminders === 'function') {
+      results.followups = await followupModule.checkFollowupReminders();
+    }
+    if (typeof inactiveModule.checkInactiveLeads === 'function') {
+      results.inactive_leads = await inactiveModule.checkInactiveLeads();
+    }
+    if (typeof waitingModule.checkCustomerWaitingSLA === 'function') {
+      results.customer_waiting = await waitingModule.checkCustomerWaitingSLA();
+    }
+    if (typeof newLeadModule.checkNewLeadsUncontacted === 'function') {
+      results.new_leads_uncontacted = await newLeadModule.checkNewLeadsUncontacted();
+    }
+    if (typeof meetingModule.checkMeetingReminders === 'function') {
+      results.meeting_reminders = await meetingModule.checkMeetingReminders();
+    }
+
+    res.json({
+      success: true,
+      message: "Workflow automations executed successfully",
+      timestamp: new Date().toISOString(),
+      results
+    });
+  } catch (err) {
+    console.error("POST /api/workflow-automation/run error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -3225,7 +3852,12 @@ app.post("/deals", authenticateToken, async (req, res) => {
     let { title, company, value, stage, owner, ownerId, owner_id, probability, expectedclose, daysinstage, lead_id } = req.body;
 
     // Normalize stage
-    const validStages = ["New", "Contacted", "Qualified", "Proposal", "Negotiation", "Won", "Lost"];
+    const validStages = [
+      "New", "Attempted-1", "Attempted-2", "Attempted-3", "In-Process",
+      "Contacted", "Qualified", "Site Visit Scheduled", "Site Visit Done",
+      "Zoom Meeting", "Proposal", "Final Negotiation", "Negotiation",
+      "Token Done", "Booking Done", "Won", "Lost", "Unqualified"
+    ];
     let dbStage = "New";
     if (stage) {
       const found = validStages.find(s => s.toLowerCase() === String(stage).toLowerCase());
@@ -3389,6 +4021,21 @@ app.post("/leads/:id/comments", authenticateToken, async (req, res) => {
       console.error('Comment notification error:', notifErr);
     }
 
+    // Record Activity in activities table
+    try {
+      const { recordActivity } = require('./server/activityService');
+      await recordActivity({
+        leadId: id,
+        user: userName,
+        action: 'comment_added',
+        target: 'Lead Comment',
+        note: `Comment: "${comment.substring(0, 100)}${comment.length > 100 ? '...' : ''}"`,
+        type: 'note',
+        isCustomerAction: false
+      });
+    } catch (actErr) {
+      console.error('Comment activity record error:', actErr.message);
+    }
 
     const commentWithUser = await pool.query(
       `SELECT 
@@ -3830,7 +4477,7 @@ app.put("/deals/:id", authenticateToken, async (req, res) => {
 
     // Verify deal belongs to same company (Super Admin bypasses)
     const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
-    if (!isSuperAdmin && existing.company_id !== req.user.company_id) {
+    if (!isSuperAdmin && existing.company_id && req.user.company_id && existing.company_id !== req.user.company_id) {
       return res.status(403).json({ error: "Access Denied: Deal belongs to another company" });
     }
 
@@ -3848,9 +4495,9 @@ app.put("/deals/:id", authenticateToken, async (req, res) => {
 
     const title = req.body.title !== undefined ? req.body.title : existing.title;
     const company = req.body.company !== undefined ? req.body.company : existing.company;
-    const value = req.body.value !== undefined ? req.body.value : existing.value;
+    const value = req.body.value !== undefined ? Number(req.body.value) : existing.value;
     const stage = req.body.stage !== undefined ? String(req.body.stage) : existing.stage;
-    const probability = req.body.probability !== undefined ? req.body.probability : existing.probability;
+    const probability = req.body.probability !== undefined ? Number(req.body.probability) : existing.probability;
 
     let expectedclose = req.body.expectedclose !== undefined
       ? req.body.expectedclose
@@ -3859,7 +4506,7 @@ app.put("/deals/:id", authenticateToken, async (req, res) => {
       expectedclose = null;
     }
 
-    const daysinstage = req.body.daysinstage !== undefined ? req.body.daysinstage : existing.daysinstage;
+    const daysinstage = req.body.daysinstage !== undefined ? Number(req.body.daysinstage) : existing.daysinstage;
 
     const ownerId = req.body.owner_id !== undefined ? req.body.owner_id : (req.body.ownerId !== undefined ? req.body.ownerId : existing.owner_id);
     let owner = req.body.owner !== undefined ? req.body.owner : existing.owner;
@@ -3875,6 +4522,8 @@ app.put("/deals/:id", authenticateToken, async (req, res) => {
       }
     }
 
+    const targetCompanyId = existing.company_id || req.user?.company_id || null;
+
     const result = await pool.query(
       `UPDATE deals
        SET
@@ -3887,8 +4536,9 @@ app.put("/deals/:id", authenticateToken, async (req, res) => {
          probability = $7,
          expectedclose = $8,
          expected_close = $9,
-         daysinstage = $10
-       WHERE id = $11
+         daysinstage = $10,
+         company_id = COALESCE(company_id, $11)
+       WHERE id = $12
        RETURNING *`,
       [
         title,
@@ -3901,6 +4551,7 @@ app.put("/deals/:id", authenticateToken, async (req, res) => {
         expectedclose,
         expectedclose,
         daysinstage,
+        targetCompanyId,
         req.params.id
       ]
     );
@@ -6719,38 +7370,337 @@ app.post("/api/ai/insight", authenticateToken, async (req, res) => {
 });
 
 // ── Subscription Endpoints ──
-// 1. Create Subscription
-app.post("/subscription/create", authenticateToken, async (req, res) => {
-  try {
-    const { plan_type, payment_method } = req.body;
-    const userId = req.user.id;
+// ── Helper: Calculate subscription end date based on duration ──
+function calculateSubscriptionEndDate(startDate, durationMonths) {
+  const start = startDate ? new Date(startDate) : new Date();
+  const end = new Date(start);
+  const months = Math.max(1, parseInt(durationMonths, 10) || 1);
+  end.setMonth(end.getMonth() + months);
+  return end;
+}
 
-    let subscription = null;
-    try {
-      const result = await pool.query(
-        `INSERT INTO subscriptions (user_id, plan_type, payment_method, status, created_at, updated_at)
-         VALUES ($1, $2, $3, 'active', NOW(), NOW())
-         RETURNING *`,
-        [userId, plan_type, payment_method]
+// ── Helper: Automated Subscription Expiry Notification Worker ──
+async function checkAndSendSubscriptionReminders() {
+  try {
+    const now = new Date();
+    console.log(`[Subscription Worker] Running expiry checks at ${now.toISOString()}...`);
+
+    // 1. Check 7-Day Expiry Reminders
+    const res7d = await pool.query(`
+      SELECT s.*, u.name as user_name, u.email as user_email
+      FROM subscriptions s
+      LEFT JOIN users u ON s.user_id = u.id
+      WHERE s.status = 'active'
+        AND (s.reminder_7d_sent IS NULL OR s.reminder_7d_sent = false)
+        AND s.subscription_end <= NOW() + INTERVAL '7 days'
+        AND s.subscription_end > NOW() + INTERVAL '1 day'
+    `);
+
+    for (const sub of res7d.rows) {
+      const cName = sub.customer_name || sub.user_name || "Valued Member";
+      const planTitle = sub.plan_name || `${sub.duration_months || 1}-Month Fitness Plan`;
+      const endDateStr = sub.subscription_end ? new Date(sub.subscription_end).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : 'soon';
+
+      // Notify Customer
+      if (sub.user_id) {
+        await notificationService.createNotification(
+          sub.user_id,
+          'subscription_expiring_7d',
+          '⏳ Subscription Ending in 7 Days',
+          `Your ${planTitle} is ending on ${endDateStr}. Please renew your plan to continue your sessions uninterrupted.`,
+          '/billing',
+          'medium',
+          { subscription_id: sub.id, plan_name: planTitle, end_date: sub.subscription_end }
+        );
+      }
+
+      // Notify Admin
+      await notificationService.notifySuperAdmins(
+        'subscription_expiring_7d',
+        `🔔 Renewal Alert: ${cName}`,
+        `Customer ${cName}'s subscription is ending on ${endDateStr}. Plan: ${planTitle}.`,
+        `/subscriptions`,
+        'medium',
+        { subscription_id: sub.id, customer_name: cName, customer_email: sub.customer_email || sub.user_email }
       );
-      subscription = result.rows[0];
-    } catch (e) {
-      console.warn("subscriptions table might not exist, skipping insert:", e.message);
+
+      await pool.query(`UPDATE subscriptions SET reminder_7d_sent = true, updated_at = NOW() WHERE id = $1`, [sub.id]);
     }
 
-    await pool.query(
-      `UPDATE users SET plan_type = $1, subscription_status = 'active' WHERE id = $2`,
-      [plan_type, userId]
+    // 2. Check 1-Day Expiry Reminders
+    const res1d = await pool.query(`
+      SELECT s.*, u.name as user_name, u.email as user_email
+      FROM subscriptions s
+      LEFT JOIN users u ON s.user_id = u.id
+      WHERE s.status = 'active'
+        AND (s.reminder_1d_sent IS NULL OR s.reminder_1d_sent = false)
+        AND s.subscription_end <= NOW() + INTERVAL '1 day'
+        AND s.subscription_end > NOW()
+    `);
+
+    for (const sub of res1d.rows) {
+      const cName = sub.customer_name || sub.user_name || "Valued Member";
+      const planTitle = sub.plan_name || `${sub.duration_months || 1}-Month Fitness Plan`;
+      const endDateStr = sub.subscription_end ? new Date(sub.subscription_end).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : 'tomorrow';
+
+      // Notify Customer
+      if (sub.user_id) {
+        await notificationService.createNotification(
+          sub.user_id,
+          'subscription_expiring_1d',
+          '🚨 Urgent: Subscription Ends Tomorrow!',
+          `Your ${planTitle} ends tomorrow (${endDateStr}). Please renew your plan now to continue your workouts!`,
+          '/billing',
+          'high',
+          { subscription_id: sub.id, plan_name: planTitle, end_date: sub.subscription_end }
+        );
+      }
+
+      // Notify Admin
+      await notificationService.notifySuperAdmins(
+        'subscription_expiring_1d',
+        `🚨 Final Reminder: ${cName}`,
+        `Customer ${cName}'s subscription ends tomorrow on ${endDateStr}. Plan: ${planTitle}.`,
+        `/subscriptions`,
+        'high',
+        { subscription_id: sub.id, customer_name: cName, customer_email: sub.customer_email || sub.user_email }
+      );
+
+      await pool.query(`UPDATE subscriptions SET reminder_1d_sent = true, updated_at = NOW() WHERE id = $1`, [sub.id]);
+    }
+
+    // 3. Check Expired Subscriptions (0 Days / Past Expiry)
+    const res0d = await pool.query(`
+      SELECT s.*, u.name as user_name, u.email as user_email
+      FROM subscriptions s
+      LEFT JOIN users u ON s.user_id = u.id
+      WHERE s.status = 'active'
+        AND s.subscription_end <= NOW()
+    `);
+
+    for (const sub of res0d.rows) {
+      const cName = sub.customer_name || sub.user_name || "Valued Member";
+      const planTitle = sub.plan_name || `${sub.duration_months || 1}-Month Fitness Plan`;
+      const endDateStr = sub.subscription_end ? new Date(sub.subscription_end).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : 'today';
+
+      // Mark expired
+      await pool.query(`
+        UPDATE subscriptions 
+        SET status = 'expired', reminder_0d_sent = true, updated_at = NOW() 
+        WHERE id = $1
+      `, [sub.id]);
+
+      if (sub.user_id) {
+        await pool.query(`
+          UPDATE users 
+          SET subscription_status = 'expired' 
+          WHERE id = $1
+        `, [sub.user_id]);
+
+        // Notify Customer
+        await notificationService.createNotification(
+          sub.user_id,
+          'subscription_expired',
+          '❌ Subscription Expired',
+          `Your ${planTitle} has expired on ${endDateStr}. Please renew your plan to restore your full access.`,
+          '/billing',
+          'high',
+          { subscription_id: sub.id, plan_name: planTitle, end_date: sub.subscription_end }
+        );
+      }
+
+      // Notify Admin
+      await notificationService.notifySuperAdmins(
+        'subscription_expired',
+        `❌ Subscription Expired: ${cName}`,
+        `Customer ${cName}'s subscription has expired on ${endDateStr}. Plan: ${planTitle}.`,
+        `/subscriptions`,
+        'high',
+        { subscription_id: sub.id, customer_name: cName, customer_email: sub.customer_email || sub.user_email }
+      );
+    }
+
+    return {
+      success: true,
+      reminders7dCount: res7d.rows.length,
+      reminders1dCount: res1d.rows.length,
+      expiredCount: res0d.rows.length
+    };
+  } catch (err) {
+    console.error("[Subscription Worker] Error checking reminders:", err);
+    return { success: false, error: err.message };
+  }
+}
+
+// Background scheduler: runs every 1 hour
+setInterval(() => {
+  checkAndSendSubscriptionReminders().catch(e => console.error("Periodic subscription reminder check error:", e));
+}, 60 * 60 * 1000);
+
+// ── Subscription Endpoints ──
+
+// 1. Create / Purchase Subscription (calculates subscription_end accurately)
+app.post(["/subscription/create", "/api/subscriptions/purchase"], authenticateToken, async (req, res) => {
+  try {
+    const {
+      plan_type,
+      plan_name,
+      duration_months,
+      amount,
+      payment_method,
+      customer_name,
+      customer_email,
+      customer_phone,
+      start_date
+    } = req.body;
+
+    const userId = req.user.id;
+    const companyId = req.user.company_id || null;
+
+    // Determine duration in months
+    let duration = parseInt(duration_months, 10);
+    if (!duration || isNaN(duration)) {
+      const typeStr = String(plan_type || plan_name || '').toLowerCase();
+      if (typeStr.includes('2-month') || typeStr.includes('2 month')) duration = 2;
+      else if (typeStr.includes('3-month') || typeStr.includes('3 month') || typeStr.includes('quarterly')) duration = 3;
+      else if (typeStr.includes('6-month') || typeStr.includes('6 month') || typeStr.includes('half')) duration = 6;
+      else if (typeStr.includes('year') || typeStr.includes('annual') || typeStr.includes('12-month')) duration = 12;
+      else duration = 1; // default 1 month
+    }
+
+    const subscriptionStart = start_date ? new Date(start_date) : new Date();
+    const subscriptionEnd = calculateSubscriptionEndDate(subscriptionStart, duration);
+    const resolvedPlanName = plan_name || `${duration}-Month Fitness Plan`;
+    const resolvedPlanType = plan_type || `fitness_${duration}m`;
+
+    const subId = `sub_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+
+    const result = await pool.query(
+      `INSERT INTO subscriptions (
+        id, user_id, company_id, plan_id, plan_name, duration_months, amount,
+        subscription_start, subscription_end, status,
+        reminder_7d_sent, reminder_1d_sent, reminder_0d_sent,
+        customer_name, customer_email, customer_phone, payment_method,
+        created_at, updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', false, false, false, $10, $11, $12, $13, NOW(), NOW())
+      RETURNING *`,
+      [
+        subId,
+        userId,
+        companyId,
+        resolvedPlanType,
+        resolvedPlanName,
+        duration,
+        Number(amount) || 0,
+        subscriptionStart,
+        subscriptionEnd,
+        customer_name || req.user.name || 'Member',
+        customer_email || req.user.email || '',
+        customer_phone || '',
+        payment_method || 'Online'
+      ]
     );
 
-    res.json({ success: true, subscription });
+    const subscription = result.rows[0];
+
+    // Update user profile
+    await pool.query(
+      `UPDATE users 
+       SET plan_type = $1, 
+           subscription_status = 'active', 
+           subscription_start = $2, 
+           subscription_end = $3,
+           payment_status = 'paid'
+       WHERE id = $4`,
+      [resolvedPlanType, subscriptionStart, subscriptionEnd, userId]
+    );
+
+    // Notify Customer & Admin about purchase
+    const endDateStr = subscriptionEnd.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+    await notificationService.createNotification(
+      userId,
+      'subscription_activated',
+      '🎉 Subscription Activated!',
+      `Your ${resolvedPlanName} is active until ${endDateStr}. Thank you for subscribing!`,
+      '/billing',
+      'medium',
+      { subscription_id: subscription.id, end_date: subscriptionEnd }
+    );
+
+    await notificationService.notifySuperAdmins(
+      'subscription_activated',
+      `💼 New Subscription Purchased: ${customer_name || req.user.name}`,
+      `${customer_name || req.user.name} purchased ${resolvedPlanName} (₹${amount || 0}) valid until ${endDateStr}.`,
+      '/subscriptions',
+      'medium',
+      { subscription_id: subscription.id, user_id: userId, amount }
+    );
+
+    res.json({
+      success: true,
+      subscription,
+      subscription_start: subscriptionStart,
+      subscription_end: subscriptionEnd,
+      duration_months: duration,
+      status: 'active',
+      reminder_7d_sent: false,
+      reminder_1d_sent: false,
+      reminder_0d_sent: false
+    });
   } catch (error) {
     console.error("Subscription creation failed:", error);
-    res.status(500).json({ error: "Failed to create subscription" });
+    res.status(500).json({ error: "Failed to create subscription: " + error.message });
   }
 });
 
-// 2. Start Trial
+// 2. Trigger automated reminders manually or via cron
+app.post("/api/subscriptions/trigger-reminders", async (req, res) => {
+  try {
+    const result = await checkAndSendSubscriptionReminders();
+    res.json(result);
+  } catch (error) {
+    console.error("Manual trigger reminders error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 3. Get Active Subscriptions (with days left and status)
+app.get("/api/subscriptions/my-active", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM subscriptions 
+       WHERE user_id = $1 
+       ORDER BY created_at DESC 
+       LIMIT 1`,
+      [req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.json({ active: false, subscription: null });
+    }
+
+    const sub = result.rows[0];
+    const now = new Date();
+    const end = sub.subscription_end ? new Date(sub.subscription_end) : null;
+    const daysLeft = end ? Math.max(0, Math.ceil((end.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))) : 0;
+    const isExpired = end ? end.getTime() <= now.getTime() : false;
+
+    res.json({
+      active: sub.status === 'active' && !isExpired,
+      subscription: {
+        ...sub,
+        days_left: daysLeft,
+        is_expiring_soon: daysLeft <= 7 && daysLeft > 0,
+        is_expired: isExpired
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 4. Start Trial
 app.post("/subscription/trial/start", authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -6760,7 +7710,8 @@ app.post("/subscription/trial/start", authenticateToken, async (req, res) => {
 
     await pool.query(
       `UPDATE users 
-       SET trial_start = $1, trial_end = $2, subscription_status = 'trialing' 
+       SET trial_start = $1, trial_end = $2, subscription_status = 'trialing',
+           subscription_start = $1, subscription_end = $2
        WHERE id = $3`,
       [trialStart, trialEnd, userId]
     );
@@ -6777,10 +7728,15 @@ app.post("/subscription/trial/start", authenticateToken, async (req, res) => {
   }
 });
 
-// 3. Cancel Subscription
+// 5. Cancel Subscription
 app.post("/subscription/cancel", authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
+
+    await pool.query(
+      `UPDATE subscriptions SET status = 'cancelled', updated_at = NOW() WHERE user_id = $1 AND status = 'active'`,
+      [userId]
+    );
 
     await pool.query(
       `UPDATE users SET subscription_status = 'cancelled', plan_type = NULL WHERE id = $1`,
@@ -6794,30 +7750,39 @@ app.post("/subscription/cancel", authenticateToken, async (req, res) => {
   }
 });
 
-// 4. Payment Success
+// 6. Payment Success
 app.post("/subscription/payment-success", authenticateToken, async (req, res) => {
   try {
-    const { plan_type } = req.body;
+    const { plan_type, plan_name, duration_months, amount } = req.body;
     const userId = req.user.id;
+    const duration = parseInt(duration_months, 10) || 1;
+    const start = new Date();
+    const end = calculateSubscriptionEndDate(start, duration);
 
     await pool.query(
       `UPDATE users 
-       SET subscription_status = 'active', payment_status = 'paid', plan_type = $1 
-       WHERE id = $2`,
-      [plan_type, userId]
+       SET subscription_status = 'active', payment_status = 'paid', plan_type = $1,
+           subscription_start = $2, subscription_end = $3
+       WHERE id = $4`,
+      [plan_type || 'fitness_1m', start, end, userId]
     );
 
     try {
       await pool.query(
         `INSERT INTO payment_logs (user_id, status, plan_type, created_at)
          VALUES ($1, 'success', $2, NOW())`,
-        [userId, plan_type]
+        [userId, plan_type || 'fitness_1m']
       );
     } catch (e) {
       console.warn("payment_logs table might not exist, skipping log insert:", e.message);
     }
 
-    res.json({ success: true, message: "Payment successful, subscription activated" });
+    res.json({
+      success: true,
+      message: "Payment successful, subscription activated",
+      subscription_start: start,
+      subscription_end: end
+    });
   } catch (error) {
     console.error("Payment success update failed:", error);
     res.status(500).json({ error: "Failed to update payment status" });
@@ -6869,6 +7834,221 @@ app.get("/subscription/trial/check", authenticateToken, async (req, res) => {
     res.status(500).json({ error: "Failed to check trial" });
   }
 });
+
+// ──────────────────────────────────────────────────────────────
+// ADMIN SUBSCRIPTION MONITORING & REMINDER ENDPOINTS
+// ──────────────────────────────────────────────────────────────
+
+// A. Get Expiring Soon Subscriptions for Admin Dashboard
+app.get("/api/admin/subscriptions/expiring-soon", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        s.id,
+        s.user_id,
+        COALESCE(s.customer_name, u.name, 'Customer') as customer_name,
+        COALESCE(s.customer_email, u.email, '') as customer_email,
+        COALESCE(s.customer_phone, u.phone, '') as customer_phone,
+        COALESCE(s.plan_name, s.plan_type, '1 Month Plan') as plan_name,
+        COALESCE(s.duration_months, 1) as duration_months,
+        s.subscription_start,
+        s.subscription_end,
+        s.status,
+        s.reminder_7d_sent,
+        s.reminder_1d_sent,
+        s.reminder_0d_sent,
+        s.amount,
+        s.created_at
+      FROM subscriptions s
+      LEFT JOIN users u ON s.user_id = u.id
+      WHERE s.subscription_end IS NOT NULL
+        AND (s.subscription_end <= NOW() + INTERVAL '7 days' OR s.status = 'expired')
+      ORDER BY s.subscription_end ASC
+    `);
+
+    const now = new Date();
+    const rows = result.rows.map(sub => {
+      const end = new Date(sub.subscription_end);
+      const diffMs = end.getTime() - now.getTime();
+      const daysLeft = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
+      
+      let badge = "ACTIVE";
+      if (daysLeft <= 0 || sub.status === 'expired') {
+        badge = "EXPIRED";
+      } else if (daysLeft === 1) {
+        badge = "EXPIRING TOMORROW";
+      } else if (daysLeft <= 7) {
+        badge = `EXPIRING IN ${daysLeft} DAYS`;
+      }
+
+      return {
+        ...sub,
+        days_left: daysLeft,
+        status_badge: badge,
+        formatted_expiry: end.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
+      };
+    });
+
+    res.json(rows);
+  } catch (error) {
+    console.error("Failed to fetch expiring soon subscriptions:", error);
+    res.status(500).json({ error: "Failed to fetch expiring subscriptions" });
+  }
+});
+
+// B. Get All Admin Subscriptions with Filter (all | active | expiring_7d | expiring_24h | expired)
+app.get("/api/admin/subscriptions", authenticateToken, async (req, res) => {
+  try {
+    const { filter = "all", search = "" } = req.query;
+
+    let query = `
+      SELECT 
+        s.id,
+        s.user_id,
+        COALESCE(s.customer_name, u.name, 'Customer') as customer_name,
+        COALESCE(s.customer_email, u.email, '') as customer_email,
+        COALESCE(s.customer_phone, u.phone, '') as customer_phone,
+        COALESCE(s.plan_name, s.plan_type, '1 Month Plan') as plan_name,
+        COALESCE(s.duration_months, 1) as duration_months,
+        s.subscription_start,
+        s.subscription_end,
+        s.status,
+        s.reminder_7d_sent,
+        s.reminder_1d_sent,
+        s.reminder_0d_sent,
+        s.amount,
+        s.created_at
+      FROM subscriptions s
+      LEFT JOIN users u ON s.user_id = u.id
+      WHERE 1=1
+    `;
+
+    const params = [];
+    let paramIndex = 1;
+
+    if (filter === "active") {
+      query += ` AND s.status = 'active' AND (s.subscription_end IS NULL OR s.subscription_end > NOW())`;
+    } else if (filter === "expiring_7d") {
+      query += ` AND s.status = 'active' AND s.subscription_end <= NOW() + INTERVAL '7 days' AND s.subscription_end > NOW() + INTERVAL '1 day'`;
+    } else if (filter === "expiring_24h") {
+      query += ` AND s.status = 'active' AND s.subscription_end <= NOW() + INTERVAL '1 day' AND s.subscription_end > NOW()`;
+    } else if (filter === "expired") {
+      query += ` AND (s.status = 'expired' OR (s.subscription_end IS NOT NULL AND s.subscription_end <= NOW()))`;
+    }
+
+    if (search) {
+      query += ` AND (s.customer_name ILIKE $${paramIndex} OR u.name ILIKE $${paramIndex} OR u.email ILIKE $${paramIndex})`;
+      params.push(`%${search}%`);
+      paramIndex++;
+    }
+
+    query += ` ORDER BY s.subscription_end ASC NULLS LAST`;
+
+    const result = await pool.query(query, params);
+    const now = new Date();
+
+    const formatted = result.rows.map(sub => {
+      let daysLeft = null;
+      let badge = "ACTIVE";
+
+      if (sub.subscription_end) {
+        const end = new Date(sub.subscription_end);
+        const diffMs = end.getTime() - now.getTime();
+        daysLeft = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
+
+        if (daysLeft <= 0 || sub.status === 'expired') {
+          badge = "EXPIRED";
+        } else if (daysLeft === 1) {
+          badge = "EXPIRING TOMORROW";
+        } else if (daysLeft <= 7) {
+          badge = `EXPIRING IN ${daysLeft} DAYS`;
+        }
+      }
+
+      return {
+        ...sub,
+        days_left: daysLeft,
+        status_badge: badge,
+        formatted_expiry: sub.subscription_end 
+          ? new Date(sub.subscription_end).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
+          : "N/A"
+      };
+    });
+
+    res.json(formatted);
+  } catch (error) {
+    console.error("Failed to fetch admin subscriptions:", error);
+    res.status(500).json({ error: "Failed to fetch subscriptions" });
+  }
+});
+
+// C. Manual Send Reminder Endpoint for Admin
+app.post("/api/admin/subscriptions/:id/send-reminder", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const subRes = await pool.query(`
+      SELECT s.*, u.name as user_name, u.email as user_email, u.phone as user_phone
+      FROM subscriptions s
+      LEFT JOIN users u ON s.user_id = u.id
+      WHERE s.id = $1
+    `, [id]);
+
+    if (subRes.rows.length === 0) {
+      return res.status(404).json({ error: "Subscription not found" });
+    }
+
+    const sub = subRes.rows[0];
+    const customerName = sub.customer_name || sub.user_name || "Valued Member";
+    const customerEmail = sub.customer_email || sub.user_email;
+    const planTitle = sub.plan_name || `${sub.duration_months || 1}-Month Plan`;
+    const expiryDateStr = sub.subscription_end 
+      ? new Date(sub.subscription_end).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })
+      : "soon";
+
+    const daysLeft = sub.subscription_end 
+      ? Math.max(0, Math.ceil((new Date(sub.subscription_end).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
+      : 0;
+
+    const emailService = require("./server/emailService");
+    const notificationService = require("./server/notificationService");
+
+    // 1. Send In-App notification
+    if (sub.user_id) {
+      await notificationService.createNotification(
+        sub.user_id,
+        daysLeft <= 1 ? 'subscription_expiring_1d' : 'subscription_expiring_7d',
+        daysLeft <= 1 ? '🚨 Urgent: Subscription Ending Soon' : '⏳ Subscription Expiry Reminder',
+        `Your ${planTitle} expires on ${expiryDateStr}. Please renew your plan now.`,
+        '/billing',
+        daysLeft <= 1 ? 'high' : 'medium',
+        { subscription_id: sub.id, manual_admin_trigger: true }
+      );
+    }
+
+    // 2. Send Customer Email
+    let emailResult = { success: false };
+    if (customerEmail) {
+      emailResult = await emailService.sendCustomerExpiryEmail({
+        customerEmail,
+        customerName,
+        planName: planTitle,
+        expiryDate: expiryDateStr,
+        daysLeft,
+        type: daysLeft <= 1 ? '1_day_reminder' : '7_day_reminder'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Reminder sent successfully to ${customerName} (${customerEmail || 'in-app'})`,
+      emailResult
+    });
+  } catch (error) {
+    console.error("Manual send reminder failed:", error);
+    res.status(500).json({ error: "Failed to send reminder" });
+  }
+});
+
 app.get("/ai-insights", authenticateToken, async (req, res) => {
   try {
     const isSuperAdmin = req.user.role === 'Super Admin' || req.user.role === 'super_admin';
@@ -8431,11 +9611,14 @@ app.listen(5000, "0.0.0.0", () => {
   startInsightCron();
 });
 
-// Start cron job for background sync
+// Start cron job for background sync & CRM automations
 require('./server/cronSync');
 require('./server/meetingReminder');
 require('./server/followupReminder');
-console.log('⏰ Cron sync & reminders started');
+require('./server/inactiveLeadReminder');
+require('./server/customerWaitingReminder');
+require('./server/newLeadReminder');
+console.log('⏰ Cron sync & reminders started (meetings, follow-ups, inactivity, customer SLA, new leads)');
 
 // ── OAuth Flow Handlers for All Platforms ──
 try {
@@ -8524,12 +9707,14 @@ async function processMetaLead(leadgenId, pageId, formId, platform = "facebook")
     if (!existingLead) {
       const leadInsert = await pool.query(
         `INSERT INTO leads (
-          id, name, email, phone, company, notes, source, platform, platform_id, status, owner_id, company_id, created_at, updated_at
+          id, name, email, phone, company, notes, source, platform, platform_id, status, owner_id, company_id, last_activity_date, created_at, updated_at
         ) VALUES (
-          gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, 'new', $9, $10, NOW(), NOW()
+          gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, 'new', $9, $10, NOW(), NOW(), NOW()
         ) RETURNING *`,
         [leadName, email, phone, company, messageNotes, platform, platform, externalLeadId, targetUserId, targetCompanyId]
       );
+
+      const createdLead = leadInsert.rows[0];
 
       if (connection) {
         await pool.query(
@@ -8544,7 +9729,39 @@ async function processMetaLead(leadgenId, pageId, formId, platform = "facebook")
         [connection ? connection.id : null, platform, `Lead ID: ${leadgenId}`]
       ).catch(() => {});
 
-      console.log(`🎉 New ${platform} lead saved to CRM: ${leadName} (ID: ${leadInsert.rows[0]?.id})`);
+      console.log(`🎉 New ${platform} lead saved to CRM: ${leadName} (ID: ${createdLead?.id})`);
+
+      // Record Activity
+      try {
+        const { recordActivity } = require('./server/activityService');
+        await recordActivity({
+          leadId: createdLead.id,
+          companyId: targetCompanyId,
+          user: `Meta Webhook (${platform})`,
+          action: 'lead_imported',
+          target: leadName,
+          note: `Imported via Meta webhook (${platform}). Form ID: ${formId || 'N/A'}`,
+          type: 'system',
+          isCustomerAction: false
+        });
+      } catch (actErr) {
+        console.error("Meta lead activity record error:", actErr.message);
+      }
+
+      // Send welcome email if customer email is present
+      if (email) {
+        try {
+          const emailService = require('./server/emailService');
+          await emailService.sendNewLeadWelcomeEmail({
+            leadEmail: email,
+            leadName: leadName,
+            companyName: company,
+            salespersonName: null
+          });
+        } catch (emailErr) {
+          console.error("Meta lead welcome email error:", emailErr.message);
+        }
+      }
 
       if (targetUserId) {
         try {
@@ -8553,13 +9770,23 @@ async function processMetaLead(leadgenId, pageId, formId, platform = "facebook")
             'lead_created',
             `🎯 New ${platform === 'instagram' ? 'Instagram' : 'Facebook'} Lead`,
             `New lead received from ${platform}: ${leadName}${email ? ` (${email})` : ''}`,
-            `/leads`,
+            `/leads/${createdLead.id}`,
             'high',
-            { lead_id: leadInsert.rows[0]?.id, platform, form_id: formId, page_id: pageId }
+            { lead_id: createdLead?.id, platform, form_id: formId, page_id: pageId }
           );
         } catch (notifErr) {
           console.error(`Notification error for ${platform} lead:`, notifErr.message);
         }
+      } else {
+        // Notify Super Admins if no target user
+        await notificationService.notifySuperAdmins(
+          'lead_created',
+          `🎯 New ${platform} Lead`,
+          `New unassigned lead received from ${platform}: ${leadName}`,
+          `/leads/${createdLead.id}`,
+          'medium',
+          { lead_id: createdLead?.id, platform }
+        ).catch(() => {});
       }
     }
   } catch (err) {
@@ -8961,14 +10188,47 @@ app.post(["/api/integrations/webhook", "/api/integrations/webhook/:token"], asyn
 
     const leadInsert = await pool.query(
       `INSERT INTO leads (
-        id, name, email, phone, company, notes, source, platform, platform_id, status, owner_id, company_id, created_at, updated_at
+        id, name, email, phone, company, notes, source, platform, platform_id, status, owner_id, company_id, last_activity_date, created_at, updated_at
       ) VALUES (
-        gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, 'new', $9, $10, NOW(), NOW()
+        gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, 'new', $9, $10, NOW(), NOW(), NOW()
       ) RETURNING *`,
       [name, email, phone, company, notes, source, source, externalId, targetUserId, targetCompanyId]
     );
 
-    console.log(`🎉 New Lead saved via Universal Webhook: ${name} (ID: ${leadInsert.rows[0]?.id})`);
+    const createdLead = leadInsert.rows[0];
+    console.log(`🎉 New Lead saved via Universal Webhook: ${name} (ID: ${createdLead?.id})`);
+
+    // Record Activity
+    try {
+      const { recordActivity } = require('./server/activityService');
+      await recordActivity({
+        leadId: createdLead.id,
+        companyId: targetCompanyId,
+        user: `Webhook (${source})`,
+        action: 'lead_imported',
+        target: name,
+        note: `Lead created via webhook connector (${source}). Notes: ${notes || 'N/A'}`,
+        type: 'system',
+        isCustomerAction: false
+      });
+    } catch (actErr) {
+      console.error("Webhook lead activity record error:", actErr.message);
+    }
+
+    // Send welcome email if customer email exists
+    if (email) {
+      try {
+        const emailService = require('./server/emailService');
+        await emailService.sendNewLeadWelcomeEmail({
+          leadEmail: email,
+          leadName: name,
+          companyName: company,
+          salespersonName: null
+        });
+      } catch (emailErr) {
+        console.error("Webhook lead welcome email error:", emailErr.message);
+      }
+    }
 
     if (targetUserId) {
       try {
@@ -8977,18 +10237,27 @@ app.post(["/api/integrations/webhook", "/api/integrations/webhook/:token"], asyn
           'lead_created',
           `🎯 New Lead from ${source}`,
           `New lead received: ${name}${email ? ` (${email})` : ''}`,
-          `/leads`,
+          `/leads/${createdLead.id}`,
           'high',
-          { lead_id: leadInsert.rows[0]?.id, source }
+          { lead_id: createdLead?.id, source }
         );
       } catch (notifErr) {
         console.error("Failed to enqueue notification for webhook lead:", notifErr.message);
       }
+    } else {
+      await notificationService.notifySuperAdmins(
+        'lead_created',
+        `🎯 New Lead from ${source}`,
+        `New unassigned lead received from ${source}: ${name}`,
+        `/leads/${createdLead.id}`,
+        'medium',
+        { lead_id: createdLead?.id, source }
+      ).catch(() => {});
     }
 
     res.status(200).json({
       success: true,
-      lead_id: leadInsert.rows[0]?.id,
+      lead_id: createdLead?.id,
       message: "Lead received and created in CRM successfully"
     });
   } catch (err) {

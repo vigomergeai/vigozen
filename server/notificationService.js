@@ -17,6 +17,9 @@ const NOTIFICATION_TYPES = {
     TRIAL_ENDING: 'trial_ending',
     TRIAL_EXPIRED: 'trial_expired',
     SUBSCRIPTION_ACTIVATED: 'subscription_activated',
+    SUBSCRIPTION_EXPIRING_7D: 'subscription_expiring_7d',
+    SUBSCRIPTION_EXPIRING_1D: 'subscription_expiring_1d',
+    SUBSCRIPTION_EXPIRED: 'subscription_expired',
     PAYMENT_FAILED: 'payment_failed',
     TICKET_CREATED: 'ticket_created',
     TICKET_CLOSED: 'ticket_closed',
@@ -32,8 +35,8 @@ const NOTIFICATION_TYPES = {
 };
 
 const PRIORITY_MAP = {
-    high: ['payment_failed', 'trial_expired', 'deal_won', 'high_value_lead', 'deal_lost'],
-    medium: ['lead_created', 'lead_assigned', 'report_ready', 'ticket_created', 'subscription_activated', 'lead_converted', 'ticket_closed'],
+    high: ['payment_failed', 'trial_expired', 'deal_won', 'high_value_lead', 'deal_lost', 'subscription_expired', 'subscription_expiring_1d'],
+    medium: ['lead_created', 'lead_assigned', 'report_ready', 'ticket_created', 'subscription_activated', 'subscription_expiring_7d', 'lead_converted', 'ticket_closed'],
     low: ['followup_due', 'ai_score_changed', 'reminder', 'lead_status_changed', 'comment_added', 'task_assigned', 'task_due', 'task_overdue', 'task_completed'],
 };
 
@@ -176,6 +179,9 @@ function getTypeLabel(type) {
         'trial_ending': 'Trial Ending',
         'trial_expired': 'Trial Expired',
         'subscription_activated': 'Subscription Activated',
+        'subscription_expiring_7d': 'Subscription Expiring in 7 Days ⏳',
+        'subscription_expiring_1d': 'Subscription Expiring Tomorrow 🚨',
+        'subscription_expired': 'Subscription Expired ❌',
         'payment_failed': 'Payment Failed ⚠️',
         'ticket_created': 'Ticket Created',
         'ticket_closed': 'Ticket Closed',

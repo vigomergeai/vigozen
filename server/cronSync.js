@@ -7,6 +7,9 @@ const {
     createPlatformIntegration,
     mapMultipleLeadsToCRM
 } = require('./adPlatformIntegrations');
+const notificationService = require('./notificationService');
+const emailService = require('./emailService');
+const { recordActivity } = require('./activityService');
 
 // ============================================================
 // CONFIGURATION
@@ -241,38 +244,40 @@ async function importLeads(userId, companyId, leads, connection) {
                 );
             } else {
                 // Insert new lead
-                await pool.query(
+                const insertRes = await pool.query(
                     `INSERT INTO leads (
-            id,
-            company_id,
-            assigned_to,
-            name,
-            email,
-            phone,
-            company,
-            message,
-            source,
-            platform,
-            platform_id,
-            status,
-            created_at,
-            updated_at
-          ) VALUES (
-            gen_random_uuid(),
-            $1,
-            $2,
-            $3,
-            $4,
-            $5,
-            $6,
-            $7,
-            $8,
-            $9,
-            $10,
-            'new',
-            NOW(),
-            NOW()
-          )`,
+                        id,
+                        company_id,
+                        owner_id,
+                        name,
+                        email,
+                        phone,
+                        company,
+                        notes,
+                        source,
+                        platform,
+                        platform_id,
+                        status,
+                        last_activity_date,
+                        created_at,
+                        updated_at
+                    ) VALUES (
+                        gen_random_uuid(),
+                        $1,
+                        $2,
+                        $3,
+                        $4,
+                        $5,
+                        $6,
+                        $7,
+                        $8,
+                        $9,
+                        $10,
+                        'new',
+                        NOW(),
+                        NOW(),
+                        NOW()
+                    ) RETURNING *`,
                     [
                         companyId,
                         userId,
@@ -286,7 +291,54 @@ async function importLeads(userId, companyId, leads, connection) {
                         lead.platform_id
                     ]
                 );
+                
+                const newLead = insertRes.rows[0];
                 importedCount++;
+
+                // 1. Notify assigned salesperson
+                if (userId) {
+                    await notificationService.createNotification(
+                        userId,
+                        'lead_created',
+                        `📥 New Lead Imported (${lead.platform || 'Ads'})`,
+                        `New lead "${lead.name}" imported from ${lead.platform || 'ad campaign'}`,
+                        `/leads/${newLead.id}`,
+                        'high',
+                        { lead_id: newLead.id, platform: lead.platform }
+                    ).catch(err => console.error("Ad lead user notification error:", err));
+                }
+
+                // 2. Notify Super Admins
+                await notificationService.notifySuperAdmins(
+                    'lead_created',
+                    `📥 New Lead from ${lead.platform || 'Ads'}`,
+                    `Lead "${lead.name}" was imported from ${lead.platform || 'ad platform'}.`,
+                    `/leads/${newLead.id}`,
+                    'medium',
+                    { lead_id: newLead.id, platform: lead.platform }
+                ).catch(err => console.error("Ad lead super admin notification error:", err));
+
+                // 3. Record Activity
+                await recordActivity({
+                    leadId: newLead.id,
+                    companyId: companyId,
+                    user: `Ad Sync (${lead.platform || 'Campaign'})`,
+                    action: 'lead_imported',
+                    target: lead.name,
+                    note: `Imported from ${lead.platform} ad campaign. Message: ${lead.message || 'N/A'}`,
+                    type: 'system',
+                    isCustomerAction: false
+                });
+
+                // 4. Send initial welcome outreach email to customer if email is available
+                if (lead.email) {
+                    await emailService.sendNewLeadWelcomeEmail({
+                        leadEmail: lead.email,
+                        leadName: lead.name,
+                        companyName: lead.company,
+                        salespersonName: null
+                    }).catch(err => console.error("Failed to send welcome email to imported lead:", err.message));
+                }
             }
         } catch (error) {
             console.error(`Failed to import lead ${lead.platform_id}:`, error);

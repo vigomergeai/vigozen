@@ -31,6 +31,7 @@ import {
   MilestoneStatus,
   PaymentStatus
 } from "../data/constructionMilestones";
+import { getApiBaseUrl } from "../lib/api";
 
 interface PaymentPlanModuleProps {
   dealId: string;
@@ -64,7 +65,7 @@ function formatDateDisplay(dateStr?: string | null): string {
 }
 
 function getToken(): string | null {
-  return localStorage.getItem("vigo_token") || localStorage.getItem("auth_token") || localStorage.getItem("token") || null;
+  return localStorage.getItem("vigo_token") || localStorage.getItem("auth_token") || localStorage.getItem("token") || sessionStorage.getItem("vigo_token") || null;
 }
 
 export default function PaymentPlanModule({
@@ -107,7 +108,8 @@ export default function PaymentPlanModule({
       setLoading(true);
       try {
         const token = getToken();
-        const res = await fetch(`${import.meta.env.VITE_API_URL}/deals/${dealId}/payment-schedule`, {
+        const apiBase = getApiBaseUrl();
+        const res = await fetch(`${apiBase}/deals/${dealId}/payment-schedule`, {
           headers: {
             Authorization: token ? `Bearer ${token}` : "",
           },
@@ -202,13 +204,14 @@ export default function PaymentPlanModule({
     setSaving(true);
     try {
       const token = getToken();
+      const apiBase = getApiBaseUrl();
       const payload = {
         agreement_value: agreementValue,
         milestones: milestones,
         notes: notes || null,
       };
 
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/deals/${dealId}/payment-schedule`, {
+      const res = await fetch(`${apiBase}/deals/${dealId}/payment-schedule`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",

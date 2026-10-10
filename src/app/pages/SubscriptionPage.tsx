@@ -73,10 +73,76 @@ export default function SubscriptionPage() {
         userProfile,
     } = useApp();
 
-    const [activeTab, setActiveTab] = useState<"overview" | "users" | "billing">("overview");
+    const [activeTab, setActiveTab] = useState<"overview" | "users" | "billing" | "members_subscriptions">("overview");
     const [loading, setLoading] = useState(false);
     const [showEditModal, setShowEditModal] = useState(false);
     const [showAddPayment, setShowAddPayment] = useState(false);
+
+    // ── Member Subscriptions State & Filters ──
+    const [adminSubscriptions, setAdminSubscriptions] = useState<any[]>([]);
+    const [expiringSoonSubscriptions, setExpiringSoonSubscriptions] = useState<any[]>([]);
+    const [subFilter, setSubFilter] = useState<"all" | "active" | "expiring_7d" | "expiring_24h" | "expired">("all");
+    const [loadingAdminSubs, setLoadingAdminSubs] = useState(false);
+    const [sendingReminderId, setSendingReminderId] = useState<string | null>(null);
+
+    const fetchAdminSubscriptions = async (filter = subFilter) => {
+        setLoadingAdminSubs(true);
+        try {
+            const token = localStorage.getItem("token");
+            const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api/admin/subscriptions?filter=${filter}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setAdminSubscriptions(Array.isArray(data) ? data : []);
+            }
+        } catch (e) {
+            console.error("Failed to fetch admin subscriptions:", e);
+        } finally {
+            setLoadingAdminSubs(false);
+        }
+    };
+
+    const fetchExpiringSoon = async () => {
+        try {
+            const token = localStorage.getItem("token");
+            const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api/admin/subscriptions/expiring-soon`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setExpiringSoonSubscriptions(Array.isArray(data) ? data : []);
+            }
+        } catch (e) {
+            console.error("Failed to fetch expiring soon:", e);
+        }
+    };
+
+    const handleSendReminder = async (subId: string, customerName: string) => {
+        setSendingReminderId(subId);
+        try {
+            const token = localStorage.getItem("token");
+            const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api/admin/subscriptions/${subId}/send-reminder`, {
+                method: "POST",
+                headers: { 
+                    Authorization: `Bearer ${token}`,
+                    "Content-Type": "application/json"
+                }
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+                toast.success(`Reminder sent to ${customerName}`);
+                fetchAdminSubscriptions();
+                fetchExpiringSoon();
+            } else {
+                toast.error(data.error || "Failed to send reminder");
+            }
+        } catch (e: any) {
+            toast.error("Failed to send reminder");
+        } finally {
+            setSendingReminderId(null);
+        }
+    };
 
     // ── Edit Subscription Form ──
     const [editForm, setEditForm] = useState({
@@ -107,10 +173,16 @@ export default function SubscriptionPage() {
                 fetchPaymentMethods(),
                 fetchInvoices(),
                 loadUsers(),
+                fetchExpiringSoon(),
+                fetchAdminSubscriptions("all"),
             ]);
         };
         loadData();
     }, []);
+
+    useEffect(() => {
+        fetchAdminSubscriptions(subFilter);
+    }, [subFilter]);
 
     // ── Update edit form when subscription loads ──
     useEffect(() => {
@@ -316,9 +388,10 @@ export default function SubscriptionPage() {
             </div>
 
             {/* Tabs */}
-            <div className="flex gap-2 border-b border-slate-200">
+            <div className="flex gap-2 border-b border-slate-200 overflow-x-auto">
                 {[
                     { id: "overview", label: "Overview", icon: TrendingUp },
+                    { id: "members_subscriptions", label: "Member Subscriptions", icon: Crown },
                     { id: "users", label: "User Management", icon: Users },
                     { id: "billing", label: "Billing", icon: CreditCard },
                 ].map((tab) => {
@@ -327,7 +400,7 @@ export default function SubscriptionPage() {
                         <button
                             key={tab.id}
                             onClick={() => setActiveTab(tab.id as any)}
-                            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${activeTab === tab.id
+                            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 flex-shrink-0 ${activeTab === tab.id
                                 ? "border-indigo-600 text-indigo-600"
                                 : "border-transparent text-slate-500 hover:text-slate-700"
                                 }`}
@@ -342,6 +415,79 @@ export default function SubscriptionPage() {
             {/* ── TAB: OVERVIEW ── */}
             {activeTab === "overview" && (
                 <div className="space-y-6">
+                    {/* EXPIRING SOON SUBSCRIPTIONS WIDGET */}
+                    <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+                        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-amber-50/60 to-orange-50/60">
+                            <div className="flex items-center gap-2.5">
+                                <span className="text-lg">⏳</span>
+                                <div>
+                                    <h3 className="font-bold text-slate-800 text-sm tracking-wide">EXPIRING SOON SUBSCRIPTIONS</h3>
+                                    <p className="text-[11px] text-slate-500">Members requiring renewal attention within the next 7 days</p>
+                                </div>
+                                <span className="text-xs bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-semibold ml-2">
+                                    {expiringSoonSubscriptions.length}
+                                </span>
+                            </div>
+                            <button
+                                onClick={() => setActiveTab("members_subscriptions")}
+                                className="text-xs font-semibold text-indigo-600 hover:text-indigo-700 flex items-center gap-1"
+                            >
+                                View All Members →
+                            </button>
+                        </div>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                                <thead>
+                                    <tr className="border-b border-slate-100 bg-slate-50 text-[11px] text-slate-500 font-semibold uppercase tracking-wider">
+                                        <th className="text-left py-3 px-6">Customer</th>
+                                        <th className="text-left py-3 px-4">Plan</th>
+                                        <th className="text-left py-3 px-4">Expiry</th>
+                                        <th className="text-left py-3 px-4">Days Left</th>
+                                        <th className="text-right py-3 px-6">Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {expiringSoonSubscriptions.length === 0 ? (
+                                        <tr>
+                                            <td colSpan={5} className="py-8 text-center text-xs text-slate-400">
+                                                🎉 All member subscriptions are active and healthy!
+                                            </td>
+                                        </tr>
+                                    ) : (
+                                        expiringSoonSubscriptions.map((sub) => (
+                                            <tr key={sub.id} className="hover:bg-slate-50 transition-colors">
+                                                <td className="py-3.5 px-6">
+                                                    <div className="font-semibold text-slate-900 text-xs">{sub.customer_name}</div>
+                                                    <div className="text-[10px] text-slate-400">{sub.customer_email || sub.customer_phone || 'No contact email'}</div>
+                                                </td>
+                                                <td className="py-3.5 px-4 text-xs font-medium text-slate-700">{sub.plan_name}</td>
+                                                <td className="py-3.5 px-4 text-xs text-slate-600 font-medium">{sub.formatted_expiry}</td>
+                                                <td className="py-3.5 px-4">
+                                                    <span className={`text-xs font-bold ${
+                                                        sub.days_left === 0 ? 'text-red-600' :
+                                                        sub.days_left === 1 ? 'text-orange-600' :
+                                                        'text-amber-600'
+                                                    }`}>
+                                                        {sub.days_left === 0 ? 'Expired' : `${sub.days_left} ${sub.days_left === 1 ? 'day' : 'days'}`}
+                                                    </span>
+                                                </td>
+                                                <td className="py-3.5 px-6 text-right">
+                                                    <button
+                                                        onClick={() => handleSendReminder(sub.id, sub.customer_name)}
+                                                        disabled={sendingReminderId === sub.id}
+                                                        className="px-3.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 text-xs font-semibold rounded-xl border border-indigo-200 transition-colors disabled:opacity-50 inline-flex items-center gap-1.5"
+                                                    >
+                                                        <span>{sendingReminderId === sub.id ? 'Sending...' : 'Send Reminder'}</span>
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        ))
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
                     {/* Plan Details */}
                     <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
                         <div className="px-6 py-4 border-b border-slate-100 bg-gradient-to-r from-indigo-50/50 to-purple-50/50">
@@ -480,6 +626,131 @@ export default function SubscriptionPage() {
                             <h4 className="font-medium text-slate-800">Billing History</h4>
                             <p className="text-xs text-slate-400 mt-1">View invoices and manage payment methods</p>
                         </button>
+                    </div>
+                </div>
+            )}
+
+            {/* ── TAB: MEMBER SUBSCRIPTIONS MONITORING ── */}
+            {activeTab === "members_subscriptions" && (
+                <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm space-y-4">
+                    {/* Tab Header & Filter Pills */}
+                    <div className="p-6 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div>
+                            <div className="flex items-center gap-2">
+                                <Crown size={18} className="text-amber-500" />
+                                <h3 className="font-bold text-slate-900 text-base">Members Subscription Management</h3>
+                            </div>
+                            <p className="text-xs text-slate-500 mt-1">
+                                Monitor customer renewals, track upcoming expirations, and dispatch manual reminder alerts.
+                            </p>
+                        </div>
+
+                        {/* Filters */}
+                        <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-xl flex-wrap">
+                            {[
+                                { id: "all", label: "All" },
+                                { id: "active", label: "Active" },
+                                { id: "expiring_7d", label: "Expiring in 7 Days" },
+                                { id: "expiring_24h", label: "Expiring in 24h" },
+                                { id: "expired", label: "Expired" },
+                            ].map((f) => (
+                                <button
+                                    key={f.id}
+                                    onClick={() => setSubFilter(f.id as any)}
+                                    className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                                        subFilter === f.id
+                                            ? "bg-white text-indigo-600 shadow-sm"
+                                            : "text-slate-600 hover:text-slate-900"
+                                    }`}
+                                >
+                                    {f.label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* Member Subscriptions Table */}
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="border-b border-slate-100 bg-slate-50 text-[11px] text-slate-500 font-semibold uppercase tracking-wider">
+                                    <th className="text-left py-3.5 px-6">Customer</th>
+                                    <th className="text-left py-3.5 px-4">Plan Duration</th>
+                                    <th className="text-left py-3.5 px-4">Expiry Date</th>
+                                    <th className="text-left py-3.5 px-4">Status</th>
+                                    <th className="text-left py-3.5 px-4">Reminder Tracking</th>
+                                    <th className="text-right py-3.5 px-6">Quick Action</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {loadingAdminSubs ? (
+                                    <tr>
+                                        <td colSpan={6} className="py-12 text-center text-xs text-slate-400">
+                                            <Loader2 size={24} className="animate-spin text-indigo-500 mx-auto mb-2" />
+                                            Loading member subscriptions...
+                                        </td>
+                                    </tr>
+                                ) : adminSubscriptions.length === 0 ? (
+                                    <tr>
+                                        <td colSpan={6} className="py-12 text-center text-xs text-slate-400">
+                                            No member subscriptions found matching filter "{subFilter}".
+                                        </td>
+                                    </tr>
+                                ) : (
+                                    adminSubscriptions.map((sub) => {
+                                        // Status badge colors
+                                        const badge = sub.status_badge || "ACTIVE";
+                                        let badgeColor = "bg-emerald-50 text-emerald-700 border-emerald-200";
+                                        if (badge === "EXPIRED") {
+                                            badgeColor = "bg-red-50 text-red-700 border-red-200";
+                                        } else if (badge === "EXPIRING TOMORROW") {
+                                            badgeColor = "bg-orange-50 text-orange-700 border-orange-200";
+                                        } else if (badge.startsWith("EXPIRING IN")) {
+                                            badgeColor = "bg-amber-50 text-amber-700 border-amber-200";
+                                        }
+
+                                        return (
+                                            <tr key={sub.id} className="hover:bg-slate-50/80 transition-colors">
+                                                <td className="py-4 px-6">
+                                                    <div className="font-semibold text-slate-900 text-xs">{sub.customer_name}</div>
+                                                    <div className="text-[11px] text-slate-400">{sub.customer_email || sub.customer_phone || 'N/A'}</div>
+                                                </td>
+                                                <td className="py-4 px-4 text-xs font-medium text-slate-700">
+                                                    {sub.plan_name} ({sub.duration_months} {sub.duration_months === 1 ? 'Month' : 'Months'})
+                                                </td>
+                                                <td className="py-4 px-4 text-xs text-slate-600 font-medium">
+                                                    {sub.formatted_expiry}
+                                                </td>
+                                                <td className="py-4 px-4">
+                                                    <span className={`inline-block px-2.5 py-1 rounded-full text-[10px] font-bold border ${badgeColor}`}>
+                                                        {badge}
+                                                    </span>
+                                                </td>
+                                                <td className="py-4 px-4 text-[11px] text-slate-500">
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span title="7-Day Reminder" className={`w-2 h-2 rounded-full ${sub.reminder_7d_sent ? 'bg-emerald-500' : 'bg-slate-200'}`} />
+                                                        <span className="text-[10px] text-slate-400">7d</span>
+                                                        <span title="1-Day Reminder" className={`w-2 h-2 rounded-full ${sub.reminder_1d_sent ? 'bg-amber-500' : 'bg-slate-200'}`} />
+                                                        <span className="text-[10px] text-slate-400">1d</span>
+                                                        <span title="Expiry Notice" className={`w-2 h-2 rounded-full ${sub.reminder_0d_sent ? 'bg-red-500' : 'bg-slate-200'}`} />
+                                                        <span className="text-[10px] text-slate-400">Exp</span>
+                                                    </div>
+                                                </td>
+                                                <td className="py-4 px-6 text-right">
+                                                    <button
+                                                        onClick={() => handleSendReminder(sub.id, sub.customer_name)}
+                                                        disabled={sendingReminderId === sub.id}
+                                                        className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl transition-all shadow-sm disabled:opacity-50 inline-flex items-center gap-1.5"
+                                                    >
+                                                        <span>{sendingReminderId === sub.id ? 'Sending...' : 'Send Reminder'}</span>
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })
+                                )}
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             )}

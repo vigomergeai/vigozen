@@ -59,68 +59,165 @@ function isClosedStage(stage?: string): boolean {
 }
 
 export default function DashboardPage() {
-  const { role, leads, deals, activities, loading, refreshData, subscription } = useApp();
+  const { role, leads, deals, activities, loading, refreshData, subscription, companySubscription, userProfile } = useApp();
   const navigate = useNavigate();  
   useEffect(() => {
     refreshData();
   }, []);
 
-    // ── Trial Banner ──
-  const renderTrialBanner = () => {
-    if (!subscription) return null;
+  // ── Subscription & Expiry State Calculation ──
+  const getSubscriptionDetails = () => {
+    const subEnd = companySubscription?.company?.subscription_end || userProfile?.subscription_renewal_date || (subscription as any)?.subscription_end || subscription?.trial_end;
+    const rawPlan = companySubscription?.company?.plan_type || userProfile?.plan_type || subscription?.plan_type || "1 Month Plan";
+    const planName = rawPlan.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+
+    if (!subEnd) {
+      return {
+        hasSubscription: Boolean(subscription?.is_subscription_active || subscription?.is_trial_active),
+        daysRemaining: subscription?.days_remaining || 0,
+        expiryDateStr: "N/A",
+        planName,
+        status: subscription?.is_trial_active ? "trial" : "none",
+        isExpired: !subscription?.is_subscription_active && !subscription?.is_trial_active
+      };
+    }
+
+    const end = new Date(subEnd);
+    const now = new Date();
+    const diffTime = end.getTime() - now.getTime();
+    const daysRemaining = Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+    const expiryDateStr = isNaN(end.getTime()) ? "N/A" : end.toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" });
     
-    if (subscription.is_trial_active) {
+    let status: "normal" | "expiring_soon" | "expiring_tomorrow" | "expired" = "normal";
+    if (daysRemaining <= 0 || (!subscription?.is_subscription_active && !subscription?.is_trial_active)) {
+      status = "expired";
+    } else if (daysRemaining === 1) {
+      status = "expiring_tomorrow";
+    } else if (daysRemaining <= 7) {
+      status = "expiring_soon";
+    }
+
+    return {
+      hasSubscription: true,
+      daysRemaining,
+      expiryDateStr,
+      planName,
+      status,
+      isExpired: status === "expired"
+    };
+  };
+
+  const renderSubscriptionBanner = () => {
+    const subInfo = getSubscriptionDetails();
+
+    // 1. Expired state
+    if (subInfo.status === "expired" || (!subscription?.is_subscription_active && !subscription?.is_trial_active)) {
       return (
-        <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200 rounded-2xl p-4 mb-6 flex items-center justify-between">
+        <div className="bg-gradient-to-r from-red-50 to-orange-50 border border-red-200 rounded-2xl p-4 mb-6 flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-indigo-100 flex items-center justify-center">
-              <span className="text-xl">🎯</span>
+            <div className="w-10 h-10 rounded-xl bg-red-100 text-red-600 flex items-center justify-center font-bold text-lg">
+              ❌
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-red-800">
+                Subscription Expired ({subInfo.planName})
+              </p>
+              <p className="text-xs text-red-600">
+                Your subscription ended on {subInfo.expiryDateStr}. Please renew your plan to continue your sessions without interruption.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => navigate("/billing")}
+            className="px-5 py-2 text-sm font-semibold bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors shadow-sm"
+          >
+            Renew Now →
+          </button>
+        </div>
+      );
+    }
+
+    // 2. Expiring Tomorrow (1 day remaining)
+    if (subInfo.status === "expiring_tomorrow" || subInfo.daysRemaining === 1) {
+      return (
+        <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-300 rounded-2xl p-4 mb-6 flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center font-bold text-lg">
+              🚨
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-amber-900">
+                Urgent: Your subscription expires tomorrow!
+              </p>
+              <p className="text-xs text-amber-700">
+                Plan: {subInfo.planName} · Expiry: {subInfo.expiryDateStr}. Tap to renew and keep your schedule active.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => navigate("/billing")}
+            className="px-5 py-2 text-sm font-semibold bg-amber-600 text-white rounded-xl hover:bg-amber-700 transition-colors shadow-sm"
+          >
+            Renew Now →
+          </button>
+        </div>
+      );
+    }
+
+    // 3. Expiring Soon (<= 7 days remaining)
+    if (subInfo.status === "expiring_soon" || (subInfo.daysRemaining > 1 && subInfo.daysRemaining <= 7)) {
+      return (
+        <div className="bg-gradient-to-r from-amber-50 to-yellow-50 border border-amber-200 rounded-2xl p-4 mb-6 flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center font-bold text-lg">
+              ⚠️
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-amber-800">
+                Your subscription expires in {subInfo.daysRemaining} days.
+              </p>
+              <p className="text-xs text-amber-600">
+                Plan: {subInfo.planName} · Expires on {subInfo.expiryDateStr}.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => navigate("/billing")}
+            className="px-5 py-2 text-sm font-semibold bg-amber-500 text-white rounded-xl hover:bg-amber-600 transition-colors shadow-sm"
+          >
+            Renew Now
+          </button>
+        </div>
+      );
+    }
+
+    // 4. Free trial active banner
+    if (subscription?.is_trial_active) {
+      return (
+        <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200 rounded-2xl p-4 mb-6 flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold">
+              🎯
             </div>
             <div>
               <p className="text-sm font-semibold text-indigo-800">
                 Free Trial — {subscription.days_remaining} Days Remaining
               </p>
               <p className="text-xs text-indigo-600">
-                Your trial ends on {new Date(subscription.trial_end).toLocaleDateString()}
+                Your trial ends on {new Date(subscription.trial_end).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })}
               </p>
             </div>
           </div>
           <button
             onClick={() => navigate("/billing")}
-            className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors"
+            className="px-5 py-2 text-sm font-semibold bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors shadow-sm"
           >
-            Upgrade Now →
+            Upgrade Plan →
           </button>
         </div>
       );
     }
-    
-    if (!subscription.is_subscription_active) {
-      return (
-        <div className="bg-gradient-to-r from-red-50 to-orange-50 border border-red-200 rounded-2xl p-4 mb-6 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-red-100 flex items-center justify-center">
-              <span className="text-xl">⚠️</span>
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-red-800">
-                Trial Expired — Upgrade Now
-              </p>
-              <p className="text-xs text-red-600">
-                Your trial has ended. Upgrade to continue using the CRM.
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={() => navigate("/billing")}
-            className="px-4 py-2 text-sm bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors"
-          >
-            Upgrade Now →
-          </button>
-        </div>
-      );
-    }
-    
+
     return null;
   };
 
@@ -454,8 +551,67 @@ useEffect(() => {
         </div>
       </div>
 
-      {/* ── TRIAL BANNER ── */}
-      {renderTrialBanner()}
+      {/* ── SUBSCRIPTION / EXPIRY BANNER ── */}
+      {renderSubscriptionBanner()}
+
+      {/* ── MY PLAN / ACTIVE SUBSCRIPTION CARD ── */}
+      {(() => {
+        const subInfo = getSubscriptionDetails();
+        const isExpiring = subInfo.daysRemaining <= 7 && subInfo.daysRemaining > 0;
+        const isExpired = subInfo.isExpired;
+
+        return (
+          <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-sm relative overflow-hidden">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-start gap-4">
+                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-bold text-xl flex-shrink-0 ${
+                  isExpired 
+                    ? 'bg-red-100 text-red-600' 
+                    : isExpiring 
+                    ? 'bg-amber-100 text-amber-600' 
+                    : 'bg-indigo-50 text-indigo-600'
+                }`}>
+                  {isExpired ? '❌' : isExpiring ? '⏳' : '⚡'}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="text-base font-bold text-slate-900">{subInfo.planName}</h2>
+                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
+                      isExpired
+                        ? 'bg-red-50 text-red-700 border-red-200'
+                        : isExpiring
+                        ? 'bg-amber-50 text-amber-700 border-amber-200'
+                        : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    }`}>
+                      {isExpired ? 'EXPIRED' : isExpiring ? 'EXPIRING SOON' : 'ACTIVE'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-4 mt-1.5 text-xs text-slate-500 flex-wrap">
+                    <span><strong>Expires:</strong> {subInfo.expiryDateStr}</span>
+                    <span>•</span>
+                    <span className={isExpiring || isExpired ? 'font-semibold text-amber-600' : 'text-slate-600'}>
+                      <strong>{subInfo.daysRemaining} Days Remaining</strong>
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => navigate("/billing")}
+                className={`px-5 py-2.5 rounded-xl font-semibold text-xs transition-all flex items-center justify-center gap-2 shadow-sm ${
+                  isExpired
+                    ? 'bg-red-600 hover:bg-red-700 text-white'
+                    : isExpiring
+                    ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                    : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                }`}
+              >
+                <span>Renew Plan</span>
+                <span>→</span>
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

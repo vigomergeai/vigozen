@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { api } from "../lib/api";
+import { api, getApiBaseUrl } from "../lib/api";
 import {
   BarChart3, Bot, Download, Calendar, Filter, TrendingUp, Users, Target,
   ArrowUp, ArrowDown, ChevronDown, Sparkles, Brain, FileText, Lock, RefreshCw,
@@ -239,32 +239,62 @@ export default function AnalysisPage() {
     };
   });
   // ===== EXPORT CSV =====
+  const escapeCsv = (val: any) => `"${String(val ?? "").replace(/"/g, '""')}"`;
+
   const handleExportCSV = () => {
-    if (!deals.length) return;
+    let headers: string[] = [];
+    let rows: any[][] = [];
+    let filename = `crm-${reportType}-report.csv`;
 
-    const headers = ["Title", "Company", "Stage", "Value", "Owner", "Expected Close", "Created At"];
-
-    const rows = deals.map((d: any) => [
-      d.title || '',
-      d.company || '',
-      d.stage || '',
-      d.value || 0,
-      d.owner || '',
-      d.expectedclose || '',
-      d.createdAt || ''
-    ]);
+    if (reportType === "employee" && empWiseData.length > 0) {
+      headers = ["Employee", "New Leads", "Contacted", "Qualified", "Proposal", "Negotiation", "Won Deals", "Lost Leads"];
+      rows = empWiseData.map(e => [e.name, e.new, e.contacted, e.qualified, e.proposal, e.negotiation, e.won, e.lost]);
+    } else if (reportType === "status" && statusWiseData.length > 0) {
+      headers = ["Stage", "Leads Count", "Pipeline Value (₹)"];
+      rows = statusWiseData.map(s => [s.status, s.count, s.value]);
+    } else if (reportType === "sales" && salesWiseData.length > 0) {
+      headers = ["Period", "Target (₹)", "Achieved (₹)", "Deals Count", "Average Deal Size (₹)"];
+      rows = salesWiseData.map(s => [s.week, s.target, s.achieved, s.deals, s.avgDealSize]);
+    } else if (reportType === "payment" && paymentData.filteredItems.length > 0) {
+      headers = ["Deal Title", "Client / Company", "Stage / Milestone", "Amount (₹)", "Paid (₹)", "Due Date", "Milestone Status", "Payment Status"];
+      rows = paymentData.filteredItems.map(p => [
+        p.dealTitle,
+        p.dealCompany,
+        p.stageName,
+        p.amount,
+        p.paidAmount,
+        p.dueDate || "",
+        p.milestoneStatus,
+        p.paymentStatus
+      ]);
+    } else if (deals.length > 0) {
+      headers = ["Title", "Company", "Stage", "Value (₹)", "Owner", "Probability (%)", "Expected Close", "Created At"];
+      rows = deals.map((d: any) => [
+        d.title || "",
+        d.company || "",
+        d.stage || "",
+        d.value || 0,
+        d.owner || "",
+        d.probability || 50,
+        d.expectedClose || d.expectedclose || "",
+        d.createdAt || ""
+      ]);
+      filename = "crm-deals-report.csv";
+    } else {
+      toast.info("No data available to export for this view");
+      return;
+    }
 
     const csvContent =
-      [headers, ...rows]
-        .map(e => e.join(","))
+      [headers.map(escapeCsv).join(","), ...rows.map(r => r.map(escapeCsv).join(","))]
         .join("\n");
 
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = "crm-report.csv";
+    link.download = filename;
     link.click();
+    toast.success(`Exported ${filename}`);
   };
   // ===== PDF DOWNLOAD =====
   const handleDownloadPDF = () => {
@@ -464,7 +494,7 @@ export default function AnalysisPage() {
           efficiency: paymentData.collectionEfficiency
         };
 
-     const res = await fetch(`${import.meta.env.VITE_API_URL}/ai-insights/generate`, {
+        const res = await fetch(`${getApiBaseUrl()}/ai-insights/generate`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -627,7 +657,7 @@ export default function AnalysisPage() {
               <div className="flex items-center gap-2 mb-1.5">
                 <span className="text-sm font-semibold text-purple-800">AI Analysis Summary</span>
                 <span className="text-[10px] bg-purple-200 text-purple-700 px-2 py-0.5 rounded-full">AI Powered</span>
-               <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
               </div>
               <p className="text-sm text-purple-700 leading-relaxed">
                 {aiInsightLoading ? (
@@ -648,30 +678,30 @@ export default function AnalysisPage() {
           {/* Summary Cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {(() => {
-              const totalLeads = empWiseData.reduce((sum, e) => 
-                sum + 
-                (Number(e.new) || 0) + 
-                (Number(e.contacted) || 0) + 
-                (Number(e.qualified) || 0) + 
-                (Number(e.proposal) || 0) + 
-                (Number(e.negotiation) || 0) + 
-                (Number(e.won) || 0) + 
-                (Number(e.lost) || 0), 
+              const totalLeads = empWiseData.reduce((sum, e) =>
+                sum +
+                (Number(e.new) || 0) +
+                (Number(e.contacted) || 0) +
+                (Number(e.qualified) || 0) +
+                (Number(e.proposal) || 0) +
+                (Number(e.negotiation) || 0) +
+                (Number(e.won) || 0) +
+                (Number(e.lost) || 0),
                 0
               );
               const totalWon = empWiseData.reduce((sum, e) => sum + (Number(e.won) || 0), 0);
               const totalLost = empWiseData.reduce((sum, e) => sum + (Number(e.lost) || 0), 0);
               const convRate = totalLeads > 0 ? ((totalWon / totalLeads) * 100).toFixed(1) : "0.0";
 
-              const prevTotalLeads = prevEmpWiseData.reduce((sum, e) => 
-                sum + 
-                (Number(e.new) || 0) + 
-                (Number(e.contacted) || 0) + 
-                (Number(e.qualified) || 0) + 
-                (Number(e.proposal) || 0) + 
-                (Number(e.negotiation) || 0) + 
-                (Number(e.won) || 0) + 
-                (Number(e.lost) || 0), 
+              const prevTotalLeads = prevEmpWiseData.reduce((sum, e) =>
+                sum +
+                (Number(e.new) || 0) +
+                (Number(e.contacted) || 0) +
+                (Number(e.qualified) || 0) +
+                (Number(e.proposal) || 0) +
+                (Number(e.negotiation) || 0) +
+                (Number(e.won) || 0) +
+                (Number(e.lost) || 0),
                 0
               );
               const prevTotalWon = prevEmpWiseData.reduce((sum, e) => sum + (Number(e.won) || 0), 0);
@@ -962,8 +992,8 @@ export default function AnalysisPage() {
                 value: (() => {
                   if (!reports.summary?.won_deals) return "₹0";
                   const avgVal = (reports.summary.total_revenue || 0) / reports.summary.won_deals;
-                  return avgVal >= 100000 
-                    ? `₹${(avgVal / 100000).toFixed(2)}L` 
+                  return avgVal >= 100000
+                    ? `₹${(avgVal / 100000).toFixed(2)}L`
                     : `₹${(avgVal / 1000).toFixed(1)}K`;
                 })(),
                 trend: "+0%",
@@ -1181,7 +1211,7 @@ export default function AnalysisPage() {
               <div>
                 <h3 className="text-slate-800 font-semibold mb-1">Portfolio Collection Health</h3>
                 <p className="text-xs text-slate-400 mb-4">Realization progress across active milestones</p>
-                
+
                 <div className="space-y-4">
                   <div>
                     <div className="flex justify-between text-xs mb-1 font-medium">
@@ -1268,10 +1298,10 @@ export default function AnalysisPage() {
                 <div className="flex items-center bg-white p-1 rounded-xl border border-slate-200 gap-1 text-[11px]">
                   {[
                     { id: "all", label: `All (${paymentData.allMilestoneItems.length})` },
-                    { id: "overdue", label: `🔴 Overdue (${paymentData.allMilestoneItems.filter((i: any) => i.isOverdue).length})` },
-                    { id: "due_soon", label: `🟡 Due Soon (${paymentData.allMilestoneItems.filter((i: any) => i.isDueSoon).length})` },
-                    { id: "completed", label: `🟢 Paid (${paymentData.allMilestoneItems.filter((i: any) => i.paymentStatus.toLowerCase() === 'paid').length})` },
-                    { id: "upcoming", label: "⚪ Upcoming" },
+                    { id: "overdue", label: `Overdue (${paymentData.allMilestoneItems.filter((i: any) => i.isOverdue).length})` },
+                    { id: "due_soon", label: `Due Soon (${paymentData.allMilestoneItems.filter((i: any) => i.isDueSoon).length})` },
+                    { id: "completed", label: `Paid (${paymentData.allMilestoneItems.filter((i: any) => i.paymentStatus.toLowerCase() === 'paid').length})` },
+                    { id: "upcoming", label: "Upcoming" },
                   ].map(tab => (
                     <button
                       key={tab.id}

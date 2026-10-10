@@ -183,7 +183,21 @@ export default function NotificationDropdown({ onClose }: NotificationDropdownPr
                                                     <p className="text-xs text-slate-500 mt-0.5 line-clamp-2">
                                                         {n.message}
                                                     </p>
-                                                    <span className="text-[10px] text-slate-400 mt-1 block">
+                                                    {n.type?.startsWith('subscription_') && (
+                                                        <div className="mt-2">
+                                                            <button
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    handleNotificationClick(n);
+                                                                }}
+                                                                className="px-3 py-1 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-all shadow-sm flex items-center gap-1.5"
+                                                            >
+                                                                <span>Renew Now</span>
+                                                                <span>→</span>
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                    <span className="text-[10px] text-slate-400 mt-1.5 block">
                                                         {new Date(n.created_at).toLocaleTimeString([], { 
                                                             hour: '2-digit', 
                                                             minute: '2-digit' 
@@ -191,7 +205,7 @@ export default function NotificationDropdown({ onClose }: NotificationDropdownPr
                                                     </span>
                                                 </div>
                                                 {!n.is_read && (
-                                                    <div className="w-1.5 h-1.5 rounded-full bg-indigo-500 flex-shrink-0 mt-1.5" />
+                                                    <div className="w-2 h-2 rounded-full bg-indigo-500 flex-shrink-0 mt-1.5 ring-2 ring-indigo-200" />
                                                 )}
                                                 <button
                                                     onClick={(e) => handleDelete(e, n.id)}

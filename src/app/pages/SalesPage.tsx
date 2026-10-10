@@ -260,43 +260,71 @@ export default function SalesPage() {
   };
 
   const openEdit = (deal: Deal) => {
+    let expClose = "";
+    if (deal.expectedClose) {
+      try {
+        const d = new Date(deal.expectedClose);
+        if (!isNaN(d.getTime())) {
+          expClose = d.toISOString().split("T")[0];
+        }
+      } catch (e) {
+        expClose = "";
+      }
+    }
+
     setDealForm({
-      title: deal.title, company: deal.company, value: String(deal.value),
-      stage: deal.stage, owner: deal.owner, probability: String(deal.probability),
-      expectedClose: deal.expectedClose
-        ? new Date(deal.expectedClose).toISOString().split("T")[0]
-        : "",
+      title: deal.title || "",
+      company: deal.company || "",
+      value: String(deal.value || ""),
+      stage: deal.stage || "New",
+      owner: deal.owner || "",
+      ownerId: (deal as any).ownerId || (deal as any).owner_id || "",
+      probability: String(deal.probability ?? 50),
+      expectedClose: expClose,
     });
-    // console.log('Deal is', deal)
     setEditDeal(deal);
     setShowAddModal(true);
   };
 
   const handleSave = async () => {
-    if (!dealForm.title.trim() || !dealForm.company.trim()) return;
-    setSaving(true);
-    const payload: Partial<Deal> = {
-      title: dealForm.title.trim(),
-      company: dealForm.company.trim(),
-      value: Number(dealForm.value) || 0,
-      stage: dealForm.stage,
-      owner: (dealForm.owner || currentUser.name).trim(),
-      probability: Number(dealForm.probability) || 50,
-      expectedClose: dealForm.expectedClose,
-    };
-    if (editDeal) {
-
-      await updateDeal(editDeal.id, payload);
-    } else {
-      await addDeal(payload);
+    if (!dealForm.title.trim() || !dealForm.company.trim()) {
+      toast.error("Please fill in Deal Title and Company");
+      return;
     }
-    setSaving(false);
-    setShowAddModal(false);
-    setEditDeal(null);
+    setSaving(true);
+    try {
+      const payload: Partial<Deal> = {
+        title: dealForm.title.trim(),
+        company: dealForm.company.trim(),
+        value: Number(dealForm.value) || 0,
+        stage: dealForm.stage,
+        owner: (dealForm.owner || currentUser.name).trim(),
+        ownerId: dealForm.ownerId || undefined,
+        probability: Number(dealForm.probability) || 50,
+        expectedClose: dealForm.expectedClose || undefined,
+      };
+
+      let success = false;
+      if (editDeal) {
+        success = await updateDeal(editDeal.id, payload);
+      } else {
+        const created = await addDeal(payload);
+        success = !!created;
+      }
+
+      if (success) {
+        setShowAddModal(false);
+        setEditDeal(null);
+      }
+    } catch (err: any) {
+      console.error("Save deal error:", err);
+      toast.error(err?.message || "Failed to save deal");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleDelete = async (deal: Deal) => {
-    // console.log('Deal is', deal);
     setDeleteConfirm(null);
     await deleteDeal(deal.id);
   };

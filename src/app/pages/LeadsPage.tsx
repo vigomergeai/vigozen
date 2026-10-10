@@ -43,6 +43,14 @@ const statusConfig: Record<LeadStatus, { color: string; dot: string; icon: React
   Unqualified: { color: "bg-slate-50 text-slate-600 border-slate-200", dot: "bg-slate-400", icon: XCircle },
 };
 
+const getStatusConfig = (status: string | undefined | null) => {
+  if (!status) return statusConfig["New"];
+  if (statusConfig[status as LeadStatus]) return statusConfig[status as LeadStatus];
+  const lower = String(status).toLowerCase();
+  const matchedKey = (Object.keys(statusConfig) as LeadStatus[]).find(k => k.toLowerCase() === lower);
+  return matchedKey ? statusConfig[matchedKey] : statusConfig["New"];
+};
+
 const scoreColor = (s: number) => s >= 80 ? "text-emerald-600 bg-emerald-50 border-emerald-200" : s >= 60 ? "text-amber-600 bg-amber-50 border-amber-200" : "text-red-600 bg-red-50 border-red-200";
 const scoreLabel = (s: number) => s >= 80 ? "Hot" : s >= 60 ? "Warm" : "Cold";
 
@@ -257,13 +265,37 @@ export default function LeadsPage() {
   const openEdit = (lead: Lead) => {
     setFormErrors({});
     const nextFollow = lead.next_followup || lead.nextFollowup || lead.nextMeetingAt || "";
+    let formattedNextFollow = "";
+    if (nextFollow) {
+      try {
+        const d = new Date(nextFollow);
+        if (!isNaN(d.getTime())) {
+          const pad = (n: number) => String(n).padStart(2, "0");
+          formattedNextFollow = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        } else {
+          formattedNextFollow = String(nextFollow).replace(" ", "T").slice(0, 16);
+        }
+      } catch {
+        formattedNextFollow = String(nextFollow).replace(" ", "T").slice(0, 16);
+      }
+    }
+
     setForm({
-      name: lead.name, company: lead.company, email: lead.email, phone: lead.phone,
-      status: lead.status, source: lead.source, industry: lead.industry,
-      value: String(lead.value), notes: lead.notes, tags: lead.tags.join(", "),
-      owner: lead.owner, ownerId: lead.ownerId, probability: String(lead.probability),
-      nextMeetingAt: lead.nextMeetingAt ? lead.nextMeetingAt.slice(0, 16) : "",
-      next_followup: nextFollow ? nextFollow.slice(0, 16) : "",
+      name: lead.name || "",
+      company: lead.company || "",
+      email: lead.email || "",
+      phone: lead.phone || "",
+      status: lead.status || "New",
+      source: lead.source || "Website",
+      industry: lead.industry || "Technology",
+      value: String(lead.value ?? 0),
+      notes: lead.notes || "",
+      tags: Array.isArray(lead.tags) ? lead.tags.join(", ") : (typeof lead.tags === "string" ? lead.tags : ""),
+      owner: lead.owner || "",
+      ownerId: lead.ownerId || "",
+      probability: String(lead.probability ?? 50),
+      nextMeetingAt: formattedNextFollow,
+      next_followup: formattedNextFollow,
       last_activity_date: lead.last_activity_date || lead.lastActivityDate || lead.createdAt || "",
       lead_category: (lead.lead_category as LeadCategory) || "Warm",
       reason_to_buy: (lead.reason_to_buy as ReasonToBuy) || "",
@@ -1076,14 +1108,20 @@ return (
                     )}
                     {visibleColumns.includes("status") && (
                       <td className="py-3 px-3">
-                        <span
-                          className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full border font-medium ${statusConfig[lead.status].color}`}
-                        >
-                          <div
-                            className={`w-1.5 h-1.5 rounded-full ${statusConfig[lead.status].dot}`}
-                          />
-                          {lead.status}
-                        </span>
+                        {(() => {
+                          const conf = getStatusConfig(lead.status);
+                          const IconComp = conf.icon;
+                          return (
+                            <span
+                              className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full border font-medium ${conf.color}`}
+                            >
+                              <div
+                                className={`w-1.5 h-1.5 rounded-full ${conf.dot}`}
+                              />
+                              {lead.status || "New"}
+                            </span>
+                          );
+                        })()}
                       </td>
                     )}
                     {visibleColumns.includes("aiScore") && (
@@ -1091,19 +1129,19 @@ return (
                         <div className="flex items-center gap-2">
                           <div className="flex-1 h-1.5 bg-slate-100 rounded-full w-12 overflow-hidden">
                             <div
-                              className={`h-full rounded-full ${lead.aiScore >= 80 ? "bg-emerald-500" : lead.aiScore >= 60 ? "bg-amber-500" : "bg-red-400"}`}
-                              style={{ width: `${lead.aiScore}%` }}
+                              className={`h-full rounded-full ${(lead.aiScore || 0) >= 80 ? "bg-emerald-500" : (lead.aiScore || 0) >= 60 ? "bg-amber-500" : "bg-red-400"}`}
+                              style={{ width: `${lead.aiScore || 50}%` }}
                             />
                           </div>
                           <span
-                            className={`text-xs font-bold px-1.5 py-0.5 rounded-lg border ${scoreColor(lead.aiScore)}`}
+                            className={`text-xs font-bold px-1.5 py-0.5 rounded-lg border ${scoreColor(lead.aiScore || 50)}`}
                           >
-                            {lead.aiScore}
+                            {lead.aiScore || 50}
                           </span>
                           <span
-                            className={`text-[10px] px-1.5 py-0.5 rounded-full ${lead.aiScore >= 80 ? "bg-red-50 text-red-500" : lead.aiScore >= 60 ? "bg-amber-50 text-amber-500" : "bg-slate-100 text-slate-400"}`}
+                            className={`text-[10px] px-1.5 py-0.5 rounded-full ${(lead.aiScore || 0) >= 80 ? "bg-red-50 text-red-500" : (lead.aiScore || 0) >= 60 ? "bg-amber-50 text-amber-500" : "bg-slate-100 text-slate-400"}`}
                           >
-                            {scoreLabel(lead.aiScore)}
+                            {scoreLabel(lead.aiScore || 50)}
                           </span>
                         </div>
                       </td>
@@ -1111,10 +1149,10 @@ return (
                     {visibleColumns.includes("value") && (
                       <td className="py-3 px-3">
                         <span className="text-xs font-semibold text-slate-800">
-                          ₹{(lead.value / 1000).toFixed(0)}K
+                          ₹{((lead.value || 0) / 1000).toFixed(0)}K
                         </span>
                         <div className="text-[10px] text-slate-400">
-                          {lead.probability}% prob.
+                          {lead.probability ?? 50}% prob.
                         </div>
                       </td>
                     )}
@@ -1122,13 +1160,14 @@ return (
                       <td className="py-3 px-3">
                         <div className="flex items-center gap-1.5">
                           <div className="w-5 h-5 rounded-md bg-indigo-100 flex items-center justify-center text-indigo-600 text-[9px] font-bold">
-                            {lead.owner
+                            {(lead.owner || "User")
                               .split(" ")
                               .map((n) => n[0])
-                              .join("")}
+                              .join("")
+                              .slice(0, 2)}
                           </div>
                           <span className="text-xs text-slate-600 hidden xl:block">
-                            {lead.owner.split(" ")[0]}
+                            {(lead.owner || "User").split(" ")[0]}
                           </span>
                         </div>
                       </td>
@@ -1141,7 +1180,7 @@ return (
                     {visibleColumns.includes("created") && (
                       <td className="py-3 px-3">
                         <div className="text-xs text-slate-500">
-                          {lead.createdAt.slice(5)}
+                          {(lead.createdAt || "").slice(5)}
                         </div>
                         <div className="text-[10px] text-slate-400">
                           {lead.industry}
@@ -1297,7 +1336,7 @@ return (
           <div className="flex-1 overflow-y-auto p-5 space-y-5">
             <div className="flex items-start gap-4">
               <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold text-lg flex-shrink-0">
-                {selectedLead.name
+                {(selectedLead.name || "Lead")
                   .split(" ")
                   .map((n) => n[0])
                   .join("")
@@ -1310,14 +1349,14 @@ return (
                 </p>
                 <div className="flex items-center gap-2 mt-1.5">
                   <span
-                    className={`text-xs px-2 py-0.5 rounded-full border ${statusConfig[selectedLead.status].color}`}
+                    className={`text-xs px-2 py-0.5 rounded-full border ${getStatusConfig(selectedLead.status).color}`}
                   >
-                    {selectedLead.status}
+                    {selectedLead.status || "New"}
                   </span>
                   <span
-                    className={`text-xs px-2 py-0.5 rounded-full border font-semibold ${scoreColor(selectedLead.aiScore)}`}
+                    className={`text-xs px-2 py-0.5 rounded-full border font-semibold ${scoreColor(selectedLead.aiScore || 50)}`}
                   >
-                    AI: {selectedLead.aiScore}/100
+                    AI: {selectedLead.aiScore || 50}/100
                   </span>
                 </div>
               </div>

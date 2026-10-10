@@ -1,8 +1,6 @@
-/// <reference types="vite/client" />
-
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
 import { toast } from "sonner";
-import { api } from "../lib/api";
+import { api, getApiBaseUrl } from "../lib/api";
 import { isAdminRole, getPermissionScope } from "../utils/permissions";
 
 import {
@@ -747,7 +745,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   ): Promise<{ error: string | null }> => {
     try {
       const response = await fetch(
-        `${import.meta.env.VITE_API_URL}/auth/signup`,
+        `${getApiBaseUrl()}/auth/signup`,
         {
           method: "POST",
           headers: {
@@ -1242,7 +1240,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         createPayload.owner_id = dbPayload.ownerId;
       }
 
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/leads`, {
+      const response = await fetch(`${getApiBaseUrl()}/leads`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1306,7 +1304,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // console.log("Dataa got is ", data);
     setLeads(prev => prev.map(l => l.id === id ? { ...l, ...data } : l));
     const token = getToken();
-    const response = await fetch(`${import.meta.env.VITE_API_URL}/leads/${id}`, {
+    const response = await fetch(`${getApiBaseUrl()}/leads/${id}`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -1504,7 +1502,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         const token = getToken();
         const bulkResponse = await fetch(
-          `${import.meta.env.VITE_API_URL}/leads/bulk`,
+          `${getApiBaseUrl()}/leads/bulk`,
           {
             method: "POST",
             headers: {
@@ -1524,7 +1522,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
       // ALWAYS REFRESH LEADS
       const token = getToken();
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/leads`, {
+      const response = await fetch(`${getApiBaseUrl()}/leads`, {
         headers: {
           Authorization: token ? `Bearer ${token}` : ""
         }
@@ -1655,15 +1653,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ...data,
       };
 
-      const dbStage = toDbDealStage[newDeal.stage] || "New";
+      const dbStage = toDbDealStage[newDeal.stage] || newDeal.stage || "New";
 
-      // Create payload - REMOVE owner_id or set to null
       const insertPayload = {
         title: newDeal.title || "Untitled Deal",
         company: newDeal.company || "",
         value: Number(newDeal.value) || 0,
         stage: dbStage,
         owner: newDeal.owner || currentUser.name,
+        owner_id: (newDeal.ownerId && validUUID(newDeal.ownerId)) ? newDeal.ownerId : null,
         probability: Number(newDeal.probability) || 50,
         expectedclose: newDeal.expectedClose || null,
         daysinstage: Number(newDeal.daysInStage) || 0,
@@ -1673,33 +1671,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
       console.log("Insert payload being sent:", insertPayload);
 
       const token = getToken();
-      const dealResponse = await fetch(`${import.meta.env.VITE_API_URL}/deals`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: token ? `Bearer ${token}` : ""
-        },
-        body: JSON.stringify(insertPayload)
-      });
-      //const insertedDeal = [await dealResponse.json()];
-      const insertedDeal = await dealResponse.json();
+      const insertedDeal = await api.deals.create(insertPayload, token);
       console.log(" Deal inserted successfully:", insertedDeal);
 
-      //const finalDeal = { ...newDeal, id: insertedDeal[0]?.id };
-      const finalDeal = { ...newDeal, id: insertedDeal?.id };
-      setDeals(prev => [finalDeal, ...prev]);
+      const finalDeal: Deal = {
+        ...newDeal,
+        id: insertedDeal?.id || newDeal.id,
+        stage: (fromDbDealStage[insertedDeal?.stage] || newDeal.stage) as LeadStatus,
+      };
+      setDeals(prev => [finalDeal, ...prev.filter(d => d.id !== finalDeal.id)]);
       toast.success(`Deal "${newDeal.title}" created!`);
 
       await importDeals();
-
       return finalDeal;
 
     } catch (error: any) {
       console.error("🔥 Error in addDeal:", error);
-      toast.error(`Something went wrong: ${error?.message || "Unknown error"}`);
+      toast.error(`Failed to create deal: ${error?.message || "Unknown error"}`);
       return null;
     }
   };
+
   const updateDeal = async (id: string, data: Partial<Deal>): Promise<boolean> => {
     try {
       // Optimistic state update for instant UI feedback during drag-and-drop
@@ -1717,61 +1709,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       if (data.probability !== undefined) payload.probability = Number(data.probability);
       if (data.expectedClose !== undefined) payload.expectedclose = data.expectedClose;
-      if (data.daysInStage !== undefined) payload.daysinstage = data.daysInStage;
+      if (data.daysInStage !== undefined) payload.daysinstage = Number(data.daysInStage) || 0;
       if ((data as any).dead_reason !== undefined) payload.dead_reason = (data as any).dead_reason;
 
       const token = getToken();
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/deals/${id}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: token ? `Bearer ${token}` : ""
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`Update failed: ${errorText}`);
-        await importDeals(); // revert optimistic change on error
-        return false;
-      }
+      await api.deals.update(id, payload, token);
 
       // Fresh data sync from backend
       await importDeals();
       return true;
-    } catch (error) {
-      console.error("Update error:", error);
-      await importDeals();
+    } catch (error: any) {
+      console.error("Update deal error:", error);
+      toast.error(error?.message || "Failed to update deal");
+      await importDeals(); // revert optimistic change on error
       return false;
     }
   };
 
-
-
   const deleteDeal = async (id: string): Promise<boolean> => {
     try {
       const token = getToken();
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/deals/${id}`, {
-        method: "DELETE",
-        headers: {
-          Authorization: token ? `Bearer ${token}` : ""
-        }
-      });
+      await api.deals.delete(id, token);
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        toast.error(`Delete failed: ${errorText}`);
-        return false;
-      }
-
-      // ✅ Fresh data from backend
+      // Fresh data from backend
+      setDeals(prev => prev.filter(d => d.id !== id));
       await importDeals();
       toast.success("Deal deleted successfully!");
       return true;
-    } catch (error) {
+    } catch (error: any) {
       console.error("Delete error:", error);
-      toast.error("Cannot Delete Deal");
+      toast.error(error?.message || "Cannot Delete Deal");
       return false;
     }
   };
@@ -1786,10 +1753,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const newDeal = await api.deals.create({
         title: dealData.title || `Deal for ${lead.name}`,
         company: lead.company || '',
-        value: dealData.value || lead.value || 0,
+        value: Number(dealData.value) || Number(lead.value) || 0,
         stage: dealData.stage || 'New',
         owner: dealData.owner || lead.owner || '',
-        probability: dealData.probability || 50,
+        owner_id: validUUID(dealData.ownerId) ? dealData.ownerId : null,
+        probability: Number(dealData.probability) || 50,
         expectedclose: dealData.expectedclose || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
         daysinstage: 0,
         lead_id: lead.id,  // ← Link to lead
@@ -1800,13 +1768,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         name: lead.name,
         company: lead.company || 'Unknown',
         converted_to_deal: true,
-        deal_id: newDeal.id,
+        deal_id: newDeal?.id || null,
         status: 'won',
         dead_reason: null
       }, token);
 
       // Update local state immediately
-      setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, converted_to_deal: true, deal_id: newDeal.id, status: 'Won', dead_reason: null } : l));
+      setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, converted_to_deal: true, deal_id: newDeal?.id, status: 'Won', dead_reason: null } : l));
 
       // Refresh data
       await refreshData();
@@ -1814,30 +1782,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toast.success('Lead converted to Deal successfully!');
       return newDeal;
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('Convert lead to deal error:', error);
-      toast.error('Failed to convert lead to deal');
+      toast.error(error?.message || 'Failed to convert lead to deal');
       throw error;
     }
   };
 
   const importDeals = async () => {
     try {
-      console.log("=== Fetching deals from RDS...");
+      console.log("=== Fetching deals from backend...");
 
       const token = getToken();
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/deals`, {
-        headers: {
-          Authorization: token ? `Bearer ${token}` : ""
-        }
-      });
-      const allDeal = await response.json();
+      if (!token) return;
+      const allDeal = await api.deals.list(token);
 
       console.log("✅ Raw deals from DB:", allDeal);
 
       if (!Array.isArray(allDeal)) {
         console.warn("importDeals received non-array data:", allDeal);
-        setDeals([]);
         return;
       }
 
@@ -1845,13 +1808,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         id: l.id,
         title: l.title || "",
         company: l.company || "",
-        value: l.value || 0,
-        stage: (fromDbDealStage[l.stage] || "New") as LeadStatus,
+        value: Number(l.value) || 0,
+        stage: (fromDbDealStage[l.stage] || l.stage || "New") as LeadStatus,
         owner: l.owner || "",
         ownerId: l.owner_id || null,
-        probability: l.probability || 50,
-        expectedClose: l.expectedclose || "",  // Note: 'expectedclose' from DB
-        daysInStage: l.daysinstage || 0,       // Note: 'daysinstage' from DB
+        probability: Number(l.probability) || 50,
+        expectedClose: l.expectedclose || l.expected_close || "",
+        daysInStage: Number(l.daysinstage) || 0,
         createdAt: l.created_at ? l.created_at.split("T")[0] : "",
         lead_id: l.lead_id || null,
       }));
@@ -1859,11 +1822,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       console.log("✅ Formatted deals:", dealData.length);
       setDeals(dealData);
 
-    } catch (error) {
+    } catch (error: any) {
       console.error("🔥 Error in importDeals:", error);
-      toast.error("Server Issue Loading Deals");
     }
-  }
+  };
 
   const importTickets = async () => {
     try {
@@ -2245,7 +2207,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
       // Yeh fetch backend se DELETE request bhejega
       const token = getToken();
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/admin/reset-database`, {
+      const response = await fetch(`${getApiBaseUrl()}/admin/reset-database`, {
         method: "DELETE",
         headers: {
           "Content-Type": "application/json",

@@ -49,8 +49,19 @@ export default function NotificationDropdown({ onClose }: NotificationDropdownPr
         return () => document.removeEventListener("keydown", handleEscape);
     }, [isOpen, onClose]);
 
+    // Automatically mark all notifications as viewed/read when the dropdown is opened
+    useEffect(() => {
+        if (isOpen && unreadCount > 0) {
+            markAllNotificationsRead();
+        }
+    }, [isOpen]);
+
     const toggleDropdown = () => {
-        setIsOpen(!isOpen);
+        const next = !isOpen;
+        setIsOpen(next);
+        if (next && unreadCount > 0) {
+            markAllNotificationsRead();
+        }
     };
 
     const getTimeGroup = (date: string) => {

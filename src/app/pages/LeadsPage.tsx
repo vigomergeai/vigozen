@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import * as XLSX from "xlsx";
 import {
   Search, Plus, Download, Bot, Star, Phone, Mail,
@@ -6,7 +7,8 @@ import {
   User, X, CheckCircle, XCircle, Clock, Target, RefreshCw,
   AlertTriangle, ChevronLeft, ChevronRight, Upload, FileSpreadsheet,
   FileDown, CheckSquare, AlertCircle, Loader2, MessagesSquare, Lock,
-  Check, TrendingUp, Minus, Circle, Activity
+  Check, TrendingUp, Minus, Circle, Activity,
+  MessageCircle, Copy, Calendar, RotateCw, Snowflake, BarChart2
 } from "lucide-react";
 import { useNavigate, useLocation } from "react-router";
 import { usePermissions } from "../hooks/usePermissions";
@@ -142,6 +144,13 @@ export default function LeadsPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [editLead, setEditLead] = useState<Lead | null>(null);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const handleCopy = (text: string | undefined, fieldName: string) => {
+    if (!text) return;
+    navigator.clipboard.writeText(text);
+    setCopiedField(fieldName);
+    setTimeout(() => setCopiedField(null), 2000);
+  };
   const [form, setForm] = useState<LeadForm>(emptyForm);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [page, setPage] = useState(1);
@@ -161,6 +170,33 @@ export default function LeadsPage() {
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
   const commentsEndRef = useRef<HTMLDivElement>(null);
+  const statusTabsRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(true);
+
+  const checkTabsScroll = () => {
+    if (statusTabsRef.current) {
+      const { scrollLeft, scrollWidth, clientWidth } = statusTabsRef.current;
+      setCanScrollLeft(scrollLeft > 5);
+      setCanScrollRight(scrollLeft < scrollWidth - clientWidth - 5);
+    }
+  };
+
+  const scrollStatusTabs = (direction: 'left' | 'right') => {
+    if (statusTabsRef.current) {
+      statusTabsRef.current.scrollBy({
+        left: direction === 'left' ? -220 : 220,
+        behavior: 'smooth'
+      });
+      setTimeout(checkTabsScroll, 300);
+    }
+  };
+
+  useEffect(() => {
+    checkTabsScroll();
+    window.addEventListener("resize", checkTabsScroll);
+    return () => window.removeEventListener("resize", checkTabsScroll);
+  }, []);
 
   useEffect(() => {
     if (commentsEndRef.current) {
@@ -829,22 +865,54 @@ return (
     )}
 
     {/* Status Tabs */}
-    <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
-      {["All", ...STATUSES].map((s) => (
+    <div className="relative group">
+      {canScrollLeft && (
         <button
-          key={s}
-          onClick={() => {
-            setStatusFilter(s);
-            setPage(1);
-          }}
-          className={`flex-shrink-0 px-3 py-1.5 rounded-xl text-xs font-medium transition-all border ${statusFilter === s ? "bg-indigo-600 text-white border-indigo-600 shadow-sm" : "bg-white text-slate-600 border-slate-200 hover:border-indigo-300 hover:text-indigo-600"}`}
+          onClick={() => scrollStatusTabs('left')}
+          className="absolute left-0 top-1/2 -translate-y-1/2 z-10 w-7 h-7 bg-white/95 hover:bg-white text-slate-700 hover:text-indigo-600 rounded-full shadow-md border border-slate-200 flex items-center justify-center transition-all hover:scale-105"
+          aria-label="Scroll left"
         >
-          {s}{" "}
-          {statusCounts[s] !== undefined && (
-            <span className="ml-1 opacity-70">({statusCounts[s]})</span>
-          )}
+          <ChevronLeft size={16} />
         </button>
-      ))}
+      )}
+
+      <div
+        ref={statusTabsRef}
+        onScroll={checkTabsScroll}
+        onWheel={(e) => {
+          if (statusTabsRef.current && e.deltaY !== 0) {
+            statusTabsRef.current.scrollLeft += e.deltaY;
+            checkTabsScroll();
+          }
+        }}
+        className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide scroll-smooth no-scrollbar"
+      >
+        {["All", ...STATUSES].map((s) => (
+          <button
+            key={s}
+            onClick={() => {
+              setStatusFilter(s);
+              setPage(1);
+            }}
+            className={`flex-shrink-0 px-3 py-1.5 rounded-xl text-xs font-medium transition-all border ${statusFilter === s ? "bg-indigo-600 text-white border-indigo-600 shadow-sm" : "bg-white text-slate-600 border-slate-200 hover:border-indigo-300 hover:text-indigo-600"}`}
+          >
+            {s}{" "}
+            {statusCounts[s] !== undefined && (
+              <span className="ml-1 opacity-70">({statusCounts[s]})</span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {canScrollRight && (
+        <button
+          onClick={() => scrollStatusTabs('right')}
+          className="absolute right-0 top-1/2 -translate-y-1/2 z-10 w-7 h-7 bg-white/95 hover:bg-white text-slate-700 hover:text-indigo-600 rounded-full shadow-md border border-slate-200 flex items-center justify-center transition-all hover:scale-105"
+          aria-label="Scroll right"
+        >
+          <ChevronRight size={16} />
+        </button>
+      )}
     </div>
 
     {/* Filters */}
@@ -1284,161 +1352,283 @@ return (
     </div>
 
     {/* Lead Detail Drawer */}
-    {selectedLead && (
-      <div className="fixed inset-0 z-50 flex">
+    {selectedLead && createPortal(
+      <div className="fixed inset-0 top-0 left-0 right-0 bottom-0 z-50 flex justify-end !m-0 !mt-0 h-screen w-screen overflow-hidden">
         <div
-          className="flex-1 bg-black/40"
+          className="fixed inset-0 bg-black/40 backdrop-blur-[1px] transition-opacity"
           onClick={() => setSelectedLead(null)}
         />
-        <div className="w-full max-w-md bg-white shadow-2xl flex flex-col h-full overflow-hidden">
-          <div className="sticky top-0 bg-white border-b border-slate-200 px-5 py-4 flex items-center justify-between z-10 flex-shrink-0">
-            <h2 className="text-slate-800">Lead Details</h2>
-            <div className="flex items-center gap-2">
-              {canConvertLeads && (
-                <button
-                  onClick={() => handleOpenConvertModal(selectedLead)}
-                  disabled={selectedLead.converted_to_deal}
-                  className={`px-3 py-1.5 text-xs rounded-lg flex items-center gap-1 transition-colors ${selectedLead.converted_to_deal
-                    ? "bg-emerald-50 text-emerald-600 border border-emerald-200 opacity-75 cursor-default"
-                    : "bg-emerald-600 text-white hover:bg-emerald-700 font-medium"
-                    }`}
-                >
-                  <TrendingUp size={11} />
-                  {selectedLead.converted_to_deal ? "Converted" : "Convert to Deal"}
-                </button>
-              )}
+        <div className="relative w-full max-w-[500px] bg-white shadow-2xl flex flex-col h-full z-10 overflow-hidden text-slate-900">
+          {/* Header */}
+          <div className="sticky top-0 bg-white border-b border-slate-100 px-5 py-3.5 flex items-center justify-between z-10 flex-shrink-0">
+            <h2 className="text-base font-bold text-slate-900">Lead Details</h2>
+            <div className="flex items-center gap-1.5">
               {canEditLeads && (
                 <button
                   onClick={() => openEdit(selectedLead)}
-                  className="px-3 py-1.5 text-xs bg-indigo-50 text-indigo-600 border border-indigo-200 rounded-lg flex items-center gap-1 hover:bg-indigo-100"
+                  className="px-2.5 py-1 text-xs bg-indigo-50/70 text-indigo-600 border border-indigo-200 rounded-lg flex items-center gap-1 hover:bg-indigo-100 font-medium transition-colors"
                 >
-                  <Edit size={11} />
-                  Edit
+                  <Edit size={12} />
+                  <span>Edit</span>
                 </button>
               )}
               {canDeleteLeadsSeq && (
                 <button
                   onClick={() => setDeleteConfirm(selectedLead.id)}
-                  className="px-3 py-1.5 text-xs bg-red-50 text-red-500 border border-red-200 rounded-lg flex items-center gap-1 hover:bg-red-100"
+                  className="px-2.5 py-1 text-xs bg-red-50/70 text-red-500 border border-red-200 rounded-lg flex items-center gap-1 hover:bg-red-100 font-medium transition-colors"
                 >
-                  <Trash2 size={11} />
-                  Delete
+                  <Trash2 size={12} />
+                  <span>Delete</span>
                 </button>
               )}
               <button
                 onClick={() => setSelectedLead(null)}
-                className="p-2 rounded-xl hover:bg-slate-100"
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors ml-0.5"
+                title="Close"
               >
                 <X size={16} />
               </button>
             </div>
           </div>
-          <div className="flex-1 overflow-y-auto p-5 space-y-5">
-            <div className="flex items-start gap-4">
-              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold text-lg flex-shrink-0">
+
+          {/* Scrollable Content Body */}
+          <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3.5">
+            {/* 1. Lead Profile */}
+            <div className="flex items-center gap-3.5">
+              <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold text-lg shadow-sm flex-shrink-0">
                 {(selectedLead.name || "Lead")
                   .split(" ")
                   .map((n) => n[0])
                   .join("")
-                  .slice(0, 2)}
+                  .slice(0, 2)
+                  .toUpperCase()}
               </div>
-              <div>
-                <h2 className="text-slate-900">{selectedLead.name}</h2>
-                <p className="text-sm text-slate-500">
-                  {selectedLead.company}
+              <div className="min-w-0 flex-1">
+                <h2 className="text-base sm:text-lg font-bold text-slate-900 leading-snug truncate">
+                  {selectedLead.name}
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5 truncate">
+                  {selectedLead.company || "No company"}
                 </p>
-                <div className="flex items-center gap-2 mt-1.5">
+                <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                   <span
-                    className={`text-xs px-2 py-0.5 rounded-full border ${getStatusConfig(selectedLead.status).color}`}
+                    className={`text-[11px] px-2.5 py-0.5 rounded-full border font-semibold flex items-center gap-1 shadow-sm ${
+                      selectedLead.status === "Token Done"
+                        ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                        : getStatusConfig(selectedLead.status).color
+                    }`}
                   >
+                    <Check size={11} className="text-emerald-600 stroke-[2.5]" />
                     {selectedLead.status || "New"}
                   </span>
                   <span
-                    className={`text-xs px-2 py-0.5 rounded-full border font-semibold ${scoreColor(selectedLead.aiScore || 50)}`}
+                    className={`text-[11px] px-2.5 py-0.5 rounded-full border font-semibold flex items-center gap-1 shadow-sm ${
+                      (selectedLead.aiScore || 50) < 60
+                        ? "bg-red-50 text-red-600 border-red-200"
+                        : scoreColor(selectedLead.aiScore || 50)
+                    }`}
                   >
+                    <BarChart2 size={11} className="text-red-500" />
                     AI: {selectedLead.aiScore || 50}/100
                   </span>
                 </div>
               </div>
             </div>
-            <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-100 rounded-xl p-4">
-              <div className="flex items-center gap-2 mb-2">
-                <Bot size={14} className="text-indigo-600" />
-                <span className="text-xs font-semibold text-indigo-700">
-                  AI Lead Score Analysis
+
+            {/* 2. AI Lead Score Analysis */}
+            <div className="bg-indigo-50/40 border border-indigo-100 rounded-xl p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <Bot size={14} className="text-indigo-600" />
+                  <span className="text-xs font-bold text-indigo-950">
+                    AI Lead Score Analysis
+                  </span>
+                </div>
+                <span className="text-xs font-bold text-indigo-700">
+                  {selectedLead.aiScore || 50}/100
                 </span>
               </div>
-              <div className="h-3 bg-white rounded-full overflow-hidden mb-2">
+              <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
                 <div
-                  className={`h-full rounded-full ${selectedLead.aiScore >= 80 ? "bg-gradient-to-r from-emerald-400 to-emerald-600" : selectedLead.aiScore >= 60 ? "bg-gradient-to-r from-amber-400 to-orange-500" : "bg-gradient-to-r from-red-400 to-red-500"}`}
-                  style={{ width: `${selectedLead.aiScore}%` }}
+                  className={`h-full rounded-full transition-all duration-500 ${
+                    (selectedLead.aiScore || 50) >= 80
+                      ? "bg-gradient-to-r from-emerald-500 to-teal-500"
+                      : (selectedLead.aiScore || 50) >= 60
+                      ? "bg-gradient-to-r from-amber-500 to-orange-500"
+                      : "bg-gradient-to-r from-red-500 to-rose-500"
+                  }`}
+                  style={{ width: `${Math.min(100, Math.max(5, selectedLead.aiScore || 50))}%` }}
                 />
               </div>
-              <p className="text-xs text-indigo-600">
-                {selectedLead.aiScore >= 80
-                  ? "🔥 High probability of conversion. Prioritize immediately."
-                  : selectedLead.aiScore >= 60
-                    ? "⚡ Moderate interest. Nurture with targeted content."
-                    : "❄️ Low engagement. Consider re-qualification approach."}
-              </p>
+              <div className="flex items-center gap-1.5 text-[11px] text-indigo-900/90 font-medium leading-tight">
+                <Snowflake size={12} className="text-sky-500 shrink-0" />
+                <span>
+                  {(selectedLead.aiScore || 50) >= 80
+                    ? "High probability of conversion. Prioritize immediately."
+                    : (selectedLead.aiScore || 50) >= 60
+                    ? "Moderate interest. Nurture with targeted content."
+                    : "Low engagement. Consider re-qualification approach."}
+                </span>
+              </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              {[
-                { label: "Email", value: selectedLead.email, icon: Mail },
-                { label: "Phone", value: selectedLead.phone, icon: Phone },
-                {
-                  label: "Industry",
-                  value: selectedLead.industry,
-                  icon: Building,
-                },
-                { label: "Source", value: selectedLead.source, icon: Zap },
-                {
-                  label: "Value",
-                  value: `₹${(selectedLead.value / 1000).toFixed(0)}K`,
-                  icon: Star,
-                },
-                {
-                  label: "Probability",
-                  value: `${selectedLead.probability}%`,
-                  icon: Target,
-                },
-                {
-                  label: "Next Follow-up",
-                  value: selectedLead.next_followup || selectedLead.nextFollowup || selectedLead.nextMeetingAt
-                    ? new Date(selectedLead.next_followup || selectedLead.nextFollowup || selectedLead.nextMeetingAt!).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })
-                    : "Not Scheduled",
-                  icon: Clock,
-                },
-                {
-                  label: "Last Activity",
-                  value: selectedLead.last_activity_date || selectedLead.lastActivityDate || selectedLead.createdAt
-                    ? new Date(selectedLead.last_activity_date || selectedLead.lastActivityDate || selectedLead.createdAt).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })
-                    : "—",
-                  icon: Activity,
-                },
-              ].map(({ label, value, icon: Icon }) => (
-                <div key={label} className="bg-slate-50 rounded-xl p-3">
-                  <div className="flex items-center gap-1.5 text-slate-400 mb-1">
-                    <Icon size={11} />
-                    <span className="text-[10px]">{label}</span>
+
+            {/* 3. Contact and Lead Information Grid */}
+            <div className="grid grid-cols-2 gap-2">
+              {/* Email */}
+              <div className="bg-slate-50/70 border border-slate-100 rounded-xl p-2.5 hover:border-slate-200 transition-colors">
+                <div className="flex items-center justify-between text-slate-400 mb-1">
+                  <div className="flex items-center gap-1.5 text-[11px] font-medium">
+                    <Mail size={12} />
+                    <span>Email</span>
                   </div>
-                  <div className="text-xs font-medium text-slate-800 truncate">
-                    {value}
-                  </div>
+                  <button
+                    onClick={() => handleCopy(selectedLead.email, "email")}
+                    className="p-0.5 text-slate-400 hover:text-slate-600 rounded transition-colors"
+                    title="Copy email"
+                  >
+                    {copiedField === "email" ? (
+                      <Check size={11} className="text-emerald-500" />
+                    ) : (
+                      <Copy size={11} />
+                    )}
+                  </button>
                 </div>
-              ))}
+                <div className="text-xs font-semibold text-slate-800 truncate" title={selectedLead.email}>
+                  {selectedLead.email || "—"}
+                </div>
+              </div>
+
+              {/* Phone */}
+              <div className="bg-slate-50/70 border border-slate-100 rounded-xl p-2.5 hover:border-slate-200 transition-colors">
+                <div className="flex items-center justify-between text-slate-400 mb-1">
+                  <div className="flex items-center gap-1.5 text-[11px] font-medium">
+                    <Phone size={12} />
+                    <span>Phone</span>
+                  </div>
+                  <button
+                    onClick={() => handleCopy(selectedLead.phone, "phone")}
+                    className="p-0.5 text-slate-400 hover:text-slate-600 rounded transition-colors"
+                    title="Copy phone"
+                  >
+                    {copiedField === "phone" ? (
+                      <Check size={11} className="text-emerald-500" />
+                    ) : (
+                      <Copy size={11} />
+                    )}
+                  </button>
+                </div>
+                <div className="text-xs font-semibold text-slate-800 truncate" title={selectedLead.phone}>
+                  {selectedLead.phone || "—"}
+                </div>
+              </div>
+
+              {/* Industry */}
+              <div className="bg-slate-50/70 border border-slate-100 rounded-xl p-2.5 hover:border-slate-200 transition-colors">
+                <div className="flex items-center gap-1.5 text-[11px] text-slate-400 mb-1 font-medium">
+                  <Building size={12} />
+                  <span>Industry</span>
+                </div>
+                <div className="text-xs font-semibold text-slate-800 truncate">
+                  {selectedLead.industry || "—"}
+                </div>
+              </div>
+
+              {/* Source */}
+              <div className="bg-slate-50/70 border border-slate-100 rounded-xl p-2.5 hover:border-slate-200 transition-colors">
+                <div className="flex items-center gap-1.5 text-[11px] text-slate-400 mb-1 font-medium">
+                  <Zap size={12} />
+                  <span>Source</span>
+                </div>
+                <div className="text-xs font-semibold text-slate-800 truncate">
+                  {selectedLead.source || "—"}
+                </div>
+              </div>
+
+              {/* Value */}
+              <div className="bg-slate-50/70 border border-slate-100 rounded-xl p-2.5 hover:border-slate-200 transition-colors">
+                <div className="flex items-center gap-1.5 text-[11px] text-slate-400 mb-1 font-medium">
+                  <span className="text-[11px] font-semibold">₹</span>
+                  <span>Value</span>
+                </div>
+                <div className="text-xs font-semibold text-slate-800 truncate">
+                  ₹{selectedLead.value >= 1000 ? `${(selectedLead.value / 1000).toFixed(0)}K` : (selectedLead.value || 0)}
+                </div>
+              </div>
+
+              {/* Probability */}
+              <div className="bg-slate-50/70 border border-slate-100 rounded-xl p-2.5 hover:border-slate-200 transition-colors">
+                <div className="flex items-center gap-1.5 text-[11px] text-slate-400 mb-1 font-medium">
+                  <Target size={12} />
+                  <span>Probability</span>
+                </div>
+                <div className="text-xs font-semibold text-slate-800 truncate">
+                  {selectedLead.probability || 0}%
+                </div>
+              </div>
+
+              {/* Next Follow-up */}
+              <div className="bg-slate-50/70 border border-slate-100 rounded-xl p-2.5 hover:border-slate-200 transition-colors">
+                <div className="flex items-center justify-between text-slate-400 mb-1">
+                  <div className="flex items-center gap-1.5 text-[11px] font-medium">
+                    <Clock size={12} />
+                    <span>Next Follow-up</span>
+                  </div>
+                  <Calendar size={12} className="text-slate-400" />
+                </div>
+                <div className="text-[11px] font-semibold text-slate-800 leading-tight">
+                  {selectedLead.next_followup || selectedLead.nextFollowup || selectedLead.nextMeetingAt
+                    ? new Date(
+                        selectedLead.next_followup || selectedLead.nextFollowup || selectedLead.nextMeetingAt!
+                      ).toLocaleString("en-IN", {
+                        day: "2-digit",
+                        month: "short",
+                        year: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        hour12: true,
+                      })
+                    : "Not Scheduled"}
+                </div>
+              </div>
+
+              {/* Last Activity */}
+              <div className="bg-slate-50/70 border border-slate-100 rounded-xl p-2.5 hover:border-slate-200 transition-colors">
+                <div className="flex items-center justify-between text-slate-400 mb-1">
+                  <div className="flex items-center gap-1.5 text-[11px] font-medium">
+                    <Activity size={12} />
+                    <span>Last Activity</span>
+                  </div>
+                  <Calendar size={12} className="text-slate-400" />
+                </div>
+                <div className="text-[11px] font-semibold text-slate-800 leading-tight">
+                  {selectedLead.last_activity_date || selectedLead.lastActivityDate || selectedLead.createdAt
+                    ? new Date(
+                        selectedLead.last_activity_date || selectedLead.lastActivityDate || selectedLead.createdAt!
+                      ).toLocaleString("en-IN", {
+                        day: "2-digit",
+                        month: "short",
+                        year: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        hour12: true,
+                      })
+                    : "—"}
+                </div>
+              </div>
             </div>
-            {selectedLead.tags.length > 0 && (
+
+            {/* Tags (if any) */}
+            {selectedLead.tags && selectedLead.tags.length > 0 && (
               <div>
-                <p className="text-xs text-slate-500 mb-2 flex items-center gap-1">
-                  <Tag size={11} />
+                <p className="text-[11px] text-slate-500 mb-1.5 flex items-center gap-1 font-medium">
+                  <Tag size={10} />
                   Tags
                 </p>
-                <div className="flex flex-wrap gap-1.5">
+                <div className="flex flex-wrap gap-1">
                   {selectedLead.tags.map((tag) => (
                     <span
                       key={tag}
-                      className="text-xs bg-indigo-50 text-indigo-600 border border-indigo-200 px-2 py-0.5 rounded-full"
+                      className="text-[11px] bg-indigo-50 text-indigo-600 border border-indigo-200 px-2 py-0.5 rounded-full font-medium"
                     >
                       {tag}
                     </span>
@@ -1446,45 +1636,43 @@ return (
                 </div>
               </div>
             )}
-            {/* ────────────────────────────────────────────────────────────── */}
-            {/* INTERNAL CONVERSATION - replaces Notes                      */}
-            {/* ────────────────────────────────────────────────────────────── */}
 
-            <div className="border-t border-slate-100 pt-4">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-xs text-slate-500 font-medium flex items-center gap-2">
-                  <MessagesSquare size={14} />
+            {/* 4. Internal Conversation Section */}
+            <div className="border-t border-slate-100 pt-3">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs text-slate-700 font-bold flex items-center gap-1.5">
+                  <MessagesSquare size={13} className="text-slate-500" />
                   Internal Conversation
                 </p>
-                <span className="text-[10px] text-slate-400">
+                <span className="text-[11px] text-slate-400 font-medium">
                   {leadComments.length} comments
                 </span>
               </div>
 
               {loadingComments ? (
                 <div className="text-center py-4">
-                  <RefreshCw size={16} className="animate-spin text-slate-400 mx-auto" />
+                  <RefreshCw size={14} className="animate-spin text-slate-400 mx-auto" />
                 </div>
               ) : leadComments.length === 0 ? (
-                <div className="text-center py-4 text-xs text-slate-400 bg-slate-50 rounded-xl">
+                <div className="text-center py-4 px-3 text-xs text-slate-400 bg-slate-50/80 border border-slate-100 rounded-xl font-normal">
                   No comments yet. Start the conversation.
                 </div>
               ) : (
-                <div className="space-y-3 max-h-64 overflow-y-auto pr-1">
+                <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
                   {leadComments.map((comment) => {
                     const isAuthor = comment.user_id === userProfile?.id;
                     const isAdmin = isAdminRole(role);
-                    const canEdit = isAuthor || isAdmin;
+                    const canEditComment = isAuthor || isAdmin;
                     const isEditing = editingCommentId === comment.id;
 
                     return (
-                      <div key={comment.id} className="bg-slate-50 rounded-xl p-3">
-                        <div className="flex items-start gap-2.5">
-                          <div className="w-7 h-7 rounded-full bg-gradient-to-br from-indigo-400 to-purple-500 flex items-center justify-center text-white text-[9px] font-bold flex-shrink-0">
-                            {comment.user_name?.split(" ").map(n => n[0]).join("").slice(0, 2) || "U"}
+                      <div key={comment.id} className="bg-slate-50/80 border border-slate-100 rounded-xl p-2.5">
+                        <div className="flex items-start gap-2">
+                          <div className="w-6 h-6 rounded-full bg-gradient-to-br from-indigo-400 to-purple-500 flex items-center justify-center text-white text-[8px] font-bold flex-shrink-0">
+                            {comment.user_name?.split(" ").map((n) => n[0]).join("").slice(0, 2) || "U"}
                           </div>
                           <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
+                            <div className="flex items-center gap-1.5 flex-wrap">
                               <span className="text-xs font-semibold text-slate-800">
                                 {comment.user_name}
                               </span>
@@ -1492,21 +1680,21 @@ return (
                                 {comment.user_role || "user"}
                               </span>
                               <span className="text-[10px] text-slate-400">
-                                {new Date(comment.created_at).toLocaleDateString()} · {new Date(comment.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                {new Date(comment.created_at).toLocaleDateString()} · {new Date(comment.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                               </span>
                               {comment.updated_at !== comment.created_at && (
                                 <span className="text-[10px] text-slate-400 italic">(edited)</span>
                               )}
                             </div>
                             {isEditing ? (
-                              <div className="mt-1.5">
+                              <div className="mt-1">
                                 <textarea
                                   value={editingCommentText}
                                   onChange={(e) => setEditingCommentText(e.target.value)}
-                                  className="w-full px-2 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 bg-white"
+                                  className="w-full px-2 py-1 text-xs text-slate-900 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 bg-white"
                                   rows={2}
                                 />
-                                <div className="flex gap-2 mt-1.5">
+                                <div className="flex gap-1.5 mt-1">
                                   <button
                                     onClick={async () => {
                                       if (await updateLeadComment(selectedLead.id, comment.id, editingCommentText)) {
@@ -1514,7 +1702,7 @@ return (
                                         setEditingCommentText("");
                                       }
                                     }}
-                                    className="px-2.5 py-1 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                                    className="px-2 py-0.5 text-xs bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
                                   >
                                     Save
                                   </button>
@@ -1523,7 +1711,7 @@ return (
                                       setEditingCommentId(null);
                                       setEditingCommentText("");
                                     }}
-                                    className="px-2.5 py-1 text-xs border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50"
+                                    className="px-2 py-0.5 text-xs border border-slate-200 text-slate-600 rounded-md hover:bg-slate-50"
                                   >
                                     Cancel
                                   </button>
@@ -1532,7 +1720,6 @@ return (
                             ) : (
                               <p className="text-xs text-slate-700 mt-0.5 whitespace-pre-wrap">{comment.comment}</p>
                             )}
-
                           </div>
                         </div>
                       </div>
@@ -1541,102 +1728,155 @@ return (
                   <div ref={commentsEndRef} />
                 </div>
               )}
+
+              {/* Comment Input and Post Button */}
+              <div className="flex items-center gap-2 mt-2">
+                <div className="flex-1 relative flex items-center h-[38px]">
+                  <MessagesSquare size={14} className="absolute left-3 text-slate-400 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={newCommentText}
+                    onChange={(e) => setNewCommentText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        handlePostComment();
+                      }
+                    }}
+                    placeholder="Write a comment..."
+                    className="w-full h-full pl-8 pr-3 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors placeholder:text-slate-400 shadow-sm"
+                  />
+                </div>
+                <button
+                  onClick={handlePostComment}
+                  disabled={!newCommentText.trim() || submittingComment}
+                  className="h-[38px] px-4 text-xs font-semibold bg-indigo-500 hover:bg-indigo-600 text-white rounded-xl disabled:opacity-50 transition-colors flex items-center justify-center shrink-0 shadow-sm"
+                >
+                  {submittingComment ? <RefreshCw size={12} className="animate-spin" /> : "Post"}
+                </button>
+              </div>
             </div>
-          </div>
-          {/* Fixed Footer */}
-          <div className="border-t border-slate-200 p-5 bg-slate-50/50 space-y-4 flex-shrink-0 z-10">
-            {/* Add Comment Box */}
-            <div className="flex gap-2">
-              <textarea
-                value={newCommentText}
-                onChange={(e) => setNewCommentText(e.target.value)}
-                placeholder="Write a comment..."
-                className="flex-1 px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 bg-white resize-none"
-                rows={2}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    handlePostComment();
-                  }
-                }}
-              />
-              <button
-                onClick={handlePostComment}
-                disabled={!newCommentText.trim() || submittingComment}
-                className="px-4 py-2 text-xs bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-50 self-end"
-              >
-                {submittingComment ? <RefreshCw size={14} className="animate-spin" /> : "Post"}
-              </button>
-            </div>
-            <div className="flex gap-2">
-              {canConvertLeads && (
+
+            {/* 5. Main Action Row (Exactly four buttons) */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3">
+              {canConvertLeads ? (
                 <button
                   onClick={() => {
                     handleOpenConvertModal(selectedLead);
                     setSelectedLead(null);
                   }}
                   disabled={selectedLead.converted_to_deal}
-                  className={`flex-1 py-2.5 text-sm rounded-xl transition-colors flex items-center justify-center gap-2 ${selectedLead.converted_to_deal
-                    ? "bg-emerald-100 text-emerald-600 cursor-default"
-                    : "bg-emerald-600 text-white hover:bg-emerald-700"
-                    }`}
+                  className={`h-9 px-2 rounded-xl transition-all flex items-center justify-center gap-1.5 font-semibold text-xs text-center shadow-sm ${
+                    selectedLead.converted_to_deal
+                      ? "bg-emerald-100 text-emerald-700 cursor-default"
+                      : "bg-emerald-600 hover:bg-emerald-700 text-white"
+                  }`}
                 >
-                  {selectedLead.converted_to_deal ? "✅ Converted" : "→ Convert to Deal"}
+                  <TrendingUp size={13.5} className="shrink-0" />
+                  <span className="leading-tight truncate">{selectedLead.converted_to_deal ? "Converted" : "Make Deal"}</span>
                 </button>
+              ) : (
+                <div className="h-9 px-2 rounded-xl bg-slate-100 text-slate-400 text-xs flex items-center justify-center text-center">
+                  Locked
+                </div>
               )}
+
               <a
-                href={`tel:${selectedLead.phone}`}
-                className="flex-1 py-2.5 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2"
+                href={selectedLead.phone ? `tel:${selectedLead.phone}` : "#"}
+                onClick={(e) => {
+                  if (!selectedLead.phone) e.preventDefault();
+                }}
+                className={`h-9 px-2 rounded-xl transition-all flex items-center justify-center gap-1.5 font-semibold text-xs text-center shadow-sm ${
+                  selectedLead.phone
+                    ? "bg-indigo-600 hover:bg-indigo-700 text-white"
+                    : "bg-indigo-300 text-white cursor-not-allowed"
+                }`}
               >
-                <Phone size={14} />
-                Call
+                <Phone size={13.5} className="shrink-0" />
+                <span>Call</span>
               </a>
+
               <a
-                href={`mailto:${selectedLead.email}`}
-                className="flex-1 py-2.5 text-sm border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 transition-colors flex items-center justify-center gap-2"
+                href={selectedLead.email ? `mailto:${selectedLead.email}` : "#"}
+                onClick={(e) => {
+                  if (!selectedLead.email) e.preventDefault();
+                }}
+                className={`h-9 px-2 rounded-xl border border-slate-200 transition-all flex items-center justify-center gap-1.5 font-semibold text-xs text-center ${
+                  selectedLead.email
+                    ? "bg-white hover:bg-slate-50 text-slate-800 shadow-sm"
+                    : "bg-slate-50 text-slate-300 cursor-not-allowed"
+                }`}
               >
-                <Mail size={14} />
-                Email
+                <Mail size={13.5} className="shrink-0" />
+                <span>Email</span>
               </a>
-              {canEditLeads && (
-                <button
-                  onClick={() => openEdit(selectedLead)}
-                  className="flex-1 py-2.5 text-sm border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 transition-colors flex items-center justify-center gap-2"
-                >
-                  <Edit size={14} />
-                  Edit
-                </button>
-              )}
+
+              <a
+                href={selectedLead.phone ? `https://wa.me/${selectedLead.phone.replace(/[^0-9]/g, "")}` : "#"}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => {
+                  if (!selectedLead.phone) e.preventDefault();
+                }}
+                className={`h-9 px-2 rounded-xl transition-all flex items-center justify-center gap-1.5 font-semibold text-xs text-center shadow-sm ${
+                  selectedLead.phone
+                    ? "bg-emerald-500 hover:bg-emerald-600 text-white"
+                    : "bg-emerald-200 text-white cursor-not-allowed"
+                }`}
+                title={selectedLead.phone ? "Chat on WhatsApp" : "No phone number available"}
+              >
+                <MessageCircle size={13.5} className="shrink-0" />
+                <span>WhatsApp</span>
+              </a>
             </div>
+
+            {/* 6. Quick Status Update Section */}
             {canEditLeads && (
-              <div>
-                <p className="text-xs text-slate-500 mb-2 font-medium">
-                  Quick Status Update
-                </p>
+              <div className="border-t border-slate-100 pt-3 mt-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 mb-2">
+                  <h3 className="text-xs font-bold text-slate-800">
+                    Quick Status Update
+                  </h3>
+                  <div className="flex items-center gap-1 text-[11px] text-slate-400 font-medium">
+                    <RotateCw size={11} className="text-slate-400" />
+                    <span>Update lead stage quickly</span>
+                  </div>
+                </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {STATUSES.map((s) => (
-                    <button
-                      key={s}
-                      onClick={async () => {
-                        const ok = await updateLead(selectedLead.id, {
-                          status: s,
-                        });
-                        if (ok)
-                          setSelectedLead((prev) =>
-                            prev ? { ...prev, status: s } : null,
-                          );
-                      }}
-                      className={`text-xs px-2.5 py-1 rounded-full border font-medium transition-colors ${selectedLead.status === s ? statusConfig[s].color : "bg-white text-slate-500 border-slate-200 hover:border-indigo-300"}`}
-                    >
-                      {s}
-                    </button>
-                  ))}
+                  {STATUSES.map((s) => {
+                    const isCurrent = selectedLead.status === s;
+                    return (
+                      <button
+                        key={s}
+                        onClick={async () => {
+                          const ok = await updateLead(selectedLead.id, {
+                            status: s,
+                          });
+                          if (ok)
+                            setSelectedLead((prev) =>
+                              prev ? { ...prev, status: s } : null
+                            );
+                        }}
+                        className={`h-7.5 min-h-[30px] px-2.5 text-xs rounded-full border transition-all inline-flex items-center gap-1 whitespace-nowrap ${
+                          isCurrent
+                            ? "bg-emerald-50 text-emerald-700 border-emerald-300 font-semibold shadow-sm"
+                            : "bg-white text-slate-600 border-slate-200 hover:border-slate-300 hover:bg-slate-50 font-normal"
+                        }`}
+                      >
+                        {isCurrent && (
+                          <Check size={11.5} className="text-emerald-600 stroke-[2.5] shrink-0" />
+                        )}
+                        <span>{s}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             )}
           </div>
         </div>
-      </div>
+      </div>,
+      document.body
     )}
 
     {/* Add / Edit Modal */}

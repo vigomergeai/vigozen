@@ -2,24 +2,48 @@
 // Dedicated Email Service for Subscription Lifecycle & Expiry Notifications
 // Responsible for "WHAT to send" (HTML & Text Templates, Styling, CTAs, Mailer Delivery)
 
+const dns = require("dns");
+
+// Fallback DNS for environments where system DNS defaults to inactive loopback (127.0.0.1)
+if (dns.Resolver) {
+  const OrigResolver = dns.Resolver;
+  dns.Resolver = class extends OrigResolver {
+    constructor(options) {
+      super(options);
+      try {
+        const servers = this.getServers();
+        if (servers.includes("127.0.0.1") || servers.includes("::1")) {
+          this.setServers(["8.8.8.8", "1.1.1.1"]);
+        }
+      } catch (e) {}
+    }
+  };
+}
+
 const nodemailer = require("nodemailer");
 const pool = require("../db");
 
-// Configure Zoho / SMTP Transporter
+// Configure SMTP Transporter (Supports Gmail, Zoho, or Custom SMTP)
+const smtpHost = process.env.SMTP_HOST || (process.env.GMAIL_USER ? "smtp.gmail.com" : "smtp.zoho.in");
+const smtpPort = parseInt(process.env.SMTP_PORT, 10) || 465;
+const smtpUser = process.env.SMTP_USER || process.env.GMAIL_USER || process.env.ZOHO_EMAIL || "vigomerge@zohomail.in";
+const smtpPass = (process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD || process.env.ZOHO_APP_PASSWORD || "").replace(/\s+/g, "");
+const smtpSecure = process.env.SMTP_SECURE === "false" ? false : true;
+
 const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || "smtp.zoho.in",
-  port: parseInt(process.env.SMTP_PORT, 10) || 465,
-  secure: process.env.SMTP_SECURE === "false" ? false : true,
+  host: smtpHost,
+  port: smtpPort,
+  secure: smtpSecure,
   auth: {
-    user: process.env.ZOHO_EMAIL || process.env.SMTP_USER || "vigomerge@zohomail.in",
-    pass: process.env.ZOHO_APP_PASSWORD || process.env.SMTP_PASS || "",
+    user: smtpUser,
+    pass: smtpPass,
   },
 });
 
-const SENDER_EMAIL = process.env.ZOHO_EMAIL || process.env.SMTP_USER || "vigomerge@zohomail.in";
-const SENDER_NAME = process.env.APP_NAME || "Sculpt & Strive Fitness";
+const SENDER_EMAIL = smtpUser;
+const SENDER_NAME = process.env.APP_NAME || "Vigozen CRM";
 const APP_URL = process.env.APP_URL || "http://localhost:5173";
-const ADMIN_URL = process.env.ADMIN_URL || "http://localhost:5174";
+const ADMIN_URL = process.env.ADMIN_URL || "http://localhost:5173";
 
 /**
  * 1. Customer Expiry Reminder Email Template

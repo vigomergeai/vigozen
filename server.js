@@ -19,35 +19,49 @@ const { startNotificationWorker } = require("./server/notificationWorker");
 const { createPlatformIntegration, mapMultipleLeadsToCRM } = require("./server/adPlatformIntegrations");
 const { runDailySubscriptionCheck } = require("./server/subscriptionScheduler");
 const path = require("path");
+const dns = require("dns");
+
+// Fallback DNS for environments where system DNS defaults to inactive loopback (127.0.0.1)
+if (dns.Resolver) {
+  const OrigResolver = dns.Resolver;
+  dns.Resolver = class extends OrigResolver {
+    constructor(options) {
+      super(options);
+      try {
+        const servers = this.getServers();
+        if (servers.includes("127.0.0.1") || servers.includes("::1")) {
+          this.setServers(["8.8.8.8", "1.1.1.1"]);
+        }
+      } catch (e) {}
+    }
+  };
+}
+
 const nodemailer = require("nodemailer");
+const smtpHost = process.env.SMTP_HOST || (process.env.GMAIL_USER ? "smtp.gmail.com" : "smtp.zoho.in");
+const smtpPort = parseInt(process.env.SMTP_PORT, 10) || (smtpHost.includes("gmail") ? 465 : 465);
+const smtpUser = process.env.SMTP_USER || process.env.GMAIL_USER || process.env.ZOHO_EMAIL || "vigomerge@zohomail.in";
+const smtpPass = (process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD || process.env.ZOHO_APP_PASSWORD || "").replace(/\s+/g, "");
+const smtpSecure = process.env.SMTP_SECURE === "false" ? false : true;
+
 const mailTransporter = nodemailer.createTransport({
-  host: "smtp.zoho.in",
-  port: 465,
-  secure: true,
+  host: smtpHost,
+  port: smtpPort,
+  secure: smtpSecure,
   auth: {
-    user: process.env.ZOHO_EMAIL,
-    pass: process.env.ZOHO_APP_PASSWORD,
+    user: smtpUser,
+    pass: smtpPass,
   },
 });
 
-// ── ZOHO SMTP CONFIGURATION ──
-
-// Create transporter
-const transporter = nodemailer.createTransport({
-  host: 'smtp.zoho.in',
-  port: 587,
-  secure: false, // true for 465, false for other ports
-  auth: {
-    user: process.env.ZOHO_EMAIL || 'vigomerge@zohomail.in',
-    pass: process.env.ZOHO_APP_PASSWORD || '',
-  },
-});
+// Primary transporter for general and system notifications
+const transporter = mailTransporter;
 
 // ── EMAIL SENDING HELPER ──
 const sendEmail = async (to, subject, html) => {
   try {
     const mailOptions = {
-      from: `"Vigozen CRM" <${process.env.ZOHO_EMAIL || 'vigomerge@zohomail.in'}>`,
+      from: `"Vigozen CRM" <${smtpUser}>`,
       to,
       subject,
       html,
@@ -319,6 +333,7 @@ const upload = multer({
     await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS reminder_7d_sent BOOLEAN DEFAULT false;`).catch(() => { });
     await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS reminder_1d_sent BOOLEAN DEFAULT false;`).catch(() => { });
     await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS reminder_0d_sent BOOLEAN DEFAULT false;`).catch(() => { });
+    await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS last_reminder_sent_at TIMESTAMP;`).catch(() => { });
     await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS customer_name VARCHAR(255);`).catch(() => { });
     await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS customer_email VARCHAR(255);`).catch(() => { });
     await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS customer_phone VARCHAR(50);`).catch(() => { });
@@ -7379,153 +7394,11 @@ function calculateSubscriptionEndDate(startDate, durationMonths) {
   return end;
 }
 
-// ── Helper: Automated Subscription Expiry Notification Worker ──
+// ── Helper: Automated Subscription Expiry Notification Worker (Delegated to unified subscriptionScheduler) ──
 async function checkAndSendSubscriptionReminders() {
   try {
-    const now = new Date();
-    console.log(`[Subscription Worker] Running expiry checks at ${now.toISOString()}...`);
-
-    // 1. Check 7-Day Expiry Reminders
-    const res7d = await pool.query(`
-      SELECT s.*, u.name as user_name, u.email as user_email
-      FROM subscriptions s
-      LEFT JOIN users u ON s.user_id = u.id
-      WHERE s.status = 'active'
-        AND (s.reminder_7d_sent IS NULL OR s.reminder_7d_sent = false)
-        AND s.subscription_end <= NOW() + INTERVAL '7 days'
-        AND s.subscription_end > NOW() + INTERVAL '1 day'
-    `);
-
-    for (const sub of res7d.rows) {
-      const cName = sub.customer_name || sub.user_name || "Valued Member";
-      const planTitle = sub.plan_name || `${sub.duration_months || 1}-Month Fitness Plan`;
-      const endDateStr = sub.subscription_end ? new Date(sub.subscription_end).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : 'soon';
-
-      // Notify Customer
-      if (sub.user_id) {
-        await notificationService.createNotification(
-          sub.user_id,
-          'subscription_expiring_7d',
-          '⏳ Subscription Ending in 7 Days',
-          `Your ${planTitle} is ending on ${endDateStr}. Please renew your plan to continue your sessions uninterrupted.`,
-          '/billing',
-          'medium',
-          { subscription_id: sub.id, plan_name: planTitle, end_date: sub.subscription_end }
-        );
-      }
-
-      // Notify Admin
-      await notificationService.notifySuperAdmins(
-        'subscription_expiring_7d',
-        `🔔 Renewal Alert: ${cName}`,
-        `Customer ${cName}'s subscription is ending on ${endDateStr}. Plan: ${planTitle}.`,
-        `/subscriptions`,
-        'medium',
-        { subscription_id: sub.id, customer_name: cName, customer_email: sub.customer_email || sub.user_email }
-      );
-
-      await pool.query(`UPDATE subscriptions SET reminder_7d_sent = true, updated_at = NOW() WHERE id = $1`, [sub.id]);
-    }
-
-    // 2. Check 1-Day Expiry Reminders
-    const res1d = await pool.query(`
-      SELECT s.*, u.name as user_name, u.email as user_email
-      FROM subscriptions s
-      LEFT JOIN users u ON s.user_id = u.id
-      WHERE s.status = 'active'
-        AND (s.reminder_1d_sent IS NULL OR s.reminder_1d_sent = false)
-        AND s.subscription_end <= NOW() + INTERVAL '1 day'
-        AND s.subscription_end > NOW()
-    `);
-
-    for (const sub of res1d.rows) {
-      const cName = sub.customer_name || sub.user_name || "Valued Member";
-      const planTitle = sub.plan_name || `${sub.duration_months || 1}-Month Fitness Plan`;
-      const endDateStr = sub.subscription_end ? new Date(sub.subscription_end).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : 'tomorrow';
-
-      // Notify Customer
-      if (sub.user_id) {
-        await notificationService.createNotification(
-          sub.user_id,
-          'subscription_expiring_1d',
-          '🚨 Urgent: Subscription Ends Tomorrow!',
-          `Your ${planTitle} ends tomorrow (${endDateStr}). Please renew your plan now to continue your workouts!`,
-          '/billing',
-          'high',
-          { subscription_id: sub.id, plan_name: planTitle, end_date: sub.subscription_end }
-        );
-      }
-
-      // Notify Admin
-      await notificationService.notifySuperAdmins(
-        'subscription_expiring_1d',
-        `🚨 Final Reminder: ${cName}`,
-        `Customer ${cName}'s subscription ends tomorrow on ${endDateStr}. Plan: ${planTitle}.`,
-        `/subscriptions`,
-        'high',
-        { subscription_id: sub.id, customer_name: cName, customer_email: sub.customer_email || sub.user_email }
-      );
-
-      await pool.query(`UPDATE subscriptions SET reminder_1d_sent = true, updated_at = NOW() WHERE id = $1`, [sub.id]);
-    }
-
-    // 3. Check Expired Subscriptions (0 Days / Past Expiry)
-    const res0d = await pool.query(`
-      SELECT s.*, u.name as user_name, u.email as user_email
-      FROM subscriptions s
-      LEFT JOIN users u ON s.user_id = u.id
-      WHERE s.status = 'active'
-        AND s.subscription_end <= NOW()
-    `);
-
-    for (const sub of res0d.rows) {
-      const cName = sub.customer_name || sub.user_name || "Valued Member";
-      const planTitle = sub.plan_name || `${sub.duration_months || 1}-Month Fitness Plan`;
-      const endDateStr = sub.subscription_end ? new Date(sub.subscription_end).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : 'today';
-
-      // Mark expired
-      await pool.query(`
-        UPDATE subscriptions 
-        SET status = 'expired', reminder_0d_sent = true, updated_at = NOW() 
-        WHERE id = $1
-      `, [sub.id]);
-
-      if (sub.user_id) {
-        await pool.query(`
-          UPDATE users 
-          SET subscription_status = 'expired' 
-          WHERE id = $1
-        `, [sub.user_id]);
-
-        // Notify Customer
-        await notificationService.createNotification(
-          sub.user_id,
-          'subscription_expired',
-          '❌ Subscription Expired',
-          `Your ${planTitle} has expired on ${endDateStr}. Please renew your plan to restore your full access.`,
-          '/billing',
-          'high',
-          { subscription_id: sub.id, plan_name: planTitle, end_date: sub.subscription_end }
-        );
-      }
-
-      // Notify Admin
-      await notificationService.notifySuperAdmins(
-        'subscription_expired',
-        `❌ Subscription Expired: ${cName}`,
-        `Customer ${cName}'s subscription has expired on ${endDateStr}. Plan: ${planTitle}.`,
-        `/subscriptions`,
-        'high',
-        { subscription_id: sub.id, customer_name: cName, customer_email: sub.customer_email || sub.user_email }
-      );
-    }
-
-    return {
-      success: true,
-      reminders7dCount: res7d.rows.length,
-      reminders1dCount: res1d.rows.length,
-      expiredCount: res0d.rows.length
-    };
+    const { runDailySubscriptionCheck } = require("./server/subscriptionScheduler");
+    return await runDailySubscriptionCheck();
   } catch (err) {
     console.error("[Subscription Worker] Error checking reminders:", err);
     return { success: false, error: err.message };
@@ -8012,6 +7885,18 @@ app.post("/api/admin/subscriptions/:id/send-reminder", authenticateToken, async 
     const emailService = require("./server/emailService");
     const notificationService = require("./server/notificationService");
 
+    // Duplicate prevention: If a reminder was already sent within the last 1 hour, throttle to prevent accidental spam
+    if (sub.last_reminder_sent_at) {
+      const minutesSinceLast = Math.round((Date.now() - new Date(sub.last_reminder_sent_at).getTime()) / (1000 * 60));
+      if (minutesSinceLast < 60) {
+        return res.json({
+          success: false,
+          throttled: true,
+          message: `A reminder was already sent to ${customerName} ${minutesSinceLast} minute(s) ago. Please wait before sending another.`
+        });
+      }
+    }
+
     // 1. Send In-App notification
     if (sub.user_id) {
       await notificationService.createNotification(
@@ -8037,6 +7922,16 @@ app.post("/api/admin/subscriptions/:id/send-reminder", authenticateToken, async 
         type: daysLeft <= 1 ? '1_day_reminder' : '7_day_reminder'
       });
     }
+
+    // Update reminder flags & timestamp to prevent duplicate notifications from automated cron
+    await pool.query(`
+      UPDATE subscriptions 
+      SET reminder_7d_sent = CASE WHEN $2 > 1 AND $2 <= 7 THEN true ELSE reminder_7d_sent END,
+          reminder_1d_sent = CASE WHEN $2 <= 1 THEN true ELSE reminder_1d_sent END,
+          last_reminder_sent_at = NOW(),
+          updated_at = NOW()
+      WHERE id = $1
+    `, [sub.id, daysLeft]).catch(err => console.error("Update manual reminder flags error:", err));
 
     res.json({
       success: true,
@@ -9748,8 +9643,9 @@ async function processMetaLead(leadgenId, pageId, formId, platform = "facebook")
         console.error("Meta lead activity record error:", actErr.message);
       }
 
-      // Send welcome email if customer email is present
-      if (email) {
+      // Automatic welcome email disabled by default to prevent spamming leads.
+      // Can be explicitly toggled on with ENABLE_NEW_LEAD_WELCOME_EMAIL=true in .env
+      if (email && process.env.ENABLE_NEW_LEAD_WELCOME_EMAIL === 'true') {
         try {
           const emailService = require('./server/emailService');
           await emailService.sendNewLeadWelcomeEmail({
@@ -10215,8 +10111,9 @@ app.post(["/api/integrations/webhook", "/api/integrations/webhook/:token"], asyn
       console.error("Webhook lead activity record error:", actErr.message);
     }
 
-    // Send welcome email if customer email exists
-    if (email) {
+    // Automatic welcome email disabled by default to prevent spamming leads.
+    // Can be explicitly toggled on with ENABLE_NEW_LEAD_WELCOME_EMAIL=true in .env
+    if (email && process.env.ENABLE_NEW_LEAD_WELCOME_EMAIL === 'true') {
       try {
         const emailService = require('./server/emailService');
         await emailService.sendNewLeadWelcomeEmail({

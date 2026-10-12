@@ -47,6 +47,7 @@ async function runDailySubscriptionCheck() {
             LEFT JOIN users u ON s.user_id = u.id
             WHERE s.status = 'active'
               AND (s.reminder_7d_sent IS NULL OR s.reminder_7d_sent = false)
+              AND (s.last_reminder_sent_at IS NULL OR s.last_reminder_sent_at <= NOW() - INTERVAL '20 hours')
               AND s.subscription_end IS NOT NULL
               AND s.subscription_end <= NOW() + INTERVAL '7 days'
               AND s.subscription_end > NOW() + INTERVAL '1 day'
@@ -123,7 +124,7 @@ async function runDailySubscriptionCheck() {
                 // 4. Mark 7-day reminder as sent (prevents duplicate notification)
                 await pool.query(
                     `UPDATE subscriptions 
-                     SET reminder_7d_sent = true, updated_at = NOW() 
+                     SET reminder_7d_sent = true, last_reminder_sent_at = NOW(), updated_at = NOW() 
                      WHERE id = $1`,
                     [sub.id]
                 );
@@ -145,6 +146,7 @@ async function runDailySubscriptionCheck() {
             LEFT JOIN users u ON s.user_id = u.id
             WHERE s.status = 'active'
               AND (s.reminder_1d_sent IS NULL OR s.reminder_1d_sent = false)
+              AND (s.last_reminder_sent_at IS NULL OR s.last_reminder_sent_at <= NOW() - INTERVAL '20 hours')
               AND s.subscription_end IS NOT NULL
               AND s.subscription_end <= NOW() + INTERVAL '1 day'
               AND s.subscription_end > NOW()
@@ -221,7 +223,7 @@ async function runDailySubscriptionCheck() {
                 // 4. Mark 1-day reminder as sent (prevents duplicate notification)
                 await pool.query(
                     `UPDATE subscriptions 
-                     SET reminder_1d_sent = true, updated_at = NOW() 
+                     SET reminder_1d_sent = true, last_reminder_sent_at = NOW(), updated_at = NOW() 
                      WHERE id = $1`,
                     [sub.id]
                 );
@@ -242,6 +244,8 @@ async function runDailySubscriptionCheck() {
             FROM subscriptions s
             LEFT JOIN users u ON s.user_id = u.id
             WHERE s.status = 'active'
+              AND (s.reminder_0d_sent IS NULL OR s.reminder_0d_sent = false)
+              AND (s.last_reminder_sent_at IS NULL OR s.last_reminder_sent_at <= NOW() - INTERVAL '20 hours')
               AND s.subscription_end IS NOT NULL
               AND s.subscription_end <= NOW()
         `);
@@ -256,10 +260,10 @@ async function runDailySubscriptionCheck() {
                 const planTitle = sub.plan_name || `${duration}-Month Fitness Subscription`;
                 const expiryDateStr = formatExpiryDate(sub.subscription_end);
 
-                // 1. Update subscription status in database
+                // 1. Update subscription status in database (sets reminder_0d_sent and last_reminder_sent_at)
                 await pool.query(
                     `UPDATE subscriptions 
-                     SET status = 'expired', reminder_0d_sent = true, updated_at = NOW() 
+                     SET status = 'expired', reminder_0d_sent = true, last_reminder_sent_at = NOW(), updated_at = NOW() 
                      WHERE id = $1`,
                     [sub.id]
                 );

@@ -38,26 +38,8 @@ async function checkNewLeadsUncontacted() {
         const uncontactedLeads = await pool.query(query);
 
         for (const lead of uncontactedLeads.rows) {
-            // 1. Send automated welcome outreach email to customer if email is present
-            if (lead.email) {
-                await emailService.sendNewLeadWelcomeEmail({
-                    leadEmail: lead.email,
-                    leadName: lead.name,
-                    companyName: lead.company_name || lead.company,
-                    salespersonName: lead.owner_name
-                }).catch(err => console.error(`Failed to send new lead welcome email to ${lead.id}:`, err.message));
-
-                await recordActivity({
-                    leadId: lead.id,
-                    companyId: lead.company_id,
-                    user: 'System Automation',
-                    action: 'automated_welcome_sent',
-                    target: lead.name,
-                    note: `Automated welcome outreach email sent to uncontacted lead (${lead.email})`,
-                    type: 'email',
-                    isCustomerAction: false
-                });
-            }
+            // 1. Customer email disabled (avoiding unsolicited messages).
+            // In-app CRM notifications to salesperson & management are used instead.
 
             // 2. Alert the assigned salesperson
             if (lead.owner_id) {
@@ -112,7 +94,7 @@ async function checkNewLeadsUncontacted() {
                 user: 'System Automation',
                 action: 'uncontacted_lead_alert',
                 target: lead.name,
-                note: `Lead was uncontacted for 24+ hours. Reminder and outreach dispatched.`,
+                note: `Lead was uncontacted for 24+ hours. In-app CRM reminder sent to rep/managers.`,
                 type: 'system',
                 isCustomerAction: false
             });

@@ -330,8 +330,9 @@ async function importLeads(userId, companyId, leads, connection) {
                     isCustomerAction: false
                 });
 
-                // 4. Send initial welcome outreach email to customer if email is available
-                if (lead.email) {
+                // 4. Automatic welcome email disabled by default to prevent unsolicited emails to leads.
+                // Can be enabled explicitly by setting ENABLE_NEW_LEAD_WELCOME_EMAIL=true in .env
+                if (lead.email && process.env.ENABLE_NEW_LEAD_WELCOME_EMAIL === 'true') {
                     await emailService.sendNewLeadWelcomeEmail({
                         leadEmail: lead.email,
                         leadName: lead.name,

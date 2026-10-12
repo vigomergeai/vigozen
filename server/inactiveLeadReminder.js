@@ -41,26 +41,8 @@ async function checkInactiveLeads() {
         const inactiveLeads = await pool.query(inactiveQuery);
 
         for (const lead of inactiveLeads.rows) {
-            // 1. Send automated re-engagement email to the customer if email is available
-            if (lead.email) {
-                await emailService.sendLeadReengagementEmail({
-                    leadEmail: lead.email,
-                    leadName: lead.name,
-                    companyName: lead.company_name || lead.company,
-                    salespersonName: lead.owner_name
-                }).catch(err => console.error(`Failed to send re-engagement email to lead ${lead.id}:`, err.message));
-
-                await recordActivity({
-                    leadId: lead.id,
-                    companyId: lead.company_id,
-                    user: 'System Automation',
-                    action: 'reengagement_email_sent',
-                    target: lead.name,
-                    note: `Automated re-engagement email sent to inactive customer (${lead.email})`,
-                    type: 'email',
-                    isCustomerAction: false
-                });
-            }
+            // 1. Customer email disabled (avoiding unsolicited messages).
+            // In-app CRM reminders to salesperson & management are used instead.
 
             // 2. Alert the assigned salesperson
             if (lead.owner_id) {
@@ -111,7 +93,7 @@ async function checkInactiveLeads() {
                 user: 'System Automation',
                 action: 'inactivity_check',
                 target: lead.name,
-                note: `Lead flagged as inactive (${INACTIVE_DAYS}+ days without touchpoints). Outreach and reminder triggered.`,
+                note: `Lead flagged as inactive (${INACTIVE_DAYS}+ days without touchpoints). In-app CRM reminder sent to rep/managers.`,
                 type: 'system',
                 isCustomerAction: false
             });

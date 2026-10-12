@@ -65,26 +65,19 @@ async function checkFollowupReminders() {
 
             const isInitial = currentCount === 0;
 
-            // 1. Initial outreach to the customer if email is present
-            if (isInitial && lead.email) {
-                await emailService.sendLeadFollowupMissedEmail({
-                    leadEmail: lead.email,
-                    leadName: lead.name,
-                    companyName: lead.company_name || lead.company,
-                    salespersonName: lead.owner_name
-                }).catch(err => console.error(`Failed to send missed follow-up email to lead ${lead.id}:`, err.message));
-
-                // Log customer outreach activity
+            // 1. Automatic email to customer is disabled to prevent spamming leads.
+            // A CRM reminder / in-app notification is dispatched to the salesperson instead.
+            if (isInitial) {
                 await recordActivity({
                     leadId: lead.id,
                     companyId: lead.company_id,
                     user: 'System Automation',
-                    action: 'customer_outreach',
+                    action: 'followup_reminder',
                     target: lead.name,
-                    note: `Automated missed follow-up outreach email sent to customer (${lead.email})`,
-                    type: 'email',
+                    note: `CRM Reminder: Follow-up is overdue (Scheduled: ${formattedTime}). Assigned rep alerted.`,
+                    type: 'followup',
                     isCustomerAction: false
-                });
+                }).catch(err => console.error("Follow-up reminder activity record error:", err.message));
             }
 
             // 2. Handle notification to salesperson (if assigned)

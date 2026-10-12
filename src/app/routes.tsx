@@ -14,6 +14,7 @@ import logo from "../assets/Media.png";
 const DashboardPage = lazy(lazyRetry(() => import("./pages/DashboardPage")));
 const LeadsPage = lazy(lazyRetry(() => import("./pages/LeadsPage")));
 const SalesPage = lazy(lazyRetry(() => import("./pages/SalesPage")));
+const AutomationsPage = lazy(lazyRetry(() => import("./pages/AutomationsPage")));
 const AnalysisPage = lazy(lazyRetry(() => import("./pages/AnalysisPage")));
 const SupportPage = lazy(lazyRetry(() => import("./pages/SupportPage")));
 const SettingsPage = lazy(lazyRetry(() => import("./pages/SettingsPage")));
@@ -265,6 +266,15 @@ export const router = createBrowserRouter([
         Component: () => (
           <RequireSubscription>
             <LazyRoute Component={SalesPage} />
+          </RequireSubscription>
+        )
+      },
+      {
+        path: "automations",
+        errorElement: <ErrorPage />,
+        Component: () => (
+          <RequireSubscription>
+            <LazyRoute Component={AutomationsPage} />
           </RequireSubscription>
         )
       },

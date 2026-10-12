@@ -529,5 +529,9 @@ export const api = {
       return request("GET", url, undefined, token);
     },
   },
+  automations: {
+    getAll: (token?: string) => request("GET", "/api/workflow-automation", undefined, token),
+    runAll: (token?: string) => request("POST", "/api/workflow-automation/run", undefined, token),
+  },
   reset: (token?: string) => request("POST", "/reset", undefined, token),
 };

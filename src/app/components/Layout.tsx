@@ -16,6 +16,7 @@ const navItems = [
   { path: "/", label: "Dashboard", icon: LayoutDashboard, end: true, module: "leads" },
   { path: "/leads", label: "Leads", icon: Users, module: "leads" },
   { path: "/sales", label: "Sales", icon: TrendingUp, module: "deals" },
+  { path: "/automations", label: "Automations", icon: Zap, module: "leads" },
   { path: "/analysis", label: "Reports", icon: BarChart3, module: "reports" },
   { path: "/help", label: "Help & Support", icon: HelpCircle, module: "leads" },
   { path: "/settings", label: "Settings", icon: Settings, module: "settings" },
@@ -68,7 +69,7 @@ export default function Layout() {
   }, [subscription, isAdmin]);
 
   const isRestrictedPath = (pathname: string) => {
-    const restricted = ['/leads', '/sales', '/analysis', '/admin', '/integrations'];
+    const restricted = ['/leads', '/sales', '/automations', '/analysis', '/admin', '/integrations'];
     return pathname === '/' || restricted.some(p => pathname.startsWith(p));
   };
 
@@ -84,6 +85,7 @@ export default function Layout() {
 
     if (q.includes("lead")) return navigate("/leads");
     if (q.includes("sale")) return navigate("/sales");
+    if (q.includes("auto") || q.includes("workflow")) return navigate("/automations");
     if (q.includes("analysis") || q.includes("report")) return navigate("/analysis");
     if (q.includes("help") || q.includes("support")) return navigate("/help");
     if (q.includes("setting")) return navigate("/settings");

@@ -274,8 +274,8 @@ export default function LeadConversationWorkspace({
 
       {/* 3-Panel Main Workspace Content */}
       <div className="flex-1 flex overflow-hidden">
-        {/* ── PANEL 1: CONVERSATION LIST (LEFT) ── */}
-        <div className="w-72 lg:w-80 bg-white border-r border-slate-200 flex flex-col shrink-0">
+        {/* ── PANEL 1: CONVERSATION LIST (LEFT - ~23%) ── */}
+        <div className="w-[280px] xl:w-[290px] bg-white border-r border-slate-200 flex flex-col shrink-0">
           {/* Search Bar */}
           <div className="p-3 border-b border-slate-100">
             <div className="relative">
@@ -311,15 +311,15 @@ export default function LeadConversationWorkspace({
                   <div
                     key={lead.id}
                     onClick={() => setSelectedLeadId(lead.id)}
-                    className={`p-3 cursor-pointer transition-all flex items-start gap-3 relative ${
+                    className={`py-3 px-3.5 cursor-pointer transition-all flex items-start gap-3 relative border-l-2 ${
                       isSelected
-                        ? "bg-indigo-50/70 border-l-4 border-l-indigo-600"
-                        : "hover:bg-slate-50"
+                        ? "bg-indigo-50/80 border-l-indigo-600 shadow-2xs"
+                        : "border-l-transparent hover:bg-slate-50/90"
                     }`}
                   >
                     {/* Avatar */}
                     <div className="relative shrink-0">
-                      <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold shadow-xs">
+                      <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold shadow-2xs">
                         {lead.name
                           .split(" ")
                           .map((n) => n[0])
@@ -328,7 +328,7 @@ export default function LeadConversationWorkspace({
                           .toUpperCase()}
                       </div>
                       <span
-                        className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white ${statusConf.dot}`}
+                        className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-white ${statusConf.dot}`}
                       />
                     </div>
 
@@ -336,13 +336,13 @@ export default function LeadConversationWorkspace({
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-1 mb-0.5">
                         <h4
-                          className={`text-xs font-bold truncate ${
-                            isSelected ? "text-indigo-950" : "text-slate-800"
+                          className={`text-xs truncate ${
+                            isSelected ? "text-indigo-950 font-bold" : "text-slate-800 font-semibold"
                           }`}
                         >
                           {lead.name}
                         </h4>
-                        <span className="text-[10px] text-slate-400 shrink-0">
+                        <span className="text-[10px] text-slate-400 shrink-0 font-medium">
                           {lead.createdAt ? lead.createdAt.slice(5) : "Today"}
                         </span>
                       </div>
@@ -366,12 +366,12 @@ export default function LeadConversationWorkspace({
           </div>
         </div>
 
-        {/* ── PANEL 2: MAIN CHAT AREA (CENTER - LARGEST SECTION) ── */}
+        {/* ── PANEL 2: MAIN CHAT AREA (CENTER - ~52%) ── */}
         <div className="flex-1 flex flex-col bg-slate-50 overflow-hidden min-w-0">
           {/* Chat Header */}
           <div className="h-16 px-5 bg-white border-b border-slate-200 flex items-center justify-between shrink-0">
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold shrink-0">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold shrink-0 shadow-2xs">
                 {currentLead.name
                   .split(" ")
                   .map((n) => n[0])
@@ -380,26 +380,28 @@ export default function LeadConversationWorkspace({
                   .toUpperCase()}
               </div>
               <div className="min-w-0">
+                {/* Line 1: Lead Name and Status Pill */}
                 <div className="flex items-center gap-2">
                   <h3 className="text-sm font-bold text-slate-900 truncate">
                     {currentLead.name}
                   </h3>
                   <span
-                    className={`text-[10px] px-2 py-0.5 rounded-full border font-medium ${leadStatusConfig.color}`}
+                    className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold ${leadStatusConfig.color}`}
                   >
                     {currentLead.status}
                   </span>
                 </div>
-                <div className="flex items-center gap-3 text-xs text-slate-500 truncate mt-0.5">
+                {/* Line 2: Phone and Email Secondary Line */}
+                <div className="flex items-center gap-3 text-[11px] text-slate-500 truncate mt-0.5">
                   {currentLead.phone && (
-                    <span className="flex items-center gap-1">
-                      <Phone size={11} className="text-slate-400" />
+                    <span className="flex items-center gap-1 font-medium">
+                      <Phone size={11} className="text-slate-400 shrink-0" />
                       {currentLead.phone}
                     </span>
                   )}
                   {currentLead.email && (
-                    <span className="flex items-center gap-1 hidden md:flex">
-                      <Mail size={11} className="text-slate-400" />
+                    <span className="flex items-center gap-1 font-medium hidden md:flex">
+                      <Mail size={11} className="text-slate-400 shrink-0" />
                       {currentLead.email}
                     </span>
                   )}
@@ -407,28 +409,30 @@ export default function LeadConversationWorkspace({
               </div>
             </div>
 
-            {/* Channel Switcher */}
-            <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
+            {/* Compact Channel Switcher */}
+            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
               <button
                 onClick={() => setActiveChannel("whatsapp")}
-                className={`px-3 py-1 text-xs rounded-lg font-medium flex items-center gap-1.5 transition-all ${
+                className={`px-3 py-1 text-xs rounded-lg font-semibold flex items-center gap-1.5 transition-all ${
                   activeChannel === "whatsapp"
-                    ? "bg-emerald-500 text-white shadow-xs"
+                    ? "bg-emerald-500 text-white shadow-2xs"
                     : "text-slate-600 hover:text-slate-900"
                 }`}
+                title="Send via WhatsApp"
               >
-                <MessageCircle size={13} />
+                <MessageCircle size={12} />
                 <span>WhatsApp</span>
               </button>
               <button
                 onClick={() => setActiveChannel("email")}
-                className={`px-3 py-1 text-xs rounded-lg font-medium flex items-center gap-1.5 transition-all ${
+                className={`px-3 py-1 text-xs rounded-lg font-semibold flex items-center gap-1.5 transition-all ${
                   activeChannel === "email"
-                    ? "bg-indigo-600 text-white shadow-xs"
+                    ? "bg-indigo-600 text-white shadow-2xs"
                     : "text-slate-600 hover:text-slate-900"
                 }`}
+                title="Send via Email"
               >
-                <Mail size={13} />
+                <Mail size={12} />
                 <span>Email</span>
               </button>
             </div>
@@ -442,24 +446,24 @@ export default function LeadConversationWorkspace({
                 <span>Loading messages...</span>
               </div>
             ) : messages.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-full text-center max-w-md mx-auto p-6">
-                <div className="w-14 h-14 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mb-3 border border-emerald-100">
-                  <MessageCircle size={26} />
+              <div className="flex flex-col items-center justify-center h-full text-center max-w-sm mx-auto px-4">
+                <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mb-2.5 border border-indigo-100 shadow-2xs">
+                  <MessageCircle size={22} />
                 </div>
-                <h4 className="text-sm font-bold text-slate-800 mb-1">
-                  Start the conversation with {currentLead.name}
+                <h4 className="text-sm font-bold text-slate-800 mb-0.5">
+                  Start the conversation
                 </h4>
-                <p className="text-xs text-slate-500 mb-4">
-                  No message history recorded yet for this lead. Choose a quick template below or type a custom outreach message.
+                <p className="text-xs text-slate-500 mb-3.5 leading-relaxed">
+                  Choose a quick template below or write a custom message.
                 </p>
 
-                {/* Quick Starter Chips */}
-                <div className="flex flex-wrap gap-2 justify-center">
-                  {TEMPLATES.map((t) => (
+                {/* Compact Template Suggestions Directly Below */}
+                <div className="flex flex-wrap gap-1.5 justify-center">
+                  {TEMPLATES.slice(0, 3).map((t) => (
                     <button
                       key={t.title}
                       onClick={() => applyTemplate(t.text)}
-                      className="px-3 py-1.5 bg-white border border-slate-200 hover:border-indigo-400 hover:text-indigo-600 rounded-xl text-xs font-medium text-slate-700 transition-all shadow-2xs"
+                      className="px-3 py-1.5 bg-white border border-slate-200 hover:border-indigo-400 hover:text-indigo-600 rounded-xl text-xs font-semibold text-slate-700 transition-all shadow-2xs hover:bg-indigo-50/40"
                     >
                       {t.title}
                     </button>
@@ -576,21 +580,45 @@ export default function LeadConversationWorkspace({
 
           {/* Bottom Message Composer */}
           <div className="p-3 bg-white border-t border-slate-200 shrink-0">
-            <div className="flex items-center justify-between mb-2 px-1">
+            <div className="flex items-center justify-between mb-1.5 px-1">
               <span className="text-[11px] text-slate-400">
-                Press Enter to send · Shift+Enter for newline
+                Shift + Enter for new line
               </span>
 
               <button
                 onClick={() => setShowTemplates(!showTemplates)}
-                className="text-xs font-medium text-indigo-600 hover:text-indigo-700 flex items-center gap-1 hover:underline"
+                className="text-xs font-semibold text-indigo-600 hover:text-indigo-700 flex items-center gap-1 hover:underline"
               >
                 <Sparkles size={12} />
                 <span>Templates</span>
               </button>
             </div>
 
-            <div className="flex items-end gap-2 bg-slate-50 border border-slate-200 rounded-2xl p-2 focus-within:ring-2 focus-within:ring-indigo-500/20 focus-within:border-indigo-400 transition-all">
+            <div className="flex items-end gap-2 bg-slate-50 border border-slate-200 rounded-2xl p-2 focus-within:ring-2 focus-within:ring-indigo-500/20 focus-within:border-indigo-400 transition-all focus-within:bg-white">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-200/60 rounded-lg transition-colors shrink-0 mb-0.5"
+                title="Attach file"
+              >
+                <Paperclip size={16} />
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                onChange={() => toast.info("Attachment uploaded for message.")}
+              />
+
+              <button
+                type="button"
+                onClick={() => setMessageInput((prev) => prev + " 👋")}
+                className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-200/60 rounded-lg transition-colors shrink-0 mb-0.5"
+                title="Add emoji"
+              >
+                <Smile size={16} />
+              </button>
+
               <textarea
                 value={messageInput}
                 onChange={(e) => setMessageInput(e.target.value)}
@@ -600,69 +628,43 @@ export default function LeadConversationWorkspace({
                     handleSendMessage();
                   }
                 }}
-                rows={2}
+                rows={1}
                 placeholder={
                   activeChannel === "whatsapp"
-                    ? `Message ${currentLead.name} on WhatsApp... (Press Enter to send)`
-                    : `Email ${currentLead.name}... (Press Enter to send)`
+                    ? `Message ${currentLead.name} on WhatsApp...`
+                    : `Email ${currentLead.name}...`
                 }
-                className="flex-1 bg-transparent text-xs text-slate-800 placeholder-slate-400 focus:outline-none resize-none px-2 py-1 max-h-32"
+                className="flex-1 bg-transparent text-xs text-slate-800 placeholder-slate-400 focus:outline-none resize-none px-2 py-1 max-h-32 min-h-[32px]"
               />
 
-              <div className="flex items-center gap-1 shrink-0 pb-1">
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-200/60 rounded-lg transition-colors"
-                  title="Attach file"
-                >
-                  <Paperclip size={15} />
-                </button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  className="hidden"
-                  onChange={() => toast.info("Attachment uploaded for message.")}
-                />
-
-                <button
-                  type="button"
-                  onClick={() => setMessageInput((prev) => prev + " 👋")}
-                  className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-200/60 rounded-lg transition-colors"
-                  title="Add emoji"
-                >
-                  <Smile size={15} />
-                </button>
-
-                <button
-                  onClick={() => handleSendMessage()}
-                  disabled={!messageInput.trim() || sending}
-                  className={`p-2 rounded-xl text-white font-medium transition-all shadow-xs flex items-center justify-center ${
-                    !messageInput.trim() || sending
-                      ? "bg-slate-300 cursor-not-allowed"
-                      : activeChannel === "whatsapp"
-                      ? "bg-emerald-600 hover:bg-emerald-700"
-                      : "bg-indigo-600 hover:bg-indigo-700"
-                  }`}
-                  title="Send message"
-                >
-                  {sending ? (
-                    <RefreshCw size={14} className="animate-spin" />
-                  ) : (
-                    <Send size={14} />
-                  )}
-                </button>
-              </div>
+              <button
+                onClick={() => handleSendMessage()}
+                disabled={!messageInput.trim() || sending}
+                className={`p-2 rounded-xl text-white font-semibold transition-all shadow-xs flex items-center justify-center shrink-0 mb-0.5 ${
+                  !messageInput.trim() || sending
+                    ? "bg-slate-200 text-slate-400 cursor-not-allowed"
+                    : activeChannel === "whatsapp"
+                    ? "bg-emerald-600 hover:bg-emerald-700"
+                    : "bg-indigo-600 hover:bg-indigo-700"
+                }`}
+                title="Send message"
+              >
+                {sending ? (
+                  <RefreshCw size={14} className="animate-spin" />
+                ) : (
+                  <Send size={14} />
+                )}
+              </button>
             </div>
           </div>
         </div>
 
-        {/* ── PANEL 3: COMPACT LEAD DETAILS (RIGHT) ── */}
-        <div className="w-72 lg:w-80 bg-white border-l border-slate-200 flex flex-col shrink-0 overflow-y-auto">
+        {/* ── PANEL 3: COMPACT LEAD DETAILS (RIGHT - ~25%) ── */}
+        <div className="w-[290px] xl:w-[310px] bg-white border-l border-slate-200 flex flex-col shrink-0 overflow-y-auto">
           {/* Lead Summary Header */}
           <div className="p-4 border-b border-slate-100">
             <div className="flex items-center gap-3 mb-2">
-              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-sm font-bold shadow-xs">
+              <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-sm font-bold shadow-2xs shrink-0">
                 {currentLead.name
                   .split(" ")
                   .map((n) => n[0])
@@ -705,11 +707,11 @@ export default function LeadConversationWorkspace({
 
           {/* AI Score Card */}
           <div className="p-4 border-b border-slate-100">
-            <div className="bg-gradient-to-br from-indigo-50/60 to-purple-50/60 border border-indigo-100 rounded-xl p-3">
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
+            <div className="bg-indigo-50/50 border border-indigo-100/80 rounded-xl p-3">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
                   <Bot size={13} className="text-indigo-600" />
-                  AI Lead Quality Score
+                  AI Lead Score
                 </span>
                 <span
                   className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
@@ -717,7 +719,7 @@ export default function LeadConversationWorkspace({
                       ? "bg-emerald-100 text-emerald-800"
                       : (currentLead.aiScore || 50) >= 60
                       ? "bg-amber-100 text-amber-800"
-                      : "bg-slate-100 text-slate-700"
+                      : "bg-slate-200/80 text-slate-700"
                   }`}
                 >
                   {(currentLead.aiScore || 50) >= 80
@@ -750,117 +752,100 @@ export default function LeadConversationWorkspace({
             </div>
           </div>
 
-          {/* Contact Information */}
-          <div className="p-4 border-b border-slate-100 space-y-2.5">
-            <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+          {/* Contact Details (Clean Flat Rows) */}
+          <div className="p-4 border-b border-slate-100 space-y-2">
+            <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">
               Contact Information
             </h4>
 
             {currentLead.phone ? (
-              <div className="flex items-center justify-between text-xs group">
-                <div className="flex items-center gap-2 text-slate-700 truncate">
-                  <Phone size={13} className="text-slate-400 shrink-0" />
-                  <span className="truncate">{currentLead.phone}</span>
+              <div className="flex items-center justify-between py-1 text-xs group">
+                <span className="text-slate-400 font-medium">Phone</span>
+                <div className="flex items-center gap-1.5 font-semibold text-slate-700">
+                  <span>{currentLead.phone}</span>
+                  <button
+                    onClick={() => copyToClipboard(currentLead.phone, "Phone")}
+                    className="p-1 text-slate-400 hover:text-indigo-600 transition-colors"
+                    title="Copy Phone"
+                  >
+                    <Copy size={11} />
+                  </button>
                 </div>
-                <button
-                  onClick={() => copyToClipboard(currentLead.phone, "Phone")}
-                  className="p-1 text-slate-400 hover:text-indigo-600 opacity-0 group-hover:opacity-100 transition-opacity"
-                  title="Copy Phone"
-                >
-                  <Copy size={12} />
-                </button>
               </div>
-            ) : (
-              <span className="text-xs text-slate-400 italic">No phone provided</span>
-            )}
+            ) : null}
 
             {currentLead.email ? (
-              <div className="flex items-center justify-between text-xs group">
-                <div className="flex items-center gap-2 text-slate-700 truncate">
-                  <Mail size={13} className="text-slate-400 shrink-0" />
+              <div className="flex items-center justify-between py-1 text-xs group">
+                <span className="text-slate-400 font-medium">Email</span>
+                <div className="flex items-center gap-1.5 font-semibold text-slate-700 truncate max-w-[170px]">
                   <span className="truncate">{currentLead.email}</span>
+                  <button
+                    onClick={() => copyToClipboard(currentLead.email, "Email")}
+                    className="p-1 text-slate-400 hover:text-indigo-600 transition-colors shrink-0"
+                    title="Copy Email"
+                  >
+                    <Copy size={11} />
+                  </button>
                 </div>
-                <button
-                  onClick={() => copyToClipboard(currentLead.email, "Email")}
-                  className="p-1 text-slate-400 hover:text-indigo-600 opacity-0 group-hover:opacity-100 transition-opacity"
-                  title="Copy Email"
-                >
-                  <Copy size={12} />
-                </button>
               </div>
-            ) : (
-              <span className="text-xs text-slate-400 italic">No email provided</span>
-            )}
+            ) : null}
           </div>
 
-          {/* Key Deal Details */}
-          <div className="p-4 border-b border-slate-100 space-y-3">
-            <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+          {/* Lead Parameters (Flat Key-Value Rows) */}
+          <div className="p-4 border-b border-slate-100 space-y-2">
+            <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">
               Lead Parameters
             </h4>
 
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <div className="bg-slate-50 border border-slate-100 rounded-xl p-2.5">
-                <span className="text-[10px] text-slate-400 block mb-0.5">
-                  Est. Deal Value
-                </span>
+            <div className="space-y-2 text-xs">
+              <div className="flex items-center justify-between py-0.5">
+                <span className="text-slate-400 font-medium">Est. Value</span>
                 <span className="font-bold text-slate-800">
                   ₹{((currentLead.value || 0) / 1000).toLocaleString()}K
                 </span>
               </div>
 
-              <div className="bg-slate-50 border border-slate-100 rounded-xl p-2.5">
-                <span className="text-[10px] text-slate-400 block mb-0.5">
-                  Lead Source
-                </span>
-                <span className="font-bold text-slate-800 truncate block">
+              <div className="flex items-center justify-between py-0.5">
+                <span className="text-slate-400 font-medium">Source</span>
+                <span className="font-semibold text-slate-700">
                   {currentLead.source || "Direct"}
                 </span>
               </div>
 
-              <div className="bg-slate-50 border border-slate-100 rounded-xl p-2.5">
-                <span className="text-[10px] text-slate-400 block mb-0.5">
-                  Assigned Rep
-                </span>
-                <span className="font-bold text-slate-800 truncate block">
+              <div className="flex items-center justify-between py-0.5">
+                <span className="text-slate-400 font-medium">Lead Owner</span>
+                <span className="font-semibold text-slate-700 truncate max-w-[150px]">
                   {currentLead.owner || "Unassigned"}
                 </span>
               </div>
 
-              <div className="bg-slate-50 border border-slate-100 rounded-xl p-2.5">
-                <span className="text-[10px] text-slate-400 block mb-0.5">
-                  Industry
-                </span>
-                <span className="font-bold text-slate-800 truncate block">
+              <div className="flex items-center justify-between py-0.5">
+                <span className="text-slate-400 font-medium">Industry</span>
+                <span className="font-semibold text-slate-700">
                   {currentLead.industry || "General"}
                 </span>
               </div>
             </div>
           </div>
 
-          {/* Follow-up & Activity */}
-          <div className="p-4 border-b border-slate-100 space-y-2">
-            <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-              Next Action & Timeline
-            </h4>
+          {/* Follow-up Section */}
+          <div className="p-4 border-b border-slate-100">
+            <div className="flex items-center justify-between mb-1.5">
+              <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                Next Follow-up
+              </h4>
+              <Calendar size={13} className="text-slate-400" />
+            </div>
 
-            <div className="flex items-center gap-2 text-xs text-slate-700 bg-slate-50 border border-slate-100 rounded-xl p-2.5">
-              <Calendar size={14} className="text-indigo-600 shrink-0" />
-              <div className="min-w-0">
-                <span className="text-[10px] text-slate-400 block">
-                  Next Follow-up
-                </span>
-                <span className="font-semibold text-slate-800 truncate block">
-                  {currentLead.next_followup
-                    ? new Date(currentLead.next_followup).toLocaleDateString([], {
-                        month: "short",
-                        day: "numeric",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })
-                    : "No follow-up set"}
-                </span>
-              </div>
+            <div className="text-xs font-semibold text-slate-800">
+              {currentLead.next_followup
+                ? new Date(currentLead.next_followup).toLocaleDateString([], {
+                    month: "short",
+                    day: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })
+                : "No follow-up set"}
             </div>
           </div>
 

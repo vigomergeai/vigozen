@@ -169,6 +169,14 @@ async function checkFollowupReminders() {
             });
         }
 
+        // Trigger High-Value Opportunity Escalations (>₹5L missed by >30 mins)
+        try {
+            const { checkHighValueEscalations } = require('./highValueEscalationService');
+            await checkHighValueEscalations();
+        } catch (hErr) {
+            console.error("High-value escalation check error:", hErr.message);
+        }
+
         if (overdueLeads.rows.length > 0) {
             console.log(`⏰ Processed ${overdueLeads.rows.length} overdue follow-up action(s)`);
         }

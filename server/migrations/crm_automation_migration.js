@@ -25,9 +25,15 @@ async function runMigration() {
         ADD COLUMN IF NOT EXISTS last_customer_message_at TIMESTAMPTZ,
         ADD COLUMN IF NOT EXISTS new_lead_notified BOOLEAN DEFAULT false,
         ADD COLUMN IF NOT EXISTS last_new_lead_notified_at TIMESTAMPTZ,
-        ADD COLUMN IF NOT EXISTS customer_waiting_escalated BOOLEAN DEFAULT false;
+        ADD COLUMN IF NOT EXISTS customer_waiting_escalated BOOLEAN DEFAULT false,
+        ADD COLUMN IF NOT EXISTS whatsapp_welcome_sent BOOLEAN DEFAULT false,
+        ADD COLUMN IF NOT EXISTS last_whatsapp_sent_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS whatsapp_message_id TEXT,
+        ADD COLUMN IF NOT EXISTS high_value_escalated BOOLEAN DEFAULT false,
+        ADD COLUMN IF NOT EXISTS last_high_value_escalated_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS high_value_sms_sent BOOLEAN DEFAULT false;
     `);
-    console.log('✅ Added tracking columns to leads table');
+    console.log('✅ Added tracking columns to leads table (including WhatsApp welcome & High-Value Escalator)');
 
     // 3. Create customer_messages table
     await pool.query(`
@@ -86,6 +92,8 @@ async function runMigration() {
       CREATE INDEX IF NOT EXISTS idx_leads_customer_waiting ON leads(customer_waiting);
       CREATE INDEX IF NOT EXISTS idx_leads_next_followup ON leads(next_followup);
       CREATE INDEX IF NOT EXISTS idx_leads_last_activity_date ON leads(last_activity_date);
+      CREATE INDEX IF NOT EXISTS idx_leads_whatsapp_welcome_sent ON leads(whatsapp_welcome_sent);
+      CREATE INDEX IF NOT EXISTS idx_leads_high_value_escalated ON leads(high_value_escalated);
     `);
     console.log('✅ Created helpful indexes for CRM automation');
 

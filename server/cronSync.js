@@ -340,6 +340,14 @@ async function importLeads(userId, companyId, leads, connection) {
                         salespersonName: null
                     }).catch(err => console.error("Failed to send welcome email to imported lead:", err.message));
                 }
+
+                // 5. Instant WhatsApp Welcome Outreach Automation
+                try {
+                    const { sendInstantWhatsAppWelcome } = require('./whatsappWelcomeService');
+                    await sendInstantWhatsAppWelcome(newLead);
+                } catch (waErr) {
+                    console.error("Ad sync lead WhatsApp welcome outreach error:", waErr.message);
+                }
             }
         } catch (error) {
             console.error(`Failed to import lead ${lead.platform_id}:`, error);

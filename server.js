@@ -3087,6 +3087,19 @@ app.post("/leads", authenticateToken, enforceStorageLimit(0.01), async (req, res
       console.error("Notification error:", notifErr);
     }
 
+    // ── Automation Rules: Instant Lead Assignment & Chained WhatsApp First Response ──
+    try {
+      const automationService = require('./server/automationRulesService');
+      await automationService.triggerInstantLeadAssignment(lead, {
+        user: req.user,
+        repName: req.user?.name,
+        customMessage: req.body.whatsappMessage || null,
+        forceWhatsApp: req.body.sendWhatsApp === true
+      });
+    } catch (autoErr) {
+      console.error("POST /leads automation rules execution error:", autoErr.message);
+    }
+
     await incrementStorageUsed(companyId, 0.01);
     res.json(result.rows[0]);
   } catch (err) {
@@ -3271,6 +3284,20 @@ app.put("/leads/:id", authenticateToken, async (req, res) => {
       }
     } catch (notifErr) {
       console.error("Status change notification error:", notifErr);
+    }
+
+    // ── Automation Rule 2: WhatsApp First Response on Lead Assigned ──
+    const ownerAssigned = Boolean(ownerId && ownerId !== existing.owner_id);
+    if (ownerAssigned) {
+      try {
+        const automationRulesService = require('./server/automationRulesService');
+        await automationRulesService.triggerWhatsAppFirstResponse(lead, null, {
+          user: req.user,
+          source: 'manual_assigned'
+        });
+      } catch (autoErr) {
+        console.error("PUT /leads/:id WhatsApp first response automation error:", autoErr.message);
+      }
     }
 
     // Audit log inside route
@@ -3489,6 +3516,20 @@ app.post("/leads/:id/send-message", authenticateToken, async (req, res) => {
       }).catch(err => console.error("Failed to email customer reply:", err.message));
     }
 
+    // If channel is whatsapp and lead has phone, dispatch via WhatsApp provider
+    if (channel === 'whatsapp' && lead.phone) {
+      try {
+        const { dispatchOutboundWhatsApp } = require('./server/whatsappWelcomeService');
+        await dispatchOutboundWhatsApp({
+          toPhone: lead.phone,
+          messageText: message.trim(),
+          leadId: lead.id
+        });
+      } catch (waErr) {
+        console.warn("Failed to dispatch outbound WhatsApp via provider:", waErr.message);
+      }
+    }
+
     res.json({
       success: true,
       message: "Message sent to customer and waiting status cleared",
@@ -3615,7 +3656,8 @@ app.get(["/api/workflow-automation", "/api/automations"], authenticateToken, asy
     const overdueRes = await pool.query(`
       SELECT COUNT(*)::int as count 
       FROM leads 
-      WHERE next_followup_at <= NOW() 
+      WHERE next_followup IS NOT NULL 
+        AND next_followup <= NOW() 
         AND ${CLOSED_STATUS_CONDITION}
     `);
 
@@ -3645,16 +3687,54 @@ app.get(["/api/workflow-automation", "/api/automations"], authenticateToken, asy
     const activitiesCountRes = await pool.query(`
       SELECT COUNT(*)::int as count 
       FROM activities 
-      WHERE user = 'System Automation' OR user = 'SLA Monitor'
+      WHERE user = 'System Automation' OR user = 'SLA Monitor' OR user = 'WhatsApp Auto-Responder'
     `);
 
+    // Fetch real-time WhatsApp Welcome Outreach metrics
+    const whatsappModule = require('./server/whatsappWelcomeService');
+    const whatsappMetrics = await whatsappModule.getWhatsAppWelcomeMetrics();
+
+    // Fetch real-time High-Value Opportunity Escalation metrics
+    const highValueModule = require('./server/highValueEscalationService');
+    const highValueMetrics = await highValueModule.getHighValueEscalationMetrics();
+
     const automations = [
+      {
+        id: "high_value_escalation",
+        name: "High-Value Opportunity Escalator",
+        description: "Flags opportunities with value exceeding ₹5,00,000. If meeting is missed by more than 30 mins, alerts Sales Manager and Super Admin immediately.",
+        status: "active",
+        trigger: "Overdue follow-up on ₹5L+ lead (>30 mins)",
+        schedule: "Continuous monitor (* * * * *)",
+        actions: [
+          "High priority SMS & App alert",
+          "Manager phone escalation & direct contact",
+          "Immediate alerts to Sales Manager & Super Admin",
+          "Tags lead with vip-priority and logs to audit timeline"
+        ],
+        current_affected_count: highValueMetrics.pending_escalations || 0
+      },
+      {
+        id: "whatsapp_welcome",
+        name: "Instant WhatsApp Welcome Outreach",
+        description: "Connects Meta & Google lead forms to send an instant greeting template via WhatsApp as soon as the lead enters the CRM.",
+        status: "active",
+        trigger: "Lead Created via Ad Form (Meta, Google, Webhook)",
+        schedule: "Real-time (Instant on lead capture)",
+        actions: [
+          "Personalized WhatsApp welcome greeting template",
+          "Rep in-app notification & alert",
+          "Outbound WhatsApp logged to CRM activities timeline",
+          "Skips all closed leads (won, lost, booking_done, token_done)"
+        ],
+        current_affected_count: whatsappMetrics.pending_welcomes || 0
+      },
       {
         id: "missed_followup",
         name: "Missed Next Follow-up Automation",
         description: "Automatically emails customer, notifies salesperson, and escalates to managers with repeat reminders when scheduled follow-up is missed.",
         status: "active",
-        trigger: "Schedule passed (next_followup_at <= NOW())",
+        trigger: "Schedule passed (next_followup <= NOW())",
         schedule: "Runs every minute (* * * * *)",
         actions: [
           "Auto-email customer with meeting rescheduling link",
@@ -3731,6 +3811,8 @@ app.get(["/api/workflow-automation", "/api/automations"], authenticateToken, asy
       total_automations: automations.length,
       active_automations: automations.length,
       system_activities_logged: activitiesCountRes.rows[0]?.count || 0,
+      whatsapp_stats: whatsappMetrics,
+      high_value_stats: highValueMetrics,
       automations
     });
   } catch (err) {
@@ -3747,9 +3829,19 @@ app.post(["/api/workflow-automation/run", "/api/automations/run"], authenticateT
     const waitingModule = require('./server/customerWaitingReminder');
     const newLeadModule = require('./server/newLeadReminder');
     const meetingModule = require('./server/meetingReminder');
+    const whatsappModule = require('./server/whatsappWelcomeService');
+    const highValueModule = require('./server/highValueEscalationService');
 
     const results = {};
 
+    // 1. High-Value Opportunity Escalator (> ₹5,00,000 overdue >30 mins)
+    if (typeof highValueModule.checkHighValueEscalations === 'function') {
+      results.high_value_escalation = await highValueModule.checkHighValueEscalations();
+    }
+    // 2. Instant WhatsApp Welcome Outreach for pending ad leads
+    if (typeof whatsappModule.runInstantWhatsAppWelcomeOutreach === 'function') {
+      results.whatsapp_welcome = await whatsappModule.runInstantWhatsAppWelcomeOutreach();
+    }
     if (typeof followupModule.checkFollowupReminders === 'function') {
       results.followups = await followupModule.checkFollowupReminders();
     }
@@ -3774,6 +3866,197 @@ app.post(["/api/workflow-automation/run", "/api/automations/run"], authenticateT
     });
   } catch (err) {
     console.error("POST /api/workflow-automation/run error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/workflow-automation/run/high-value-escalation: Trigger High-Value Escalator specifically
+app.post(["/api/workflow-automation/run/high-value-escalation", "/api/automations/run/high-value-escalation"], authenticateToken, async (req, res) => {
+  try {
+    const highValueModule = require('./server/highValueEscalationService');
+    const result = await highValueModule.checkHighValueEscalations();
+    res.json({
+      success: true,
+      message: `Processed ${result.processed} high-value leads (${result.succeeded} escalated)`,
+      ...result
+    });
+  } catch (err) {
+    console.error("POST /api/workflow-automation/run/high-value-escalation error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /leads/:id/escalate-high-value: Trigger manual high-value escalation for a specific lead
+app.post("/leads/:id/escalate-high-value", authenticateToken, async (req, res) => {
+  try {
+    const highValueModule = require('./server/highValueEscalationService');
+    const result = await highValueModule.escalateHighValueOpportunity(req.params.id, { force: req.body.force === true });
+    res.json(result);
+  } catch (err) {
+    console.error("POST /leads/:id/escalate-high-value error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/workflow-automation/high-value/metrics
+app.get(["/api/workflow-automation/high-value/metrics", "/api/automations/high-value/metrics"], authenticateToken, async (req, res) => {
+  try {
+    const highValueModule = require('./server/highValueEscalationService');
+    const metrics = await highValueModule.getHighValueEscalationMetrics();
+    res.json({ success: true, metrics });
+  } catch (err) {
+    console.error("GET high-value/metrics error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/workflow-automation/run/whatsapp-welcome: Trigger WhatsApp welcome outreach specifically
+app.post(["/api/workflow-automation/run/whatsapp-welcome", "/api/automations/run/whatsapp-welcome"], authenticateToken, async (req, res) => {
+  try {
+    const whatsappModule = require('./server/whatsappWelcomeService');
+    const result = await whatsappModule.runInstantWhatsAppWelcomeOutreach({ limit: req.body.limit || 50 });
+    res.json({
+      success: true,
+      message: `Processed ${result.processed} ad leads (${result.succeeded} welcomes dispatched)`,
+      ...result
+    });
+  } catch (err) {
+    console.error("POST /api/workflow-automation/run/whatsapp-welcome error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /leads/:id/send-whatsapp-welcome: Trigger instant WhatsApp welcome for a single lead on demand
+app.post("/leads/:id/send-whatsapp-welcome", authenticateToken, async (req, res) => {
+  try {
+    const whatsappModule = require('./server/whatsappWelcomeService');
+    const result = await whatsappModule.sendInstantWhatsAppWelcome(req.params.id, {
+      force: req.body.force === true,
+      customMessage: req.body.customMessage,
+      repName: req.user?.name
+    });
+    res.json(result);
+  } catch (err) {
+    console.error("POST /leads/:id/send-whatsapp-welcome error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/workflow-automation/whatsapp-welcome/metrics
+app.get(["/api/workflow-automation/whatsapp-welcome/metrics", "/api/automations/whatsapp-welcome/metrics"], authenticateToken, async (req, res) => {
+  try {
+    const whatsappModule = require('./server/whatsappWelcomeService');
+    const metrics = await whatsappModule.getWhatsAppWelcomeMetrics();
+    res.json({ success: true, metrics });
+  } catch (err) {
+    console.error("GET whatsapp-welcome/metrics error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ──────────────────────────────────────────────────────────────
+// AUTOMATION RULES CRUD & TESTING API (SalesOS-style rule manager)
+// ──────────────────────────────────────────────────────────────
+const automationRulesService = require('./server/automationRulesService');
+
+// GET /api/automation-rules: List all compact automation rules
+app.get(["/api/automation-rules", "/automation-rules"], authenticateToken, async (req, res) => {
+  try {
+    const rules = await automationRulesService.getAllRules();
+    res.json({ success: true, rules });
+  } catch (err) {
+    console.error("GET /api/automation-rules error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/automation-rules: Create a new automation rule
+app.post(["/api/automation-rules", "/automation-rules"], authenticateToken, async (req, res) => {
+  try {
+    const { name, trigger, trigger_event, action, action_type, message_template, status, icon } = req.body;
+    const rule = await automationRulesService.createRule({
+      name,
+      trigger_event: trigger_event || trigger,
+      action_type: action_type || action,
+      message_template,
+      status,
+      icon
+    });
+    res.status(201).json({ success: true, rule, message: "Rule created successfully" });
+  } catch (err) {
+    console.error("POST /api/automation-rules error:", err);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// PUT /api/automation-rules/:id: Update existing rule
+app.put(["/api/automation-rules/:id", "/automation-rules/:id"], authenticateToken, async (req, res) => {
+  try {
+    const { name, trigger, trigger_event, action, action_type, message_template, status, icon } = req.body;
+    const rule = await automationRulesService.updateRule(req.params.id, {
+      name,
+      trigger_event: trigger_event || trigger,
+      action_type: action_type || action,
+      message_template,
+      status,
+      icon
+    });
+    res.json({ success: true, rule, message: "Rule updated successfully" });
+  } catch (err) {
+    console.error("PUT /api/automation-rules/:id error:", err);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// POST /api/automation-rules/:id/toggle: Toggle active / inactive status
+app.post(["/api/automation-rules/:id/toggle", "/automation-rules/:id/toggle"], authenticateToken, async (req, res) => {
+  try {
+    const { status } = req.body;
+    const rule = await automationRulesService.toggleRule(req.params.id, status);
+    res.json({ success: true, rule, message: `Rule is now ${rule.status}` });
+  } catch (err) {
+    console.error("POST /api/automation-rules/:id/toggle error:", err);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// DELETE /api/automation-rules/:id: Delete an automation rule
+app.delete(["/api/automation-rules/:id", "/automation-rules/:id"], authenticateToken, async (req, res) => {
+  try {
+    const result = await automationRulesService.deleteRule(req.params.id);
+    res.json({ success: true, message: "Rule deleted successfully", id: req.params.id });
+  } catch (err) {
+    console.error("DELETE /api/automation-rules/:id error:", err);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// POST /api/automation-rules/test: Dry-run test a rule with duplicate check
+app.post(["/api/automation-rules/test", "/automation-rules/test"], authenticateToken, async (req, res) => {
+  try {
+    const { name, trigger, trigger_event, action, action_type, message_template } = req.body;
+    const testResult = await automationRulesService.testRule({
+      name,
+      trigger_event: trigger_event || trigger,
+      action_type: action_type || action,
+      message_template
+    });
+    res.json(testResult);
+  } catch (err) {
+    console.error("POST /api/automation-rules/test error:", err);
+    res.status(400).json({ success: false, status: "failed", explanation: err.message });
+  }
+});
+
+// GET /api/automation-rules/logs: Audit log of automation executions (Diagram 6)
+app.get(["/api/automation-rules/logs", "/automation-rules/logs", "/api/automation-executions"], authenticateToken, async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit, 10) || 50;
+    const ruleId = req.query.rule_id || req.query.ruleId || null;
+    const logs = await automationRulesService.getExecutionLogs({ limit, ruleId });
+    res.json({ success: true, logs, count: logs.length });
+  } catch (err) {
+    console.error("GET /api/automation-rules/logs error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -5813,12 +6096,22 @@ async function syncConnection(connection) {
             [lead.platform_id, connection.company_id]
           );
           if (existing.rows.length === 0) {
-            await pool.query(
+            const insertRes = await pool.query(
               `INSERT INTO leads (id, name, email, phone, company, source, platform, platform_id, status, owner_id, company_id)
-               VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, 'new', $8, $9)`,
+               VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, 'new', $8, $9)
+               RETURNING *`,
               [lead.name, lead.email, lead.phone, lead.company, lead.source, lead.platform, lead.platform_id, connection.user_id, connection.company_id]
             );
             importedCount++;
+            const newLead = insertRes.rows[0];
+            try {
+              const automationRulesService = require('./server/automationRulesService');
+              await automationRulesService.triggerInstantLeadAssignment(newLead, {
+                source: connection.platform
+              });
+            } catch (autoErr) {
+              console.error("Ad import automation rules error:", autoErr.message);
+            }
           }
         } catch (err) {
           console.error('Import lead error:', err);
@@ -9659,6 +9952,16 @@ async function processMetaLead(leadgenId, pageId, formId, platform = "facebook")
         }
       }
 
+      // ── Automation Rules: Instant Lead Assignment & Chained WhatsApp First Response ──
+      try {
+        const automationRulesService = require('./server/automationRulesService');
+        await automationRulesService.triggerInstantLeadAssignment(createdLead, {
+          source: platform
+        });
+      } catch (autoErr) {
+        console.error("Meta lead automation rules error:", autoErr.message);
+      }
+
       if (targetUserId) {
         try {
           await notificationQueue.createNotification(
@@ -9884,6 +10187,16 @@ app.post(["/api/integrations/google/webhook", "/api/integrations/google/webhook/
 
       console.log(`🎉 New Google Ads lead saved to CRM: ${leadName} (ID: ${insertedLead?.id})`);
 
+      // ── Automation Rules: Instant Lead Assignment & Chained WhatsApp First Response ──
+      try {
+        const automationRulesService = require('./server/automationRulesService');
+        await automationRulesService.triggerInstantLeadAssignment(insertedLead, {
+          source: 'google'
+        });
+      } catch (autoErr) {
+        console.error("Google Ads lead automation rules error:", autoErr.message);
+      }
+
       if (targetUserId) {
         try {
           await notificationQueue.createNotification(
@@ -10012,6 +10325,16 @@ app.post(["/api/integrations/linkedin/webhook", "/api/integrations/linkedin/webh
 
       console.log(`🎉 New LinkedIn lead saved to CRM: ${leadName} (ID: ${leadInsert.rows[0]?.id})`);
 
+      // ── Automation Rules: Instant Lead Assignment & Chained WhatsApp First Response ──
+      try {
+        const automationRulesService = require('./server/automationRulesService');
+        await automationRulesService.triggerInstantLeadAssignment(leadInsert.rows[0], {
+          source: 'linkedin'
+        });
+      } catch (autoErr) {
+        console.error("LinkedIn lead automation rules error:", autoErr.message);
+      }
+
       if (targetUserId) {
         try {
           await notificationQueue.createNotification(
@@ -10125,6 +10448,16 @@ app.post(["/api/integrations/webhook", "/api/integrations/webhook/:token"], asyn
       } catch (emailErr) {
         console.error("Webhook lead welcome email error:", emailErr.message);
       }
+    }
+
+    // ── Automation Rules: Instant Lead Assignment & Chained WhatsApp First Response ──
+    try {
+      const automationRulesService = require('./server/automationRulesService');
+      await automationRulesService.triggerInstantLeadAssignment(createdLead, {
+        source: source || 'webhook'
+      });
+    } catch (autoErr) {
+      console.error("Webhook lead automation rules error:", autoErr.message);
     }
 
     if (targetUserId) {

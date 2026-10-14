@@ -82,7 +82,6 @@ export default function LeadConversationWorkspace({
 }: LeadConversationWorkspaceProps) {
   const [selectedLeadId, setSelectedLeadId] = useState<string>(initialLead.id);
   const [searchQuery, setSearchQuery] = useState("");
-  const [channelFilter, setChannelFilter] = useState<"all" | "whatsapp" | "email" | "sms">("all");
   const [activeChannel, setActiveChannel] = useState<"whatsapp" | "email" | "sms">("whatsapp");
   
   const [messages, setMessages] = useState<MessageItem[]>([]);
@@ -101,26 +100,19 @@ export default function LeadConversationWorkspace({
     return allLeads.find((l) => l.id === selectedLeadId) || initialLead;
   }, [allLeads, selectedLeadId, initialLead]);
 
-  // Filtered conversation list
+  // Filtered conversation list - all leads are displayed, filtered only by search query
   const filteredLeads = useMemo(() => {
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return allLeads;
     return allLeads.filter((l) => {
-      const q = searchQuery.toLowerCase().trim();
-      const matchesSearch =
-        !q ||
+      return (
         l.name.toLowerCase().includes(q) ||
         (l.company && l.company.toLowerCase().includes(q)) ||
         (l.phone && l.phone.includes(q)) ||
-        (l.email && l.email.toLowerCase().includes(q));
-
-      if (!matchesSearch) return false;
-
-      // Channel filter preference (mocking channel tagging or based on available contact methods)
-      if (channelFilter === "whatsapp" && !l.phone) return false;
-      if (channelFilter === "email" && !l.email) return false;
-
-      return true;
+        (l.email && l.email.toLowerCase().includes(q))
+      );
     });
-  }, [allLeads, searchQuery, channelFilter]);
+  }, [allLeads, searchQuery]);
 
   // Fetch messages whenever selectedLeadId changes
   const fetchMessages = async (leadId: string) => {
@@ -285,7 +277,7 @@ export default function LeadConversationWorkspace({
         {/* ── PANEL 1: CONVERSATION LIST (LEFT) ── */}
         <div className="w-72 lg:w-80 bg-white border-r border-slate-200 flex flex-col shrink-0">
           {/* Search Bar */}
-          <div className="p-3 border-b border-slate-100 space-y-2">
+          <div className="p-3 border-b border-slate-100">
             <div className="relative">
               <Search
                 size={13}
@@ -298,23 +290,6 @@ export default function LeadConversationWorkspace({
                 placeholder="Search conversations..."
                 className="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 transition-all text-slate-800"
               />
-            </div>
-
-            {/* Channel Filter Pills */}
-            <div className="flex gap-1 p-0.5 bg-slate-100 rounded-xl text-[11px] font-medium">
-              {(["all", "whatsapp", "email"] as const).map((ch) => (
-                <button
-                  key={ch}
-                  onClick={() => setChannelFilter(ch)}
-                  className={`flex-1 py-1 rounded-lg transition-all capitalize text-center ${
-                    channelFilter === ch
-                      ? "bg-white text-slate-800 font-semibold shadow-xs"
-                      : "text-slate-500 hover:text-slate-700"
-                  }`}
-                >
-                  {ch === "all" ? "All" : ch === "whatsapp" ? "WhatsApp" : "Email"}
-                </button>
-              ))}
             </div>
           </div>
 
@@ -382,16 +357,6 @@ export default function LeadConversationWorkspace({
                         >
                           {lead.status}
                         </span>
-
-                        {lead.phone && (
-                          <span
-                            className="text-[10px] text-emerald-600 flex items-center gap-0.5"
-                            title="WhatsApp Eligible"
-                          >
-                            <MessageCircle size={10} />
-                            <span>WA</span>
-                          </span>
-                        )}
                       </div>
                     </div>
                   </div>
@@ -612,20 +577,9 @@ export default function LeadConversationWorkspace({
           {/* Bottom Message Composer */}
           <div className="p-3 bg-white border-t border-slate-200 shrink-0">
             <div className="flex items-center justify-between mb-2 px-1">
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] font-semibold text-slate-500">
-                  Channel:
-                </span>
-                <span
-                  className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${
-                    activeChannel === "whatsapp"
-                      ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                      : "bg-indigo-50 text-indigo-700 border border-indigo-200"
-                  }`}
-                >
-                  {activeChannel === "whatsapp" ? "🟢 WhatsApp" : "📧 Email"}
-                </span>
-              </div>
+              <span className="text-[11px] text-slate-400">
+                Press Enter to send · Shift+Enter for newline
+              </span>
 
               <button
                 onClick={() => setShowTemplates(!showTemplates)}
@@ -734,50 +688,19 @@ export default function LeadConversationWorkspace({
               </div>
             </div>
 
-            {/* Quick Action Buttons */}
-            <div className="grid grid-cols-3 gap-1.5 mt-3">
-              <a
-                href={currentLead.phone ? `tel:${currentLead.phone}` : "#"}
-                onClick={(e) => !currentLead.phone && e.preventDefault()}
-                className={`py-1.5 px-2 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1 transition-all ${
-                  currentLead.phone
-                    ? "bg-white hover:bg-slate-50 text-slate-700 border-slate-200 shadow-2xs"
-                    : "bg-slate-50 text-slate-300 border-slate-100 cursor-not-allowed"
-                }`}
-                title="Call"
-              >
-                <Phone size={12} />
-                <span>Call</span>
-              </a>
-
-              <button
-                onClick={() => setActiveChannel("whatsapp")}
-                disabled={!currentLead.phone}
-                className={`py-1.5 px-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1 transition-all ${
-                  currentLead.phone
-                    ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 shadow-2xs"
-                    : "bg-slate-50 text-slate-300 border-slate-100 cursor-not-allowed"
-                }`}
-                title="WhatsApp"
-              >
-                <MessageCircle size={12} />
-                <span>WA</span>
-              </button>
-
-              <button
-                onClick={() => setActiveChannel("email")}
-                disabled={!currentLead.email}
-                className={`py-1.5 px-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1 transition-all ${
-                  currentLead.email
-                    ? "bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 shadow-2xs"
-                    : "bg-slate-50 text-slate-300 border-slate-100 cursor-not-allowed"
-                }`}
-                title="Email"
-              >
-                <Mail size={12} />
-                <span>Email</span>
-              </button>
-            </div>
+            {/* Quick Action Button - Call */}
+            {currentLead.phone && (
+              <div className="mt-3">
+                <a
+                  href={`tel:${currentLead.phone}`}
+                  className="w-full py-2 px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center justify-center gap-2 transition-all shadow-2xs"
+                  title="Call Lead"
+                >
+                  <Phone size={13} className="text-indigo-600" />
+                  <span>Call {currentLead.name.split(" ")[0]}</span>
+                </a>
+              </div>
+            )}
           </div>
 
           {/* AI Score Card */}

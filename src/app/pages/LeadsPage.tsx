@@ -19,6 +19,7 @@ import { useApp } from "../context/AppContext";
 import { z } from 'zod';
 import ConvertLeadModal from "../components/ConvertLeadModal";
 import DeleteCommentModal from "../components/DeleteCommentModal";
+import LeadConversationWorkspace from "../components/LeadConversationWorkspace";
 import { Lead, LeadStatus, LeadSource, Industry, LeadCategory, ReasonToBuy } from "../data/mockData";
 
 const statusConfig: Record<LeadStatus, { color: string; dot: string; icon: React.ElementType }> = {
@@ -144,6 +145,7 @@ export default function LeadsPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [editLead, setEditLead] = useState<Lead | null>(null);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+  const [conversationLead, setConversationLead] = useState<Lead | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const handleCopy = (text: string | undefined, fieldName: string) => {
     if (!text) return;
@@ -686,8 +688,18 @@ useEffect(() => {
 }, [showColumnDropdown]);
 
 return (
-  <div className="p-4 lg:p-6 space-y-5 max-w-[1600px]">
-    {/* Header */}
+  <div className="p-4 lg:p-6 space-y-4 max-w-[1600px]">
+    {conversationLead ? (
+      <LeadConversationWorkspace
+        initialLead={conversationLead}
+        allLeads={leads}
+        onBack={() => setConversationLead(null)}
+        onOpenFullDetails={(lead) => setSelectedLead(lead)}
+        statusConfig={statusConfig}
+      />
+    ) : (
+      <>
+        {/* Header */}
     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
       <div>
         <h1 className="text-slate-900">Lead Management</h1>
@@ -917,7 +929,7 @@ return (
 
     {/* Filters */}
     <div className="bg-white border border-slate-200 rounded-2xl p-4 flex flex-wrap gap-3 items-center">
-      <div className="relative flex-1 min-w-48">
+      <div className="relative flex-1 min-w-[260px] md:min-w-[300px]">
         <Search
           size={14}
           className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
@@ -1031,7 +1043,7 @@ return (
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm min-w-[1050px]">
             <thead>
               <tr className="border-b border-slate-100 bg-slate-50">
                 <th className="w-10 py-3 px-4">
@@ -1278,9 +1290,16 @@ return (
                         <button
                           onClick={() => handleSelectLead(lead)}
                           className="p-1.5 rounded-lg hover:bg-indigo-50 text-slate-400 hover:text-indigo-600 transition-colors"
-                          title="View"
+                          title="View Lead Details"
                         >
                           <Eye size={13} />
+                        </button>
+                        <button
+                          onClick={() => setConversationLead(lead)}
+                          className="p-1.5 rounded-lg hover:bg-emerald-50 text-slate-400 hover:text-emerald-600 transition-colors"
+                          title="Open Conversation"
+                        >
+                          <MessageCircle size={13} />
                         </button>
                         {canEditLeads && (
                           <button
@@ -1350,6 +1369,8 @@ return (
         </div>
       </div>
     </div>
+      </>
+    )}
 
     {/* Lead Detail Drawer */}
     {selectedLead && createPortal(
@@ -1811,23 +1832,18 @@ return (
                 <span>Email</span>
               </a>
 
-              <a
-                href={selectedLead.phone ? `https://wa.me/${selectedLead.phone.replace(/[^0-9]/g, "")}` : "#"}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={(e) => {
-                  if (!selectedLead.phone) e.preventDefault();
+              <button
+                type="button"
+                onClick={() => {
+                  setConversationLead(selectedLead);
+                  setSelectedLead(null);
                 }}
-                className={`h-9 px-2 rounded-xl transition-all flex items-center justify-center gap-1.5 font-semibold text-xs text-center shadow-sm ${
-                  selectedLead.phone
-                    ? "bg-emerald-500 hover:bg-emerald-600 text-white"
-                    : "bg-emerald-200 text-white cursor-not-allowed"
-                }`}
-                title={selectedLead.phone ? "Chat on WhatsApp" : "No phone number available"}
+                className="h-9 px-2 rounded-xl transition-all flex items-center justify-center gap-1.5 font-semibold text-xs text-center shadow-sm bg-emerald-500 hover:bg-emerald-600 text-white"
+                title="Open Conversation in Workspace"
               >
                 <MessageCircle size={13.5} className="shrink-0" />
                 <span>WhatsApp</span>
-              </a>
+              </button>
             </div>
 
             {/* 6. Quick Status Update Section */}

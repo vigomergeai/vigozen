@@ -19,7 +19,7 @@ import { useAdConnections, AdConnection } from "../../hooks/useAdConnections";
 import SubscriptionModal from "../components/SubscriptionModal";
 import InvoiceHistory from "../components/InvoiceHistory";
 // Note: CreditCard is already imported, but you may want to alias it
-type SettingsTab = "profile" | "integrations" | "pricing" | "notifications" | "security" | "subscription" | "system";
+type SettingsTab = "profile" | "pricing" | "notifications" | "security" | "subscription" | "system";
 // ── Ad Platform Configuration ──
 const AD_PLATFORMS = [
   {
@@ -761,38 +761,18 @@ export default function SettingsPage() {
     const urlParams = new URLSearchParams(window.location.search);
     const connected = urlParams.get('connected');
     const error = urlParams.get('error');
+    const tabParam = urlParams.get('tab');
 
     if (connected) {
       toast.success(`${connected.charAt(0).toUpperCase() + connected.slice(1)} Ads connected successfully!`);
-      setActiveTab("integrations");
-      window.history.replaceState({}, document.title, window.location.pathname);
-      fetchAdConnections();
+      navigate('/automations?tab=integrations', { replace: true });
     } else if (error) {
       toast.error(`Connection failed: ${error}`);
-      setActiveTab("integrations");
-      window.history.replaceState({}, document.title, window.location.pathname);
+      navigate('/automations?tab=integrations', { replace: true });
+    } else if (tabParam === 'integrations') {
+      navigate('/automations?tab=integrations', { replace: true });
     }
-  }, []);
-
-
-  // ── Fetch Ad Connection Stats ──
-  useEffect(() => {
-    const fetchAdStats = async () => {
-      try {
-        const token = localStorage.getItem('token') || session?.access_token;
-        if (!token) return;
-
-        const stats = await api.adConnections.getStats(token);
-        setAdStats(stats);
-      } catch (error) {
-        console.error('Failed to fetch ad stats:', error);
-      }
-    };
-
-    if (activeTab === "integrations") {
-      fetchAdStats();
-    }
-  }, [activeTab]);
+  }, [navigate]);
 
 
   // ── Load subscription data ──
@@ -1225,7 +1205,6 @@ export default function SettingsPage() {
   const tabs: { id: SettingsTab; label: string; icon: React.ElementType; permissionRequired?: boolean }[] = [
     { id: "profile", label: "Profile", icon: User },
     { id: "notifications", label: "Notifications", icon: Bell },
-    { id: "integrations", label: "Lead Integrations", icon: Plug, permissionRequired: true },
     { id: "pricing", label: "Price List", icon: CreditCard, permissionRequired: true },
     { id: "security", label: "Security", icon: Shield },
     { id: "system", label: "System", icon: Database, permissionRequired: true },
@@ -1501,205 +1480,6 @@ export default function SettingsPage() {
               <button onClick={handleSaveNotifications} disabled={saving} className="px-6 py-2.5 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 flex items-center gap-2 disabled:opacity-50">
                 {saving ? <><RefreshCw size={13} className="animate-spin" />Saving...</> : <><Save size={14} />Save Notification Settings</>}
               </button>
-            </div>
-          )}
-
-          {/* ===== INTEGRATIONS ===== */}
-          {activeTab === "integrations" && (
-            <div className="space-y-6">
-              {/* Header */}
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-slate-800 dark:text-white">Ad Platform Connections</h3>
-                  <p className="text-xs text-slate-400 mt-0.5">Connect your advertising accounts to auto-import leads</p>
-                </div>
-              </div>
-
-              {/* Stats Summary */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-                {[
-                  {
-                    label: "Connected Platforms",
-                    value: adStats.connected_platforms || adConnections.filter(c => c.connected !== false).length,
-                    color: "text-emerald-600"
-                  },
-                  {
-                    label: "Total Leads Imported",
-                    value: adStats.total_leads_imported || adConnections.reduce((s, c) => s + (c.leads_imported || 0), 0),
-                    color: "text-indigo-600"
-                  },
-                  {
-                    label: "Total Ad Spend",
-                    value: `₹${Math.floor(adConnections.reduce((s, c) => s + (c.cost_spent || 0), 0)).toLocaleString()}`,
-                    color: "text-amber-600"
-                  },
-                  {
-                    label: "Auto-Sync",
-                    value: autoSyncEnabled ? "ON" : "OFF",
-                    color: autoSyncEnabled ? "text-emerald-600" : "text-slate-400"
-                  },
-                ].map(stat => (
-                  <div key={stat.label} className="bg-white rounded-2xl p-3 sm:p-4 border border-slate-100 shadow-sm">
-                    <div className={`text-base sm:text-lg font-bold ${stat.color}`}>{stat.value}</div>
-                    <div className="text-[10px] sm:text-xs text-slate-400">{stat.label}</div>
-                    {stat.label === "Connected Platforms" && adStats.last_sync_time && (
-                      <div className="text-[8px] text-slate-300 mt-0.5">
-                        Last sync: {new Date(adStats.last_sync_time).toLocaleString()}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              {/* Platform Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {AD_PLATFORMS.map(platform => {
-                  const connection = adConnections.find(c => c.platform === platform.platform);
-                  const isConnected = connection && connection.connected !== false;
-
-                  return (
-                    <div key={platform.platform} className={`bg-white rounded-2xl border p-5 shadow-sm hover:shadow-md transition-all ${isConnected ? 'border-emerald-200' : 'border-slate-200'}`}>
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className={`w-11 h-11 rounded-xl flex items-center justify-center ${platform.bg} ${platform.color}`}>
-                            {platform.icon === 'facebook' && <Facebook size={22} />}
-                            {platform.icon === 'chrome' && <Chrome size={22} />}
-                            {platform.icon === 'linkedin' && <Linkedin size={22} />}
-                            {platform.icon === 'instagram' && <Instagram size={22} />}
-                          </div>
-                          <div>
-                            <div className="text-sm font-semibold text-slate-800">{platform.name}</div>
-                            <div className="text-xs text-slate-400">{platform.desc}</div>
-                          </div>
-                        </div>
-                        <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${isConnected ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
-                          {isConnected ? 'Connected' : 'Not Connected'}
-                        </span>
-                      </div>
-
-                      {isConnected && (
-                        <div className="mt-3 pt-3 border-t border-slate-100">
-                          <div className="flex items-center justify-between text-xs text-slate-500">
-                            <span>Account: {connection.account_name || connection.account_id || '—'}</span>
-                            <span>{connection.leads_imported || 0} leads imported</span>
-                            <span>Last sync: {connection.last_sync ? new Date(connection.last_sync).toLocaleDateString() : 'Never'}</span>
-                          </div>
-                          <div className="flex items-center gap-2 mt-2">
-                            <button
-                              onClick={() => handleSyncPlatform(connection.id, platform.name)}
-                              disabled={syncing === connection.id}
-                              className="flex-1 py-1.5 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-1"
-                            >
-                              {syncing === connection.id ? (
-                                <><RefreshCw size={11} className="animate-spin" /> Syncing...</>
-                              ) : (
-                                <><RefreshCw size={11} /> Sync Now</>
-                              )}
-                            </button>
-                            <button
-                              onClick={() => handleDisconnect(connection.id, platform.name)}
-                              className="px-3 py-1.5 text-xs text-red-600 border border-red-200 rounded-lg hover:bg-red-50"
-                            >
-                              Disconnect
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                      {!isConnected && (
-                        <button
-                          onClick={() => handleConnectOAuth(platform.platform)}
-                          className="mt-3 w-full py-2 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
-                        >
-                          Connect {platform.name} →
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Auto-Import Settings */}
-              <div className="bg-white rounded-2xl border border-slate-200 p-5">
-                <h4 className="text-slate-800 font-semibold mb-4">Auto-Import Settings</h4>
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between py-3 border-b border-slate-50">
-                    <div>
-                      <div className="text-sm font-medium text-slate-800">Auto-sync leads from ads</div>
-                      <div className="text-xs text-slate-400">Automatically fetch new leads from connected ad platforms every 15 minutes</div>
-                    </div>
-                    <button
-                      onClick={() => setAutoSyncEnabled(!autoSyncEnabled)}
-                      className={`w-11 h-6 rounded-full flex items-center transition-all ${autoSyncEnabled ? "bg-indigo-600 justify-end" : "bg-slate-200 justify-start"}`}
-                    >
-                      <div className="w-5 h-5 bg-white rounded-full shadow-sm mx-0.5" />
-                    </button>
-                  </div>
-
-                  <div className="flex items-center justify-between py-3 border-b border-slate-50">
-                    <div>
-                      <div className="text-sm font-medium text-slate-800">Create leads automatically</div>
-                      <div className="text-xs text-slate-400">Automatically add imported leads to your Leads table</div>
-                    </div>
-                    <button
-                      onClick={() => setAutoCreateLeads(!autoCreateLeads)}
-                      className={`w-11 h-6 rounded-full flex items-center transition-all ${autoCreateLeads ? "bg-indigo-600 justify-end" : "bg-slate-200 justify-start"}`}
-                    >
-                      <div className="w-5 h-5 bg-white rounded-full shadow-sm mx-0.5" />
-                    </button>
-                  </div>
-
-                  <button
-                    onClick={handleSaveAutoSettings}
-                    disabled={savingSettings}
-                    className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
-                  >
-                    {savingSettings ? (<><RefreshCw size={13} className="animate-spin" /> Saving...</>) : (<><Save size={13} /> Save Settings</>)}
-                  </button>
-                </div>
-              </div>
-
-              {/* Integration Sync Log */}
-              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-                <h4 className="text-slate-800 font-semibold mb-4 flex items-center gap-2">
-                  <Database size={16} className="text-indigo-600" />
-                  Integration Sync Log
-                </h4>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm text-left border-collapse">
-                    <thead>
-                      <tr className="border-b border-slate-100 bg-slate-50/50">
-                        <th className="py-2.5 px-3 text-xs font-semibold text-slate-400">Time</th>
-                        <th className="py-2.5 px-3 text-xs font-semibold text-slate-400">Platform</th>
-                        <th className="py-2.5 px-3 text-xs font-semibold text-slate-400">Status</th>
-                        <th className="py-2.5 px-3 text-xs font-semibold text-slate-400">Leads</th>
-                        <th className="py-2.5 px-3 text-xs font-semibold text-slate-400">Details</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {syncLogs.map(log => (
-                        <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
-                          <td className="py-3 px-3 text-xs text-slate-500 font-mono">{log.time}</td>
-                          <td className="py-3 px-3 text-xs font-medium text-slate-800">{log.platform}</td>
-                          <td className="py-3 px-3 text-xs">
-                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border ${log.status === "success"
-                              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                              : "bg-rose-50 text-rose-700 border-rose-200"
-                              }`}>
-                              <span className={`w-1.5 h-1.5 rounded-full ${log.status === "success" ? "bg-emerald-500" : "bg-rose-500"}`} />
-                              {log.status === "success" ? "Synced" : "Failed"}
-                            </span>
-                          </td>
-                          <td className="py-3 px-3 text-xs font-semibold text-slate-700">{log.leads} leads</td>
-                          <td className="py-3 px-3 text-xs text-slate-500">
-                            {log.error ? <span className="text-rose-500 flex items-center gap-1"><AlertTriangle size={11} /> {log.error}</span> : "Success"}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
             </div>
           )}
 

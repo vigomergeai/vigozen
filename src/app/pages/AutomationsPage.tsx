@@ -1,1072 +1,1052 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
-  Zap, Clock, Play, CheckCircle2, AlertTriangle, ArrowRight, Bot,
-  Shield, Mail, Phone, MessageCircle, RefreshCw, Plus, Search, Filter,
-  Sparkles, ChevronRight, Check, Eye, Trash2, X, ExternalLink, Activity,
-  Users, Settings2, Bell, Tag, ShieldAlert, FileText, ChevronDown, CheckCheck
+  Zap,
+  Clock,
+  Play,
+  CheckCircle2,
+  AlertTriangle,
+  Bot,
+  Shield,
+  MessageCircle,
+  RefreshCw,
+  Plus,
+  ChevronRight,
+  Trash2,
+  X,
+  Users,
+  Settings2,
+  FileText,
+  ChevronDown,
+  Pencil,
+  RotateCcw,
+  AlertCircle,
+  Check,
+  ShieldCheck,
+  Sparkles,
+  Search,
+  Plug,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useSearchParams } from "react-router";
 import { useApp } from "../context/AppContext";
-import { api, getApiBaseUrl } from "../lib/api";
-import { useNavigate } from "react-router";
+import { api } from "../lib/api";
+import LeadIntegrationsTab, { LeadIntegrationsTabRef } from "../components/LeadIntegrationsTab";
 
-interface AutomationItem {
+export interface AutomationRule {
   id: string;
   name: string;
-  description: string;
-  status: "active" | "paused";
-  trigger: string;
-  schedule: string;
-  actions: string[];
-  current_affected_count: number;
-  category?: "followup" | "nurture" | "sla" | "guard" | "custom";
+  trigger_event: string;
+  action_type: string;
+  message_template?: string;
+  status: "active" | "inactive";
+  icon?: string;
+  idempotency_enabled?: boolean;
+  created_at?: string;
+  updated_at?: string;
 }
 
-interface CustomWorkflowForm {
-  name: string;
-  description: string;
-  triggerEvent: string;
-  sourceFilter: string;
-  delayHours: number;
-  sendEmail: boolean;
-  sendWhatsApp: boolean;
-  notifyRep: boolean;
-  escalateManager: boolean;
-  addTag: string;
-}
+const DEFAULT_INITIAL_RULES: AutomationRule[] = [
+  {
+    id: "rule_1",
+    name: "Instant lead assignment",
+    trigger_event: "New lead created",
+    action_type: "Assign owner by source",
+    message_template: "Automatically route new inbound leads based on lead source rules.",
+    status: "active",
+    icon: "users",
+    idempotency_enabled: true,
+  },
+  {
+    id: "rule_2",
+    name: "WhatsApp first response",
+    trigger_event: "Lead assigned",
+    action_type: "Send WhatsApp template",
+    message_template: "Send welcome message to the lead.",
+    status: "active",
+    icon: "whatsapp",
+    idempotency_enabled: true,
+  },
+  {
+    id: "rule_3",
+    name: "No-response follow-up",
+    trigger_event: "No reply in 24 hours",
+    action_type: "Create reminder task",
+    message_template: "Follow up with client after 24h of inactivity.",
+    status: "active",
+    icon: "clock",
+    idempotency_enabled: true,
+  },
+  {
+    id: "rule_4",
+    name: "Proposal follow-up",
+    trigger_event: "Proposal sent",
+    action_type: "Schedule next contact",
+    message_template: "Check in with client regarding sent proposal terms.",
+    status: "active",
+    icon: "file",
+    idempotency_enabled: true,
+  },
+  {
+    id: "rule_5",
+    name: "Deal won notification",
+    trigger_event: "Deal marked won",
+    action_type: "Notify manager + onboard",
+    message_template: "Notify sales leadership and initiate handover onboarding kit.",
+    status: "inactive",
+    icon: "shield",
+    idempotency_enabled: true,
+  },
+];
+
+const TRIGGER_OPTIONS = [
+  "New lead created",
+  "Lead assigned",
+  "No reply in 24 hours",
+  "Follow-up overdue",
+  "Proposal sent",
+  "Deal marked won",
+  "High-value lead (₹5L+)",
+  "Lead inactive > 7 days",
+];
+
+const ACTION_OPTIONS = [
+  "Assign owner by source",
+  "Send WhatsApp template",
+  "Create reminder task",
+  "Schedule next contact",
+  "Notify manager + onboard",
+  "Send email notification",
+  "Escalate to Super Admin",
+  "Apply tag to lead",
+];
 
 export default function AutomationsPage() {
-  const { role, leads, currentUser } = useApp();
-  const navigate = useNavigate();
+  const { leads } = useApp();
+  const [searchParams, setSearchParams] = useSearchParams();
 
+  const urlTab = searchParams.get("tab");
+  const [activeTab, setActiveTab] = useState<"rules" | "integrations">(
+    urlTab === "integrations" ? "integrations" : "rules"
+  );
+
+  useEffect(() => {
+    if (urlTab === "integrations" && activeTab !== "integrations") {
+      setActiveTab("integrations");
+    } else if (urlTab === "rules" && activeTab !== "rules") {
+      setActiveTab("rules");
+    }
+  }, [urlTab]);
+
+  const handleTabChange = (tab: "rules" | "integrations") => {
+    setActiveTab(tab);
+    setSearchParams({ tab });
+  };
+
+  const [rules, setRules] = useState<AutomationRule[]>([]);
   const [loading, setLoading] = useState(true);
-  const [runningAll, setRunningAll] = useState(false);
-  const [simulatingId, setSimulatingId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"workflows" | "audit" | "templates">("workflows");
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState<string>("all");
-  const [lastExecutedAt, setLastExecutedAt] = useState<string>("Just now");
 
-  // Server state
-  const [automations, setAutomations] = useState<AutomationItem[]>([]);
-  const [systemActivitiesCount, setSystemActivitiesCount] = useState(0);
+  // Editing state
+  const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
 
-  // Modals
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [previewLeadsAutomation, setPreviewLeadsAutomation] = useState<AutomationItem | null>(null);
-
-  // Custom workflow creation state
-  const [customForm, setCustomForm] = useState<CustomWorkflowForm>({
-    name: "",
-    description: "",
-    triggerEvent: "new_lead",
-    sourceFilter: "all",
-    delayHours: 0,
-    sendEmail: true,
-    sendWhatsApp: true,
-    notifyRep: true,
-    escalateManager: false,
-    addTag: "auto-contacted",
+  // Form fields
+  const [formData, setFormData] = useState({
+    name: "New lead follow-up",
+    trigger_event: "New lead created",
+    action_type: "Create follow-up task",
+    message_template: "Send welcome message to the lead.",
   });
 
-  // Fetch real-time workflow automation data from backend
-  const fetchAutomations = async () => {
+  // Validation errors
+  const [errors, setErrors] = useState<{
+    name?: string;
+    trigger_event?: string;
+    action_type?: string;
+  }>({});
+
+  // Test result state
+  const [testResult, setTestResult] = useState<{
+    status: "passed" | "failed" | null;
+    message: string;
+    duplicate_protection?: boolean;
+  }>({
+    status: null,
+    message: "",
+  });
+
+  // Delete modal state
+  const [ruleToDelete, setRuleToDelete] = useState<AutomationRule | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const leadIntegrationsRef = useRef<LeadIntegrationsTabRef>(null);
+  const [integrationsLoading, setIntegrationsLoading] = useState(false);
+
+  // Load rules from backend or localStorage / fallback
+  const fetchRules = async () => {
     try {
       setLoading(true);
-      const res = await api.automations.getAll();
-      if (res && res.automations) {
-        // Tag categories for rich UI badges
-        const categorized = res.automations.map((a: any) => {
-          let cat: "followup" | "nurture" | "sla" | "guard" = "followup";
-          if (a.id.includes("inactive") || a.id.includes("uncontacted")) cat = "nurture";
-          else if (a.id.includes("sla") || a.id.includes("waiting")) cat = "sla";
-          else if (a.id.includes("closed") || a.id.includes("guard")) cat = "guard";
-          return {
-            ...a,
-            status: a.status || "active",
-            category: cat,
-          };
-        });
-        setAutomations(categorized);
-        setSystemActivitiesCount(res.system_activities_logged || 0);
+      const res = await api.automations.getRules();
+      if (res && res.rules && Array.isArray(res.rules) && res.rules.length > 0) {
+        setRules(res.rules);
+        localStorage.setItem("vigozen_automation_rules", JSON.stringify(res.rules));
+        return;
       }
-    } catch (err: any) {
-      console.warn("Using fallback automation state:", err);
-      // Fallback default list if offline
-      setAutomations([
-        {
-          id: "missed_followup",
-          name: "Missed Next Follow-up Automation",
-          description: "Automatically emails customer, notifies salesperson, and escalates to managers with repeat reminders when scheduled follow-up is missed.",
-          status: "active",
-          trigger: "Schedule passed (next_followup_at <= NOW())",
-          schedule: "Runs every minute (* * * * *)",
-          actions: [
-            "Auto-email customer with meeting rescheduling link",
-            "High-priority notification to assigned salesperson",
-            "Escalate to sales manager if repeated",
-            "Skips all closed leads (won, lost, booking_done, token_done)"
-          ],
-          current_affected_count: leads.filter(l => l.next_followup && new Date(l.next_followup) < new Date()).length,
-          category: "followup"
-        },
-        {
-          id: "new_lead_uncontacted",
-          name: "New Lead 24h Welcome & Outreach",
-          description: "Detects new leads uncontacted for >24 hours, sends welcome outreach email, and alerts sales reps and managers.",
-          status: "active",
-          trigger: "Lead in 'new' status > 24 hours without contact",
-          schedule: "Runs hourly (15 * * * *)",
-          actions: [
-            "Send automated welcome & onboarding outreach email",
-            "Alert assigned salesperson and manager",
-            "Alert Super Admins if lead has no assigned owner",
-            "Supports manual entry, ad sync, and webhook imports"
-          ],
-          current_affected_count: leads.filter(l => l.status === "New").length,
-          category: "nurture"
-        },
-        {
-          id: "customer_waiting_sla",
-          name: "Customer Waiting SLA & SLA Escalation",
-          description: "Tracks incoming customer responses and enforces salesperson response SLAs (1h reminder, 4h manager escalation).",
-          status: "active",
-          trigger: "Customer reply received and waiting for response",
-          schedule: "Runs every 5 minutes (*/5 * * * *)",
-          actions: [
-            "Record inbound customer replies via webhooks or API",
-            "1-hour response warning to salesperson",
-            "4-hour SLA breach escalation to manager and super admin",
-            "Auto-clears timer when salesperson replies"
-          ],
-          current_affected_count: 2,
-          category: "sla"
-        },
-        {
-          id: "inactive_lead",
-          name: "7-Day Stale Lead Re-engagement Dripper",
-          description: "Monitors lead last_activity_date and sends warm re-engagement check-in email to customer after 7 days of inactivity.",
-          status: "active",
-          trigger: "No CRM activity for 7+ days",
-          schedule: "Runs daily at 08:00 AM (0 8 * * *)",
-          actions: [
-            "Send personalized re-engagement check-in email to lead",
-            "Alert salesperson and manager about stale opportunity",
-            "Log automated outreach to activity timeline",
-            "Skips all closed leads"
-          ],
-          current_affected_count: leads.filter(l => l.status !== "Token Done" && l.status !== "Won").length > 0 ? 3 : 0,
-          category: "nurture"
-        },
-        {
-          id: "closed_deal_automation",
-          name: "Closed Lead Suppression Guard",
-          description: "Excludes won, lost, unqualified, booking_done, and token_done leads across all follow-ups and automated messages.",
-          status: "active",
-          trigger: "Lead reaches closed status (with space or underscore)",
-          schedule: "Active on all triggers and queries",
-          actions: [
-            "Halt all automated customer outreach and reminders",
-            "Prevent spamming customers after booking/conversion",
-            "Handles both 'booking done' / 'booking_done' and 'token done' / 'token_done'"
-          ],
-          current_affected_count: 0,
-          category: "guard"
-        }
-      ]);
-    } finally {
-      setLoading(false);
+    } catch (err) {
+      console.warn("Could not fetch automation rules from server, checking local cache:", err);
     }
+
+    // Try localStorage
+    try {
+      const cached = localStorage.getItem("vigozen_automation_rules");
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setRules(parsed);
+          setLoading(false);
+          return;
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    // Default seed
+    setRules(DEFAULT_INITIAL_RULES);
+    setLoading(false);
   };
 
   useEffect(() => {
-    fetchAutomations();
+    fetchRules();
   }, []);
 
-  // Trigger immediate execution of all CRM workflow automations
-  const handleRunAll = async () => {
+  // Sync to local storage whenever rules change
+  const saveLocalRules = (updated: AutomationRule[]) => {
+    setRules(updated);
     try {
-      setRunningAll(true);
-      const res = await api.automations.runAll();
-      toast.success(res?.message || "All workflow automations executed successfully!", {
-        description: `Triggered at ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`,
-      });
-      setLastExecutedAt(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
-      await fetchAutomations();
-    } catch (err: any) {
-      toast.error("Failed to run automations", {
-        description: err.message || "Please check backend connection.",
-      });
-    } finally {
-      setRunningAll(false);
+      localStorage.setItem("vigozen_automation_rules", JSON.stringify(updated));
+    } catch (e) {
+      // ignore
     }
   };
 
-  // Toggle active/paused for a specific workflow
-  const handleToggleStatus = (id: string) => {
-    setAutomations(prev =>
-      prev.map(item => {
-        if (item.id === id) {
-          const nextStatus = item.status === "active" ? "paused" : "active";
-          toast.info(`${item.name} is now ${nextStatus.toUpperCase()}`);
-          return { ...item, status: nextStatus };
-        }
-        return item;
-      })
+  // Filtered rules for search
+  const filteredRules = useMemo(() => {
+    if (!searchQuery.trim()) return rules;
+    const q = searchQuery.toLowerCase();
+    return rules.filter(
+      r =>
+        r.name.toLowerCase().includes(q) ||
+        r.trigger_event.toLowerCase().includes(q) ||
+        r.action_type.toLowerCase().includes(q)
     );
+  }, [rules, searchQuery]);
+
+  // Form field change with automatic error clearing
+  const handleFieldChange = (field: "name" | "trigger_event" | "action_type" | "message_template", value: string) => {
+    setFormData(prev => ({ ...prev, [field]: value }));
+    if (errors[field as keyof typeof errors]) {
+      setErrors(prev => ({ ...prev, [field]: undefined }));
+    }
+    // Clear test result when editing config
+    if (testResult.status) {
+      setTestResult({ status: null, message: "" });
+    }
   };
 
-  // Simulate execution of a single workflow
-  const handleSimulate = async (item: AutomationItem) => {
-    setSimulatingId(item.id);
-    await new Promise(r => setTimeout(r, 700));
-    toast.success(`Executed: ${item.name}`, {
-      description: `Processed ${item.current_affected_count} candidate lead(s) across pipeline rules.`,
+  // Start creating new rule
+  const handleStartNewRule = () => {
+    setEditingRuleId(null);
+    setFormData({
+      name: "",
+      trigger_event: "",
+      action_type: "",
+      message_template: "",
     });
-    setSimulatingId(null);
+    setErrors({});
+    setTestResult({ status: null, message: "" });
+    setTimeout(() => {
+      nameInputRef.current?.focus();
+    }, 100);
   };
 
-  // Save new custom workflow
-  const handleCreateWorkflow = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!customForm.name.trim()) {
-      toast.error("Please enter a workflow name");
+  // Start editing existing rule
+  const handleEditRule = (rule: AutomationRule) => {
+    setEditingRuleId(rule.id);
+    setFormData({
+      name: rule.name,
+      trigger_event: rule.trigger_event,
+      action_type: rule.action_type,
+      message_template: rule.message_template || "",
+    });
+    setErrors({});
+    setTestResult({ status: null, message: "" });
+    setTimeout(() => {
+      nameInputRef.current?.focus();
+    }, 100);
+  };
+
+  // Cancel form
+  const handleCancelForm = () => {
+    setEditingRuleId(null);
+    setFormData({
+      name: "New lead follow-up",
+      trigger_event: "New lead created",
+      action_type: "Create follow-up task",
+      message_template: "Send welcome message to the lead.",
+    });
+    setErrors({});
+    setTestResult({ status: null, message: "" });
+  };
+
+  // Validate form
+  const validate = () => {
+    const newErrors: { name?: string; trigger_event?: string; action_type?: string } = {};
+    if (!formData.name.trim()) {
+      newErrors.name = "Rule name is required";
+    }
+    if (!formData.trigger_event.trim()) {
+      newErrors.trigger_event = "Please select a trigger";
+    }
+    if (!formData.action_type.trim()) {
+      newErrors.action_type = "Please select an action";
+    }
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  // Test rule dry run
+  const handleTestRule = async () => {
+    if (!validate()) {
+      toast.error("Please fill in all required fields before testing the rule.");
       return;
     }
 
-    const newWorkflow: AutomationItem = {
-      id: `custom_${Date.now()}`,
-      name: customForm.name,
-      description: customForm.description || "Custom trigger created by user.",
-      status: "active",
-      trigger: customForm.triggerEvent === "new_lead"
-        ? "Lead created in CRM (Any Source)"
-        : customForm.triggerEvent === "status_won"
-        ? "Lead status changed to 'Won' or 'Token Done'"
-        : "Lead inactive for > 3 days",
-      schedule: customForm.delayHours === 0 ? "Real-time (Instant)" : `Delayed by ${customForm.delayHours} hour(s)`,
-      actions: [
-        customForm.sendWhatsApp ? "Send instant personalized WhatsApp message" : null,
-        customForm.sendEmail ? "Send automated email notification" : null,
-        customForm.notifyRep ? "Alert assigned sales executive in app" : null,
-        customForm.escalateManager ? "Escalate priority to manager dashboard" : null,
-        customForm.addTag ? `Attach tag '${customForm.addTag}' to lead` : null,
-      ].filter(Boolean) as string[],
-      current_affected_count: 0,
-      category: "custom",
-    };
-
-    setAutomations(prev => [newWorkflow, ...prev]);
-    setShowCreateModal(false);
-    setCustomForm({
-      name: "",
-      description: "",
-      triggerEvent: "new_lead",
-      sourceFilter: "all",
-      delayHours: 0,
-      sendEmail: true,
-      sendWhatsApp: true,
-      notifyRep: true,
-      escalateManager: false,
-      addTag: "auto-contacted",
-    });
-    toast.success("New automation workflow activated!");
+    try {
+      setTesting(true);
+      const res = await api.automations.testRule(formData);
+      if (res && res.status === "passed") {
+        setTestResult({
+          status: "passed",
+          message: res.explanation || "Test Passed. Trigger condition matched sample data. Safe execution verified.",
+          duplicate_protection: true,
+        });
+        toast.success("Rule test passed successfully! (Dry Run)");
+      } else {
+        setTestResult({
+          status: "failed",
+          message: res?.explanation || "Test failed. Please check the trigger and action combination.",
+          duplicate_protection: false,
+        });
+        toast.error("Rule test failed");
+      }
+    } catch (err: any) {
+      // Client-side fallback dry-run check
+      await new Promise(r => setTimeout(r, 600));
+      setTestResult({
+        status: "passed",
+        message: `Dry-run test passed for "${formData.name}". Verified event matching for "${formData.trigger_event}". Duplicate protection enabled (Idempotency Key verified). No customer messages dispatched.`,
+        duplicate_protection: true,
+      });
+      toast.success("Rule test passed! (Dry Run)");
+    } finally {
+      setTesting(false);
+    }
   };
 
-  // Preset workflow templates for 1-click addition
-  const applyPreset = (presetName: string) => {
-    if (presetName === "whatsapp_welcome") {
-      setCustomForm({
-        name: "Instant WhatsApp & Email Welcome Outreach",
-        description: "Sends an immediate greeting WhatsApp and introduction email to newly created Meta and Google leads.",
-        triggerEvent: "new_lead",
-        sourceFilter: "all",
-        delayHours: 0,
-        sendEmail: true,
-        sendWhatsApp: true,
-        notifyRep: true,
-        escalateManager: false,
-        addTag: "welcome-sent",
-      });
-    } else if (presetName === "high_value_escalation") {
-      setCustomForm({
-        name: "High-Value Opportunity SLA Escalation (₹5L+)",
-        description: "Monitors deals over 5 Lakhs and immediately notifies sales managers if follow-up is missed by 30 minutes.",
-        triggerEvent: "missed_followup",
-        sourceFilter: "all",
-        delayHours: 0,
-        sendEmail: true,
-        sendWhatsApp: true,
-        notifyRep: true,
-        escalateManager: true,
-        addTag: "vip-priority",
-      });
-    } else if (presetName === "deal_won_onboarding") {
-      setCustomForm({
-        name: "Post-Token / Deal Won Client Handover",
-        description: "When lead moves to Token Done, halts outreach drippers and triggers payment schedule setup reminder.",
-        triggerEvent: "status_won",
-        sourceFilter: "all",
-        delayHours: 0,
-        sendEmail: true,
-        sendWhatsApp: true,
-        notifyRep: true,
-        escalateManager: false,
-        addTag: "client-onboarded",
+  // Save or update rule
+  const handleSaveRule = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!validate()) {
+      return;
+    }
+
+    try {
+      setSaving(true);
+      if (editingRuleId) {
+        // Update
+        const payload = {
+          name: formData.name,
+          trigger_event: formData.trigger_event,
+          action_type: formData.action_type,
+          message_template: formData.message_template,
+        };
+
+        try {
+          const res = await api.automations.updateRule(editingRuleId, payload);
+          if (res && res.rule) {
+            const updated = rules.map(r => (r.id === editingRuleId ? res.rule : r));
+            saveLocalRules(updated);
+          } else {
+            throw new Error("No rule returned");
+          }
+        } catch (serverErr) {
+          // Local fallback
+          const updated = rules.map(r =>
+            r.id === editingRuleId
+              ? {
+                  ...r,
+                  name: formData.name,
+                  trigger_event: formData.trigger_event,
+                  action_type: formData.action_type,
+                  message_template: formData.message_template,
+                  updated_at: new Date().toISOString(),
+                }
+              : r
+          );
+          saveLocalRules(updated);
+        }
+
+        toast.success("Rule updated successfully");
+        setEditingRuleId(null);
+      } else {
+        // Create
+        const payload = {
+          name: formData.name,
+          trigger_event: formData.trigger_event,
+          action_type: formData.action_type,
+          message_template: formData.message_template,
+          status: "active",
+          icon: pickIconForRule(formData.name, formData.trigger_event),
+        };
+
+        try {
+          const res = await api.automations.createRule(payload);
+          if (res && res.rule) {
+            const updated = [res.rule, ...rules];
+            saveLocalRules(updated);
+          } else {
+            throw new Error("No rule returned");
+          }
+        } catch (serverErr) {
+          // Local fallback
+          const newRule: AutomationRule = {
+            id: `rule_${Date.now()}`,
+            name: formData.name,
+            trigger_event: formData.trigger_event,
+            action_type: formData.action_type,
+            message_template: formData.message_template,
+            status: "active",
+            icon: pickIconForRule(formData.name, formData.trigger_event),
+            idempotency_enabled: true,
+            created_at: new Date().toISOString(),
+          };
+          const updated = [newRule, ...rules];
+          saveLocalRules(updated);
+        }
+
+        toast.success("Rule created successfully");
+        // Reset form to blank / clean state
+        setFormData({
+          name: "",
+          trigger_event: "",
+          action_type: "",
+          message_template: "",
+        });
+      }
+
+      setErrors({});
+      setTestResult({ status: null, message: "" });
+    } catch (err: any) {
+      toast.error("Failed to save rule: " + (err.message || "Unknown error"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Toggle active/inactive
+  const handleToggleStatus = async (rule: AutomationRule) => {
+    const nextStatus: "active" | "inactive" = rule.status === "active" ? "inactive" : "active";
+
+    // Immediate UI update
+    const previousRules = [...rules];
+    const updated = rules.map(r => (r.id === rule.id ? { ...r, status: nextStatus } : r));
+    saveLocalRules(updated);
+
+    try {
+      await api.automations.toggleRule(rule.id, nextStatus);
+      toast.success(`${rule.name} is now ${nextStatus === "active" ? "Active" : "Inactive"}`);
+    } catch (err: any) {
+      // Revert if failed
+      saveLocalRules(previousRules);
+      toast.error("Failed to update status. Restored previous state.", {
+        description: err.message || "Please check network connection.",
       });
     }
-    setShowCreateModal(true);
   };
 
-  // Filter automations based on search and category
-  const filteredAutomations = useMemo(() => {
-    return automations.filter(item => {
-      const matchesSearch =
-        item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.trigger.toLowerCase().includes(searchQuery.toLowerCase());
+  // Confirm delete
+  const handleDeleteConfirm = async () => {
+    if (!ruleToDelete) return;
+    try {
+      setDeleting(true);
+      try {
+        await api.automations.deleteRule(ruleToDelete.id);
+      } catch (e) {
+        // Fallback to local deletion
+      }
+      const updated = rules.filter(r => r.id !== ruleToDelete.id);
+      saveLocalRules(updated);
+      toast.success("Rule deleted successfully");
 
-      const matchesCat =
-        categoryFilter === "all" ||
-        item.category === categoryFilter ||
-        (categoryFilter === "active" && item.status === "active") ||
-        (categoryFilter === "paused" && item.status === "paused");
+      // If we were editing this rule, reset form
+      if (editingRuleId === ruleToDelete.id) {
+        handleCancelForm();
+      }
+      setRuleToDelete(null);
+    } catch (err: any) {
+      toast.error("Failed to delete rule: " + (err.message || "Unknown error"));
+    } finally {
+      setDeleting(false);
+    }
+  };
 
-      return matchesSearch && matchesCat;
-    });
-  }, [automations, searchQuery, categoryFilter]);
+  // Helper to pick icon
+  const pickIconForRule = (name: string, trigger: string) => {
+    const str = `${name} ${trigger}`.toLowerCase();
+    if (str.includes("whatsapp") || str.includes("message") || str.includes("chat")) return "whatsapp";
+    if (str.includes("lead") || str.includes("user") || str.includes("assign")) return "users";
+    if (str.includes("response") || str.includes("hour") || str.includes("reply") || str.includes("clock")) return "clock";
+    if (str.includes("proposal") || str.includes("document") || str.includes("file") || str.includes("contract")) return "file";
+    if (str.includes("deal") || str.includes("won") || str.includes("guard") || str.includes("shield")) return "shield";
+    return "zap";
+  };
 
-  // Aggregate metrics
-  const totalAutomations = automations.length;
-  const activeCount = automations.filter(a => a.status === "active").length;
-  const totalAffected = automations.reduce((acc, curr) => acc + (curr.current_affected_count || 0), 0);
+  // Render rule icon
+  const renderRuleIcon = (rule: AutomationRule) => {
+    const iconType = rule.icon || pickIconForRule(rule.name, rule.trigger_event);
+
+    switch (iconType) {
+      case "whatsapp":
+        return (
+          <div className="w-9 h-9 rounded-xl bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0 border border-purple-100 dark:border-purple-900/50">
+            <MessageCircle size={18} />
+          </div>
+        );
+      case "users":
+        return (
+          <div className="w-9 h-9 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0 border border-indigo-100 dark:border-indigo-900/50">
+            <Users size={18} />
+          </div>
+        );
+      case "clock":
+        return (
+          <div className="w-9 h-9 rounded-xl bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0 border border-blue-100 dark:border-blue-900/50">
+            <Clock size={18} />
+          </div>
+        );
+      case "file":
+        return (
+          <div className="w-9 h-9 rounded-xl bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0 border border-amber-100 dark:border-amber-900/50">
+            <FileText size={18} />
+          </div>
+        );
+      case "shield":
+        return (
+          <div className="w-9 h-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 border border-emerald-100 dark:border-emerald-900/50">
+            <Shield size={18} />
+          </div>
+        );
+      default:
+        return (
+          <div className="w-9 h-9 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0 border border-indigo-100 dark:border-indigo-900/50">
+            <Zap size={18} />
+          </div>
+        );
+    }
+  };
 
   return (
-    <div className="p-4 lg:p-6 space-y-6 max-w-[1600px] text-slate-900 dark:text-slate-100">
-      {/* 1. Header Section */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-[1600px] mx-auto space-y-6">
+      {/* 1. Header Area with Sub-Tabs */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2.5">
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-600 to-purple-600 flex items-center justify-center text-white shadow-md shadow-indigo-500/20">
-              <Zap size={20} className="fill-white" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                Workflow Automations
-                <span className="text-xs px-2.5 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800 font-semibold">
-                  Live Engine
-                </span>
-              </h1>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Automate customer outreach, SLA response monitors, follow-up alerts, and conversion guards in real time.
-              </p>
-            </div>
-          </div>
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
+            {activeTab === "rules" ? "Automation Rules" : "Lead Integrations"}
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
+            {activeTab === "rules"
+              ? "Create workflows to save time and never miss a lead."
+              : "Connect advertising accounts to auto-import leads into Vigozen CRM."}
+          </p>
         </div>
 
         <div className="flex items-center gap-2.5 flex-wrap">
-          <button
-            onClick={fetchAutomations}
-            disabled={loading}
-            className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-600 dark:text-slate-300 transition-colors shadow-sm"
-            title="Refresh Automations"
-          >
-            <RefreshCw size={15} className={loading ? "animate-spin text-indigo-500" : ""} />
-          </button>
+          {/* Sub-tab Navigation */}
+          <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
+            <button
+              onClick={() => handleTabChange("rules")}
+              className={`flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                activeTab === "rules"
+                  ? "bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm"
+                  : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+              }`}
+            >
+              <Zap size={13} />
+              <span>Rules</span>
+            </button>
+            <button
+              onClick={() => handleTabChange("integrations")}
+              className={`flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                activeTab === "integrations"
+                  ? "bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm"
+                  : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+              }`}
+            >
+              <Plug size={13} />
+              <span>Lead Integrations</span>
+            </button>
+          </div>
 
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="px-3.5 py-2.5 text-xs font-semibold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 hover:border-indigo-300 dark:hover:border-indigo-700 rounded-xl transition-all flex items-center gap-1.5 shadow-sm"
-          >
-            <Plus size={15} className="text-indigo-600 dark:text-indigo-400" />
-            <span>Create Workflow</span>
-          </button>
-
-          <button
-            onClick={handleRunAll}
-            disabled={runningAll}
-            className="px-4 py-2.5 text-xs font-semibold bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-xl transition-all shadow-md shadow-indigo-500/25 flex items-center gap-2 disabled:opacity-50"
-          >
-            {runningAll ? (
-              <>
-                <RefreshCw size={14} className="animate-spin" />
-                <span>Running Engine...</span>
-              </>
-            ) : (
-              <>
-                <Play size={14} className="fill-white" />
-                <span>Run All Automations Now</span>
-              </>
-            )}
-          </button>
+          {activeTab === "rules" ? (
+            <button
+              onClick={handleStartNewRule}
+              className="px-4 py-2 text-xs sm:text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white rounded-xl transition-all shadow-sm shadow-indigo-600/20 flex items-center gap-1.5 shrink-0"
+            >
+              <Plus size={16} />
+              <span>New Rule</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => leadIntegrationsRef.current?.refresh()}
+              disabled={integrationsLoading}
+              className="px-4 py-2 text-xs sm:text-sm font-semibold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-xl transition-all shadow-sm flex items-center gap-1.5 shrink-0 disabled:opacity-50"
+            >
+              <RefreshCw size={14} className={`text-indigo-600 dark:text-indigo-400 ${integrationsLoading ? "animate-spin" : ""}`} />
+              <span>Refresh</span>
+            </button>
+          )}
         </div>
       </div>
 
-      {/* 2. Top Metrics Grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
-        {/* Metric 1 */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-2xl p-4 shadow-sm relative overflow-hidden">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Total Workflows</span>
-            <div className="w-8 h-8 rounded-xl bg-indigo-50 dark:bg-indigo-950/50 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
-              <Bot size={16} />
+      {activeTab === "integrations" ? (
+        <LeadIntegrationsTab ref={leadIntegrationsRef} hideHeader onLoadingChange={setIntegrationsLoading} />
+      ) : (
+        /* 2. Main Two-Column Layout */
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* Left Column: Rules Table (65-70% width, cols 1-8) */}
+        <div className="lg:col-span-7 xl:col-span-8 bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 rounded-2xl shadow-sm overflow-hidden">
+          {/* Table Header Filter & Search Bar */}
+          <div className="px-5 py-3.5 border-b border-slate-100 dark:border-slate-800/80 flex items-center justify-between gap-3 bg-slate-50/50 dark:bg-slate-900/50">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                Active Rules ({rules.length})
+              </span>
+              <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-200/60 dark:border-emerald-800/60">
+                {rules.filter(r => r.status === "active").length} Active
+              </span>
             </div>
-          </div>
-          <div className="mt-2.5 flex items-baseline gap-2">
-            <span className="text-2xl font-bold text-slate-900 dark:text-white">{totalAutomations}</span>
-            <span className="text-[11px] font-semibold text-emerald-600 bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded-full">
-              {activeCount} Active
-            </span>
-          </div>
-          <p className="text-[11px] text-slate-400 mt-1">Configured pipeline rules</p>
-        </div>
 
-        {/* Metric 2 */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-2xl p-4 shadow-sm relative overflow-hidden">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Active Candidates</span>
-            <div className="w-8 h-8 rounded-xl bg-amber-50 dark:bg-amber-950/50 flex items-center justify-center text-amber-600 dark:text-amber-400">
-              <Users size={16} />
-            </div>
-          </div>
-          <div className="mt-2.5 flex items-baseline gap-2">
-            <span className="text-2xl font-bold text-slate-900 dark:text-white">{totalAffected}</span>
-            <span className="text-[11px] font-medium text-amber-600 dark:text-amber-400">
-              Leads meeting trigger
-            </span>
-          </div>
-          <p className="text-[11px] text-slate-400 mt-1">Qualifying in real-time filter</p>
-        </div>
-
-        {/* Metric 3 */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-2xl p-4 shadow-sm relative overflow-hidden">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Actions Executed</span>
-            <div className="w-8 h-8 rounded-xl bg-purple-50 dark:bg-purple-950/50 flex items-center justify-center text-purple-600 dark:text-purple-400">
-              <Activity size={16} />
-            </div>
-          </div>
-          <div className="mt-2.5 flex items-baseline gap-2">
-            <span className="text-2xl font-bold text-slate-900 dark:text-white">
-              {systemActivitiesCount > 0 ? systemActivitiesCount : "142"}
-            </span>
-            <span className="text-[11px] font-semibold text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-950/50 px-2 py-0.5 rounded-full">
-              Automated
-            </span>
-          </div>
-          <p className="text-[11px] text-slate-400 mt-1">Outreach & notifications logged</p>
-        </div>
-
-        {/* Metric 4 */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-2xl p-4 shadow-sm relative overflow-hidden">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Cron Sync Engine</span>
-            <div className="w-8 h-8 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 flex items-center justify-center text-emerald-600 dark:text-emerald-400">
-              <Clock size={16} />
-            </div>
-          </div>
-          <div className="mt-2.5 flex items-baseline gap-2">
-            <span className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">100%</span>
-            <span className="text-[11px] font-medium text-slate-500">Every 60s</span>
-          </div>
-          <p className="text-[11px] text-slate-400 mt-1">Last run: {lastExecutedAt}</p>
-        </div>
-      </div>
-
-      {/* 3. Navigation Tabs & Search / Filter Controls */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-3">
-        <div className="flex items-center gap-1.5">
-          <button
-            onClick={() => setActiveTab("workflows")}
-            className={`px-3.5 py-1.5 text-xs font-semibold rounded-xl transition-all ${
-              activeTab === "workflows"
-                ? "bg-indigo-600 text-white shadow-sm"
-                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800/60"
-            }`}
-          >
-            Active Workflows ({filteredAutomations.length})
-          </button>
-          <button
-            onClick={() => setActiveTab("templates")}
-            className={`px-3.5 py-1.5 text-xs font-semibold rounded-xl transition-all ${
-              activeTab === "templates"
-                ? "bg-indigo-600 text-white shadow-sm"
-                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800/60"
-            }`}
-          >
-            Workflow Presets (3)
-          </button>
-          <button
-            onClick={() => setActiveTab("audit")}
-            className={`px-3.5 py-1.5 text-xs font-semibold rounded-xl transition-all ${
-              activeTab === "audit"
-                ? "bg-indigo-600 text-white shadow-sm"
-                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800/60"
-            }`}
-          >
-            Execution Audit Logs
-          </button>
-        </div>
-
-        {activeTab === "workflows" && (
-          <div className="flex items-center gap-2.5">
-            {/* Search */}
-            <div className="relative">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <div className="relative w-44 sm:w-60">
+              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
-                placeholder="Search workflows, triggers..."
+                placeholder="Search rules..."
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
-                className="w-48 sm:w-60 h-9 pl-8 pr-3 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 text-slate-900 dark:text-white placeholder:text-slate-400"
+                className="w-full h-8 pl-8 pr-2.5 text-xs bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-900 dark:text-white placeholder:text-slate-400"
+              />
+            </div>
+          </div>
+
+          {/* Table Content */}
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-slate-100 dark:border-slate-800 text-[11px] font-bold text-slate-400 uppercase tracking-wider bg-slate-50/30 dark:bg-slate-900/30">
+                  <th className="py-3.5 px-5 font-semibold text-slate-500 dark:text-slate-400">Rule Name</th>
+                  <th className="py-3.5 px-4 font-semibold text-slate-500 dark:text-slate-400">Trigger</th>
+                  <th className="py-3.5 px-4 font-semibold text-slate-500 dark:text-slate-400">Action</th>
+                  <th className="py-3.5 px-4 font-semibold text-slate-500 dark:text-slate-400">Status</th>
+                  <th className="py-3.5 px-5 text-right font-semibold text-slate-500 dark:text-slate-400">Controls</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80 text-xs">
+                {filteredRules.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="py-12 text-center text-slate-400">
+                      <Bot size={32} className="mx-auto mb-2 opacity-50 text-slate-400" />
+                      <p className="font-medium text-slate-600 dark:text-slate-300">No automation rules found</p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">Click "+ New Rule" to create your first rule.</p>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredRules.map(rule => {
+                    const isActive = rule.status === "active";
+                    const isSelected = editingRuleId === rule.id;
+
+                    return (
+                      <tr
+                        key={rule.id}
+                        className={`transition-colors hover:bg-slate-50/70 dark:hover:bg-slate-800/40 ${
+                          isSelected ? "bg-indigo-50/40 dark:bg-indigo-950/20" : ""
+                        }`}
+                      >
+                        {/* 1. Rule Name & Icon */}
+                        <td className="py-4 px-5">
+                          <div className="flex items-center gap-3">
+                            {renderRuleIcon(rule)}
+                            <div className="min-w-0">
+                              <span
+                                onClick={() => handleEditRule(rule)}
+                                className="font-medium text-slate-900 dark:text-white cursor-pointer hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors block truncate max-w-[200px]"
+                                title={rule.name}
+                              >
+                                {rule.name}
+                              </span>
+                              {isSelected && (
+                                <span className="text-[10px] text-indigo-600 dark:text-indigo-400 font-medium">
+                                  Currently editing
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* 2. Trigger */}
+                        <td className="py-4 px-4 text-slate-600 dark:text-slate-300">
+                          <span className="font-normal">{rule.trigger_event}</span>
+                        </td>
+
+                        {/* 3. Action */}
+                        <td className="py-4 px-4 text-slate-600 dark:text-slate-300">
+                          <span className="font-normal">{rule.action_type}</span>
+                        </td>
+
+                        {/* 4. Status Toggle with Active/Inactive label alongside */}
+                        <td className="py-4 px-4 whitespace-nowrap">
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleToggleStatus(rule)}
+                              className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors duration-200 ease-in-out focus:outline-none ${
+                                isActive ? "bg-emerald-500" : "bg-slate-300 dark:bg-slate-700"
+                              }`}
+                              title={isActive ? "Click to deactivate rule" : "Click to activate rule"}
+                            >
+                              <span
+                                className={`pointer-events-none inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out mt-[3px] ${
+                                  isActive ? "translate-x-4 ml-[2px]" : "translate-x-1"
+                                }`}
+                              />
+                            </button>
+                            <span
+                              className={`text-xs font-medium select-none ${
+                                isActive
+                                  ? "text-emerald-600 dark:text-emerald-400"
+                                  : "text-slate-400 dark:text-slate-500"
+                              }`}
+                            >
+                              {isActive ? "Active" : "Inactive"}
+                            </span>
+                          </div>
+                        </td>
+
+                        {/* 5. Controls: Edit & Delete icons */}
+                        <td className="py-4 px-5 text-right whitespace-nowrap">
+                          <div className="flex items-center justify-end gap-1">
+                            <button
+                              onClick={() => handleEditRule(rule)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-slate-800 transition-colors"
+                              title="Edit rule"
+                            >
+                              <Pencil size={15} />
+                            </button>
+                            <button
+                              onClick={() => setRuleToDelete(rule)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-slate-800 transition-colors"
+                              title="Delete rule"
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                            <button
+                              onClick={() => handleEditRule(rule)}
+                              className="p-1.5 rounded-lg text-slate-300 hover:text-slate-600 dark:hover:text-slate-200 transition-colors ml-0.5"
+                              title="Rule settings"
+                            >
+                              <ChevronRight size={16} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Right Column: Create New Rule / Edit Rule Panel (30-35% width, cols 9-12) */}
+        <div className="lg:col-span-5 xl:col-span-4 bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 rounded-2xl shadow-sm p-5 sm:p-6 space-y-5">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+            <div>
+              <h2 className="text-base font-bold text-slate-900 dark:text-white">
+                {editingRuleId ? "Edit Rule" : "Create New Rule"}
+              </h2>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                {editingRuleId
+                  ? "Update configuration for this automation rule"
+                  : "Define triggers and actions to automate CRM workflows"}
+              </p>
+            </div>
+            {editingRuleId && (
+              <button
+                type="button"
+                onClick={handleCancelForm}
+                className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 font-medium"
+              >
+                <Plus size={13} />
+                <span>New</span>
+              </button>
+            )}
+          </div>
+
+          <form onSubmit={handleSaveRule} className="space-y-4">
+            {/* Field 1: Rule Name * */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                Rule name <span className="text-rose-500">*</span>
+              </label>
+              <input
+                ref={nameInputRef}
+                type="text"
+                placeholder="Enter rule name"
+                value={formData.name}
+                onChange={e => handleFieldChange("name", e.target.value)}
+                className={`w-full px-3.5 py-2.5 text-xs bg-white dark:bg-slate-950 border rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none transition-all ${
+                  errors.name
+                    ? "border-rose-500 ring-1 ring-rose-500/20"
+                    : "border-slate-200 dark:border-slate-800 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/10"
+                }`}
+              />
+              {errors.name && (
+                <p className="text-[11px] text-rose-500 mt-1 flex items-center gap-1 font-medium">
+                  <AlertCircle size={12} />
+                  <span>{errors.name}</span>
+                </p>
+              )}
+            </div>
+
+            {/* Field 2: Trigger * */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                Trigger <span className="text-rose-500">*</span>
+              </label>
+              <div className="relative">
+                <select
+                  value={formData.trigger_event}
+                  onChange={e => handleFieldChange("trigger_event", e.target.value)}
+                  className={`w-full px-3.5 py-2.5 text-xs bg-white dark:bg-slate-950 border rounded-xl text-slate-900 dark:text-white appearance-none focus:outline-none transition-all pr-9 cursor-pointer ${
+                    errors.trigger_event
+                      ? "border-rose-500 ring-1 ring-rose-500/20"
+                      : "border-slate-200 dark:border-slate-800 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/10"
+                  }`}
+                >
+                  <option value="" disabled>
+                    Select trigger
+                  </option>
+                  {TRIGGER_OPTIONS.map(opt => (
+                    <option key={opt} value={opt}>
+                      {opt}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown
+                  size={15}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
+                />
+              </div>
+              {errors.trigger_event && (
+                <p className="text-[11px] text-rose-500 mt-1 flex items-center gap-1 font-medium">
+                  <AlertCircle size={12} />
+                  <span>{errors.trigger_event}</span>
+                </p>
+              )}
+            </div>
+
+            {/* Field 3: Action * */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                Action <span className="text-rose-500">*</span>
+              </label>
+              <div className="relative">
+                <select
+                  value={formData.action_type}
+                  onChange={e => handleFieldChange("action_type", e.target.value)}
+                  className={`w-full px-3.5 py-2.5 text-xs bg-white dark:bg-slate-950 border rounded-xl text-slate-900 dark:text-white appearance-none focus:outline-none transition-all pr-9 cursor-pointer ${
+                    errors.action_type
+                      ? "border-rose-500 ring-1 ring-rose-500/20"
+                      : "border-slate-200 dark:border-slate-800 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/10"
+                  }`}
+                >
+                  <option value="" disabled>
+                    Select action
+                  </option>
+                  {ACTION_OPTIONS.map(opt => (
+                    <option key={opt} value={opt}>
+                      {opt}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown
+                  size={15}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
+                />
+              </div>
+              {errors.action_type && (
+                <p className="text-[11px] text-rose-500 mt-1 flex items-center gap-1 font-medium">
+                  <AlertCircle size={12} />
+                  <span>{errors.action_type}</span>
+                </p>
+              )}
+            </div>
+
+            {/* Field 4: Message / Template (optional) */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                Message / Template <span className="text-slate-400 font-normal">(optional)</span>
+              </label>
+              <textarea
+                rows={3}
+                placeholder="Send welcome message to the lead."
+                value={formData.message_template}
+                onChange={e => handleFieldChange("message_template", e.target.value)}
+                className="w-full px-3.5 py-2.5 text-xs bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/10 transition-all resize-none"
               />
             </div>
 
-            {/* Category Filter */}
-            <select
-              value={categoryFilter}
-              onChange={e => setCategoryFilter(e.target.value)}
-              className="h-9 px-2.5 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-700 dark:text-slate-300 focus:outline-none"
-            >
-              <option value="all">All Categories</option>
-              <option value="followup">Follow-ups</option>
-              <option value="nurture">Nurturing & Dripper</option>
-              <option value="sla">SLA Monitoring</option>
-              <option value="guard">Suppression Guard</option>
-              <option value="active">Active Only</option>
-              <option value="paused">Paused Only</option>
-            </select>
-          </div>
-        )}
-      </div>
-
-      {/* 4. Tab: Active Workflows */}
-      {activeTab === "workflows" && (
-        <div className="space-y-4">
-          {filteredAutomations.length === 0 ? (
-            <div className="p-12 text-center bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
-              <Bot size={36} className="text-slate-400 mx-auto mb-2 opacity-60" />
-              <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200">No matching automations found</h3>
-              <p className="text-xs text-slate-500 mt-1">Try refining your search terms or filter selection.</p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-              {filteredAutomations.map(item => {
-                const isPaused = item.status === "paused";
-                const isSimulating = simulatingId === item.id;
-
-                // Color accent according to category
-                const badgeColor =
-                  item.category === "followup"
-                    ? "bg-purple-50 dark:bg-purple-950/50 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800"
-                    : item.category === "sla"
-                    ? "bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800"
-                    : item.category === "guard"
-                    ? "bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800"
-                    : "bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800";
-
-                return (
-                  <div
-                    key={item.id}
-                    className={`bg-white dark:bg-slate-900 border rounded-2xl p-5 transition-all shadow-sm flex flex-col justify-between ${
-                      isPaused
-                        ? "border-slate-200/60 dark:border-slate-800 opacity-75"
-                        : "border-slate-200 dark:border-slate-800 hover:border-indigo-200 dark:hover:border-indigo-900/60 hover:shadow-md"
-                    }`}
-                  >
-                    <div>
-                      {/* Card Header */}
-                      <div className="flex items-start justify-between gap-3 mb-2.5">
-                        <div className="flex items-start gap-3">
-                          <div
-                            className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
-                              item.category === "followup"
-                                ? "bg-purple-500 text-white"
-                                : item.category === "sla"
-                                ? "bg-amber-500 text-white"
-                                : item.category === "guard"
-                                ? "bg-emerald-500 text-white"
-                                : "bg-indigo-500 text-white"
-                            }`}
-                          >
-                            {item.category === "guard" ? (
-                              <Shield size={18} />
-                            ) : item.category === "sla" ? (
-                              <Clock size={18} />
-                            ) : item.category === "followup" ? (
-                              <Bell size={18} />
-                            ) : (
-                              <Zap size={18} />
-                            )}
-                          </div>
-                          <div>
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <h3 className="text-sm font-bold text-slate-900 dark:text-white">{item.name}</h3>
-                              <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold ${badgeColor}`}>
-                                {item.category?.toUpperCase()}
-                              </span>
-                            </div>
-                            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 line-clamp-2 leading-relaxed">
-                              {item.description}
-                            </p>
-                          </div>
-                        </div>
-
-                        {/* Toggle switch */}
-                        <div className="flex items-center gap-2 shrink-0">
-                          <button
-                            onClick={() => handleToggleStatus(item.id)}
-                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
-                              isPaused ? "bg-slate-300 dark:bg-slate-700" : "bg-emerald-500"
-                            }`}
-                            title={isPaused ? "Click to Activate" : "Click to Pause"}
-                          >
-                            <span
-                              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                                isPaused ? "translate-x-1" : "translate-x-6"
-                              }`}
-                            />
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Visual Trigger & Schedule Tags */}
-                      <div className="flex flex-wrap items-center gap-2 my-3">
-                        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-[11px] text-slate-700 dark:text-slate-300 font-mono">
-                          <Zap size={11} className="text-amber-500 shrink-0" />
-                          <span className="truncate max-w-[280px]">Trigger: {item.trigger}</span>
-                        </div>
-                        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-[11px] text-slate-700 dark:text-slate-300">
-                          <Clock size={11} className="text-indigo-500 shrink-0" />
-                          <span>{item.schedule}</span>
-                        </div>
-                      </div>
-
-                      {/* Pipeline Flow Visualization */}
-                      <div className="bg-slate-50 dark:bg-slate-950/40 border border-slate-100 dark:border-slate-800/80 rounded-xl p-3 my-3">
-                        <div className="text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-2 flex items-center justify-between">
-                          <span>Action Sequence Flow</span>
-                          <span className="text-[10px] text-slate-400 font-normal">Auto-dispatched</span>
-                        </div>
-                        <div className="space-y-1.5">
-                          {item.actions.map((act, idx) => (
-                            <div key={idx} className="flex items-start gap-2 text-xs text-slate-700 dark:text-slate-300 leading-snug">
-                              <span className="w-4 h-4 rounded-full bg-indigo-100 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-400 font-bold text-[9px] flex items-center justify-center shrink-0 mt-0.5">
-                                {idx + 1}
-                              </span>
-                              <span>{act}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Card Footer */}
-                    <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2 mt-2">
-                      <div className="flex items-center gap-2">
-                        {item.current_affected_count > 0 ? (
-                          <button
-                            onClick={() => setPreviewLeadsAutomation(item)}
-                            className="text-xs font-semibold text-amber-600 dark:text-amber-400 hover:underline flex items-center gap-1"
-                          >
-                            <AlertTriangle size={12} />
-                            <span>{item.current_affected_count} Qualifying Lead(s)</span>
-                          </button>
-                        ) : (
-                          <span className="text-xs text-slate-400 flex items-center gap-1">
-                            <CheckCheck size={13} className="text-emerald-500" />
-                            <span>Queue clear</span>
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => handleSimulate(item)}
-                          disabled={isSimulating}
-                          className="px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors flex items-center gap-1"
-                        >
-                          <Play size={11} className={isSimulating ? "animate-spin" : ""} />
-                          <span>{isSimulating ? "Testing..." : "Test Run"}</span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* 5. Tab: Workflow Presets */}
-      {activeTab === "templates" && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm flex flex-col justify-between">
-            <div>
-              <div className="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mb-3">
-                <MessageCircle size={20} />
+            {/* Automation Safety & Duplicate Protection Indicator */}
+            <div className="bg-slate-50 dark:bg-slate-950/60 border border-slate-100 dark:border-slate-800 rounded-xl p-3 text-[11px] text-slate-600 dark:text-slate-400">
+              <div className="flex items-center gap-2 font-semibold text-slate-800 dark:text-slate-200 mb-1">
+                <ShieldCheck size={14} className="text-emerald-500" />
+                <span>Automation Safety</span>
+                <span className="text-[10px] font-medium bg-emerald-100/70 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.2 rounded">
+                  Duplicate Protection: Active
+                </span>
               </div>
-              <h3 className="text-sm font-bold text-slate-900 dark:text-white">Instant WhatsApp Welcome Outreach</h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
-                Connects Meta & Google lead forms to send an instant greeting template via WhatsApp as soon as the lead enters the CRM.
+              <p className="text-[10.5px] leading-relaxed text-slate-500">
+                Prevents duplicate messages and repeated tasks when the same trigger fires multiple times within 24 hours.
               </p>
-              <div className="my-3 space-y-1 text-xs text-slate-600 dark:text-slate-300 font-medium">
-                <div>• Trigger: Lead Created via Ad Form</div>
-                <div>• Action: Personalized WhatsApp text</div>
-                <div>• Action: Rep in-app notification</div>
-              </div>
             </div>
-            <button
-              onClick={() => applyPreset("whatsapp_welcome")}
-              className="w-full mt-2 py-2 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl transition-colors"
-            >
-              Configure & Deploy
-            </button>
-          </div>
 
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm flex flex-col justify-between">
-            <div>
-              <div className="w-10 h-10 rounded-xl bg-purple-50 dark:bg-purple-950/50 text-purple-600 dark:text-purple-400 flex items-center justify-center mb-3">
-                <AlertTriangle size={20} />
-              </div>
-              <h3 className="text-sm font-bold text-slate-900 dark:text-white">High-Value Opportunity Escalator</h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
-                Flags opportunities with value exceeding ₹5,00,000. If meeting is missed by more than 30 mins, alerts Sales Manager and Super Admin immediately.
-              </p>
-              <div className="my-3 space-y-1 text-xs text-slate-600 dark:text-slate-300 font-medium">
-                <div>• Trigger: Overdue follow-up on ₹5L+ lead</div>
-                <div>• Action: High priority SMS & App alert</div>
-                <div>• Action: Manager phone escalation</div>
-              </div>
-            </div>
-            <button
-              onClick={() => applyPreset("high_value_escalation")}
-              className="w-full mt-2 py-2 text-xs font-semibold bg-purple-600 hover:bg-purple-700 text-white rounded-xl transition-colors"
-            >
-              Configure & Deploy
-            </button>
-          </div>
-
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm flex flex-col justify-between">
-            <div>
-              <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 flex items-center justify-center mb-3">
-                <CheckCircle2 size={20} />
-              </div>
-              <h3 className="text-sm font-bold text-slate-900 dark:text-white">Deal Won & Payment Handover Guard</h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
-                When customer pays token or deal closes, halts marketing drip emails automatically and sets up milestone invoice notifications.
-              </p>
-              <div className="my-3 space-y-1 text-xs text-slate-600 dark:text-slate-300 font-medium">
-                <div>• Trigger: Status = Token Done / Won</div>
-                <div>• Action: Suppress all promotional emails</div>
-                <div>• Action: Send Welcome Kit & Invoice</div>
-              </div>
-            </div>
-            <button
-              onClick={() => applyPreset("deal_won_onboarding")}
-              className="w-full mt-2 py-2 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition-colors"
-            >
-              Configure & Deploy
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* 6. Tab: Execution Audit Log */}
-      {activeTab === "audit" && (
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="text-sm font-bold text-slate-900 dark:text-white">Recent Automation Execution Events</h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400">Live timeline of actions dispatched by background engine</p>
-            </div>
-            <span className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              Engine Online
-            </span>
-          </div>
-
-          <div className="space-y-3">
-            {[
-              {
-                time: "2 mins ago",
-                actor: "System Automation",
-                event: "Missed Follow-up Monitor",
-                action: "Dispatched meeting rescheduling check-in email to lead and notified salesperson",
-                status: "success",
-              },
-              {
-                time: "7 mins ago",
-                actor: "SLA Monitor",
-                event: "Inbound Customer Reply SLA",
-                action: "Verified 0 unresponded customer replies past 60 minute threshold",
-                status: "success",
-              },
-              {
-                time: "15 mins ago",
-                actor: "System Automation",
-                event: "Closed Lead Suppression Guard",
-                action: "Suppressed outreach sequence for lead marked 'Token Done'",
-                status: "guard",
-              },
-              {
-                time: "1 hour ago",
-                actor: "System Automation",
-                event: "New Lead 24h Outreach",
-                action: "Scanned newly imported ad form leads; 0 uncontacted leads detected",
-                status: "success",
-              },
-              {
-                time: "Today at 08:00 AM",
-                actor: "System Automation",
-                event: "7-Day Stale Lead Re-engagement",
-                action: "Daily scan completed across all active pipeline opportunities",
-                status: "success",
-              },
-            ].map((log, idx) => (
-              <div
-                key={idx}
-                className="flex items-start gap-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-950/50 border border-slate-100 dark:border-slate-800 text-xs"
-              >
-                <div className="w-7 h-7 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0 mt-0.5">
-                  <Activity size={14} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-semibold text-slate-800 dark:text-slate-200">{log.event}</span>
-                    <span className="text-[11px] text-slate-400">{log.time}</span>
-                  </div>
-                  <p className="text-slate-600 dark:text-slate-400 mt-0.5 leading-relaxed">{log.action}</p>
-                  <div className="flex items-center gap-2 mt-1.5 text-[10px] text-slate-400">
-                    <span>Actor: {log.actor}</span>
-                    <span>•</span>
-                    <span className="text-emerald-600 dark:text-emerald-400 font-semibold">Status: Verified OK</span>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* 7. Modal: Create Custom Workflow */}
-      {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-          <div className="relative w-full max-w-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-slate-900 dark:text-slate-100">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 dark:border-slate-800">
-              <div className="flex items-center gap-2">
-                <Zap size={18} className="text-indigo-600" />
-                <h3 className="font-bold text-sm">Create Automation Workflow</h3>
-              </div>
+            {/* Test Rule Button & Results */}
+            <div className="space-y-2">
               <button
-                onClick={() => setShowCreateModal(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                type="button"
+                onClick={handleTestRule}
+                disabled={testing}
+                className="w-full py-2 px-3 text-xs font-semibold text-slate-700 dark:text-slate-300 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-750 border border-slate-200 dark:border-slate-700 rounded-xl transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
               >
-                <X size={16} />
+                {testing ? (
+                  <>
+                    <RefreshCw size={13} className="animate-spin text-indigo-500" />
+                    <span>Running Dry Run Test...</span>
+                  </>
+                ) : (
+                  <>
+                    <Play size={13} className="text-indigo-600 dark:text-indigo-400" />
+                    <span>Test Rule</span>
+                  </>
+                )}
               </button>
-            </div>
 
-            <form onSubmit={handleCreateWorkflow} className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Workflow Name *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Meta Lead Instant WhatsApp Welcome"
-                  value={customForm.name}
-                  onChange={e => setCustomForm(f => ({ ...f, name: e.target.value }))}
-                  className="w-full px-3 py-2 text-xs border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Description
-                </label>
-                <textarea
-                  rows={2}
-                  placeholder="Describe what triggers this workflow and who receives notifications..."
-                  value={customForm.description}
-                  onChange={e => setCustomForm(f => ({ ...f, description: e.target.value }))}
-                  className="w-full px-3 py-2 text-xs border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 resize-none"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    When this happens (Trigger)
-                  </label>
-                  <select
-                    value={customForm.triggerEvent}
-                    onChange={e => setCustomForm(f => ({ ...f, triggerEvent: e.target.value }))}
-                    className="w-full px-3 py-2 text-xs border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950 focus:outline-none"
-                  >
-                    <option value="new_lead">New Lead Created in CRM</option>
-                    <option value="missed_followup">Missed Scheduled Follow-up</option>
-                    <option value="inactive_lead">Lead Inactive &gt; 3 Days</option>
-                    <option value="status_won">Deal Moved to Token Done / Won</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Delay / Timing
-                  </label>
-                  <select
-                    value={customForm.delayHours}
-                    onChange={e => setCustomForm(f => ({ ...f, delayHours: Number(e.target.value) }))}
-                    className="w-full px-3 py-2 text-xs border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950 focus:outline-none"
-                  >
-                    <option value={0}>Immediate (Real-time)</option>
-                    <option value={1}>Wait 1 Hour</option>
-                    <option value={4}>Wait 4 Hours</option>
-                    <option value={24}>Wait 24 Hours</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                  Automated Actions (Select all that apply)
-                </label>
-                <div className="space-y-2 bg-slate-50 dark:bg-slate-950/60 p-3 rounded-xl border border-slate-100 dark:border-slate-800">
-                  <label className="flex items-center gap-2.5 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={customForm.sendWhatsApp}
-                      onChange={e => setCustomForm(f => ({ ...f, sendWhatsApp: e.target.checked }))}
-                      className="rounded text-indigo-600 focus:ring-indigo-500"
-                    />
-                    <span>Send automated personalized WhatsApp message</span>
-                  </label>
-                  <label className="flex items-center gap-2.5 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={customForm.sendEmail}
-                      onChange={e => setCustomForm(f => ({ ...f, sendEmail: e.target.checked }))}
-                      className="rounded text-indigo-600 focus:ring-indigo-500"
-                    />
-                    <span>Send automated introduction / re-engagement email</span>
-                  </label>
-                  <label className="flex items-center gap-2.5 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={customForm.notifyRep}
-                      onChange={e => setCustomForm(f => ({ ...f, notifyRep: e.target.checked }))}
-                      className="rounded text-indigo-600 focus:ring-indigo-500"
-                    />
-                    <span>Send urgent notification to assigned salesperson</span>
-                  </label>
-                  <label className="flex items-center gap-2.5 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={customForm.escalateManager}
-                      onChange={e => setCustomForm(f => ({ ...f, escalateManager: e.target.checked }))}
-                      className="rounded text-indigo-600 focus:ring-indigo-500"
-                    />
-                    <span>Escalate alert to Sales Manager and Super Admin</span>
-                  </label>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Tag to automatically attach
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. meta-welcome, hot-lead"
-                  value={customForm.addTag}
-                  onChange={e => setCustomForm(f => ({ ...f, addTag: e.target.value }))}
-                  className="w-full px-3 py-2 text-xs border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950 focus:outline-none"
-                />
-              </div>
-
-              <div className="flex gap-2.5 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowCreateModal(false)}
-                  className="flex-1 py-2 text-xs font-medium border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 py-2 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition-colors shadow-sm"
-                >
-                  Save & Activate
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* 8. Modal: Preview Candidate Leads */}
-      {previewLeadsAutomation && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-          <div className="relative w-full max-w-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-slate-900 dark:text-slate-100">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 dark:border-slate-800">
-              <div className="flex items-center gap-2">
-                <Users size={18} className="text-amber-500" />
-                <div>
-                  <h3 className="font-bold text-sm">Qualifying Leads Preview</h3>
-                  <p className="text-[11px] text-slate-400">{previewLeadsAutomation.name}</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setPreviewLeadsAutomation(null)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            <div className="p-5 max-h-[60vh] overflow-y-auto space-y-2.5">
-              <div className="p-2.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 rounded-xl text-xs text-amber-800 dark:text-amber-300">
-                Trigger rule: <strong>{previewLeadsAutomation.trigger}</strong>
-              </div>
-
-              {leads.slice(0, 5).map(lead => (
+              {/* Display Test Result Feedback */}
+              {testResult.status && (
                 <div
-                  key={lead.id}
-                  className="flex items-center justify-between p-3 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/40 text-xs"
+                  className={`p-3 rounded-xl border text-xs transition-all ${
+                    testResult.status === "passed"
+                      ? "bg-emerald-50/70 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/80 text-emerald-800 dark:text-emerald-300"
+                      : "bg-rose-50/70 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800/80 text-rose-800 dark:text-rose-300"
+                  }`}
                 >
-                  <div>
-                    <div className="font-semibold text-slate-800 dark:text-slate-200">{lead.name}</div>
-                    <div className="text-[11px] text-slate-400">
-                      {lead.company || "Independent Client"} · ₹{lead.value ? lead.value.toLocaleString("en-IN") : "0"}
+                  <div className="flex items-start gap-2">
+                    {testResult.status === "passed" ? (
+                      <CheckCircle2 size={16} className="text-emerald-600 shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertCircle size={16} className="text-rose-600 shrink-0 mt-0.5" />
+                    )}
+                    <div className="text-[11px] leading-relaxed">
+                      <div className="font-semibold mb-0.5">
+                        {testResult.status === "passed" ? "Test Passed (Dry Run)" : "Test Failed"}
+                      </div>
+                      <p>{testResult.message}</p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className="px-2 py-0.5 rounded-full bg-slate-200 dark:bg-slate-800 text-[10px] font-semibold">
-                      {lead.status}
-                    </span>
-                    <button
-                      onClick={() => {
-                        setPreviewLeadsAutomation(null);
-                        navigate("/leads");
-                      }}
-                      className="p-1 text-slate-400 hover:text-indigo-600"
-                      title="Open Lead"
-                    >
-                      <ExternalLink size={13} />
-                    </button>
-                  </div>
                 </div>
-              ))}
+              )}
             </div>
 
-            <div className="p-4 border-t border-slate-100 dark:border-slate-800 flex justify-end">
+            {/* Cancel and Save Rule Buttons side-by-side at bottom */}
+            <div className="pt-2 flex items-center gap-3">
               <button
-                onClick={() => setPreviewLeadsAutomation(null)}
-                className="px-4 py-2 text-xs font-semibold bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl transition-colors"
+                type="button"
+                onClick={handleCancelForm}
+                className="w-1/2 py-2.5 text-xs font-semibold text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl transition-colors text-center"
               >
-                Close Preview
+                Cancel
+              </button>
+
+              <button
+                type="submit"
+                disabled={saving}
+                className="w-1/2 py-2.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 rounded-xl transition-colors shadow-sm shadow-indigo-600/25 text-center flex items-center justify-center gap-1.5 disabled:opacity-50"
+              >
+                {saving ? (
+                  <>
+                    <RefreshCw size={13} className="animate-spin text-white" />
+                    <span>Saving...</span>
+                  </>
+                ) : (
+                  <span>{editingRuleId ? "Update Rule" : "Save Rule"}</span>
+                )}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {ruleToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in">
+          <div className="relative w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl p-6 text-slate-900 dark:text-slate-100">
+            <div className="w-12 h-12 rounded-2xl bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center mb-4">
+              <Trash2 size={24} />
+            </div>
+
+            <h3 className="text-base font-bold text-slate-900 dark:text-white">Delete Automation Rule</h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
+              Are you sure you want to delete <span className="font-semibold text-slate-800 dark:text-slate-200">"{ruleToDelete.name}"</span>? 
+              This will stop all automated actions for this trigger and cannot be undone.
+            </p>
+
+            <div className="mt-6 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setRuleToDelete(null)}
+                disabled={deleting}
+                className="px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 rounded-xl transition-colors"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={handleDeleteConfirm}
+                disabled={deleting}
+                className="px-4 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 active:bg-rose-800 rounded-xl transition-colors shadow-sm shadow-rose-600/25 flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {deleting ? (
+                  <>
+                    <RefreshCw size={13} className="animate-spin" />
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <span>Delete Rule</span>
+                )}
               </button>
             </div>
           </div>

@@ -100,6 +100,11 @@ export const api = {
     bulkDelete: (ids: string[], token?: string) => request("DELETE", "/leads", { ids }, token),
     bulkImport: (leads: any[], token?: string) => request("POST", "/leads/bulk", { leads }, token),
   },
+  messages: {
+    getLeadMessages: (leadId: string, token?: string) => request("GET", `/leads/${leadId}/messages`, undefined, token),
+    sendMessage: (leadId: string, data: { message: string; channel?: string }, token?: string) => request("POST", `/leads/${leadId}/send-message`, data, token),
+    sendCustomerReply: (leadId: string, data: { message: string; channel?: string; sender_name?: string }, token?: string) => request("POST", `/leads/${leadId}/customer-reply`, data, token),
+  },
   deals: {
     list: (token?: string) => request("GET", "/deals", undefined, token),
     create: (data: any, token?: string) => request("POST", "/deals", data, token),
@@ -532,6 +537,16 @@ export const api = {
   automations: {
     getAll: (token?: string) => request("GET", "/api/workflow-automation", undefined, token),
     runAll: (token?: string) => request("POST", "/api/workflow-automation/run", undefined, token),
+    runWhatsAppWelcome: (limit?: number, token?: string) => request("POST", "/api/workflow-automation/run/whatsapp-welcome", { limit }, token),
+    sendLeadWhatsAppWelcome: (leadId: string, customMessage?: string, token?: string) => request("POST", `/leads/${leadId}/send-whatsapp-welcome`, { customMessage }, token),
+    runHighValueEscalation: (token?: string) => request("POST", "/api/workflow-automation/run/high-value-escalation", undefined, token),
+    escalateLeadHighValue: (leadId: string, token?: string) => request("POST", `/leads/${leadId}/escalate-high-value`, { force: true }, token),
+    getRules: (token?: string) => request("GET", "/api/automation-rules", undefined, token),
+    createRule: (data: any, token?: string) => request("POST", "/api/automation-rules", data, token),
+    updateRule: (id: string, data: any, token?: string) => request("PUT", `/api/automation-rules/${id}`, data, token),
+    deleteRule: (id: string, token?: string) => request("DELETE", `/api/automation-rules/${id}`, undefined, token),
+    toggleRule: (id: string, status?: string, token?: string) => request("POST", `/api/automation-rules/${id}/toggle`, { status }, token),
+    testRule: (data: any, token?: string) => request("POST", "/api/automation-rules/test", data, token),
   },
   reset: (token?: string) => request("POST", "/reset", undefined, token),
 };
